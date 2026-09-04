@@ -57,6 +57,11 @@ def _no_window() -> dict:
             "creationflags": subprocess.CREATE_NO_WINDOW}
 
 
+def part_path(dst: Path) -> Path:
+    """The file ffmpeg writes while an encode is in progress."""
+    return Path(str(dst) + ".part")
+
+
 @dataclass(frozen=True)
 class VideoInfo:
     width: int
@@ -119,6 +124,10 @@ class Encoder:
     def __init__(self, src: Path, dst: Path, info: VideoInfo, crf: int, preset: str):
         self.dst = Path(dst)
         self.dst.parent.mkdir(parents=True, exist_ok=True)
+        # ffmpeg writes a .part file. It becomes the real file only when the
+        # encode finished cleanly, so nothing that looks finished ever is not.
+        self.part = part_path(self.dst)
+        self.part.unlink(missing_ok=True)
         cmd = [
             ffmpeg_exe(), "-y", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
@@ -127,7 +136,7 @@ class Encoder:
             "-map", "0:v:0", "-map", "1:a?",
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
             "-pix_fmt", "yuv420p", "-c:a", "copy",
-            "-movflags", "+faststart", str(self.dst),
+            "-movflags", "+faststart", "-f", "mp4", str(self.part),
         ]
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -153,7 +162,9 @@ class Encoder:
         self._stderr = self.proc.stderr.read() or b""
         self.proc.wait()
         if self.proc.returncode != 0:
+            self.part.unlink(missing_ok=True)
             return self._stderr.decode(errors="replace").strip()
+        os.replace(self.part, self.dst)
         return ""
 
     def abort(self) -> None:
@@ -175,6 +186,7 @@ class Encoder:
             self.proc.stderr.close()
         except OSError:
             pass
+        self.part.unlink(missing_ok=True)
         self.dst.unlink(missing_ok=True)
 
     def __enter__(self) -> "Encoder":

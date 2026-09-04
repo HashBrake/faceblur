@@ -9,7 +9,7 @@ import pytest
 import cli
 from faceblur.pipeline import STATUS_DONE
 
-FAST = ["--det-sizes", "320", "--persist", "1", "--no-progress"]
+FAST = ["--det-sizes", "320", "--no-verify", "--min-track", "1", "--no-progress"]
 
 
 @pytest.fixture
@@ -151,7 +151,7 @@ def test_default_workers_is_half_the_cpu_count(monkeypatch):
 def test_every_flag_the_plan_lists_is_accepted(batch, tmp_path):
     args = cli.build_parser().parse_args([
         str(batch), "-o", str(tmp_path), "--engine", "both", "--conf", "0.3",
-        "--det-sizes", "640,1280", "--stride", "2", "--persist", "8",
+        "--det-sizes", "640,1280", "--stride", "2", "--min-track", "2", "--max-gap", "4", "--tail", "1", "--no-verify", "--max-face", "0.3",
         "--pad", "0.4", "--mode", "pixelate", "--workers", "3",
         "--report", "r.json", "--no-progress", "--recursive",
     ])

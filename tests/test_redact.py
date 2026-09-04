@@ -1,89 +1,97 @@
-"""Mask building and pixel destruction."""
+"""Ellipse masks and pixel destruction."""
 from __future__ import annotations
 
-import cv2
 import numpy as np
 import pytest
 
-from faceblur.redact import build_mask, cover_image, redact
+from faceblur.detect import Detection
+from faceblur.redact import build_alpha, build_mask, ellipse_for, redact
+from faceblur.settings import Settings
 
-BOX = [100.0, 100.0, 80.0, 80.0, 0.9]
+S = Settings()
+LM = ((120.0, 130.0), (160.0, 130.0), (140.0, 150.0), (125.0, 168.0), (155.0, 168.0))
+FACE = Detection(100.0, 100.0, 80.0, 90.0, 0.9, LM)
+NO_LM = Detection(100.0, 100.0, 80.0, 90.0, 0.9, None)
 
 
 def busy_frame(h: int = 480, w: int = 640) -> np.ndarray:
-    """Random pixels. Any smoothing changes them a lot, so the test can see it."""
     rng = np.random.default_rng(1234)
     return rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
 
 
-def mask_bool(frame, boxes, pad):
-    return build_mask(frame.shape[:2], boxes, pad) > 0
-
-
 @pytest.mark.parametrize("mode", ["blur", "pixelate", "solid"])
 def test_pixels_change_inside_and_stay_exact_outside(mode):
-    """Phase 1 verify: mean absolute difference above 20 inside, exactly 0 outside."""
     frame = busy_frame()
-    out = redact(frame, [BOX], pad=0.30, mode=mode, strength=28)
-    inside = mask_bool(frame, [BOX], 0.30)
-
+    s = S.with_changes(mode=mode)
+    out, alpha = redact(frame, [FACE], s)
+    inside = alpha >= 0.5
+    outside = alpha == 0
     diff = np.abs(out.astype(np.int16) - frame.astype(np.int16))
-    assert diff[inside].mean() > 20, f"{mode} changed too little inside the mask"
-    assert diff[~inside].sum() == 0, f"{mode} changed pixels outside the mask"
+    assert diff[inside].mean() > 20
+    assert diff[outside].sum() == 0
 
 
-def test_blur_mode_destroys_information():
-    """The cover comes from a downsample, so fine detail cannot come back."""
+def test_the_mask_is_an_ellipse_not_a_rectangle():
+    """The corners of the box hold hair, background and hands. Leave them."""
+    mask = build_mask((480, 640), [FACE], S.with_changes(feather=0))
+    assert mask[145, 140] > 0           # centre
+    assert mask[101, 101] == 0          # top left corner of the box
+    assert mask[189, 179] == 0          # bottom right corner of the box
+
+
+def test_the_mask_covers_the_landmarks():
+    mask = build_mask((480, 640), [FACE], S)
+    for x, y in LM:
+        assert mask[int(y), int(x)] > 0
+
+
+def test_the_ellipse_follows_the_eye_line():
+    tilted = Detection(100.0, 100.0, 80.0, 90.0, 0.9,
+                       ((120.0, 120.0), (160.0, 140.0), (140.0, 150.0),
+                        (125.0, 168.0), (155.0, 168.0)))
+    e = ellipse_for(tilted, S)
+    assert e.angle == pytest.approx(26.6, abs=1.0)
+
+
+def test_a_box_without_landmarks_gets_a_padded_upright_ellipse():
+    e = ellipse_for(NO_LM, S.with_changes(pad=0.10))
+    assert e.angle == 0.0
+    assert e.ax == pytest.approx(0.5 * 80 * 1.10)
+    assert e.ay == pytest.approx(0.5 * 90 * 1.10)
+
+
+def test_the_mask_is_far_smaller_than_the_old_padded_rectangle():
+    mask = build_mask((480, 640), [FACE], S)
+    old_rect = (80 * 1.6) * (90 * 1.6)
+    assert (mask > 0).sum() < 0.55 * old_rect
+
+
+def test_feather_softens_only_the_edge():
+    alpha = build_alpha((480, 640), [FACE], S.with_changes(feather=6))
+    assert alpha[145, 140] == pytest.approx(1.0, abs=0.02)
+    assert 0 < alpha.mean() < 0.05
+    assert ((alpha > 0) & (alpha < 1)).any()
+
+
+def test_no_faces_returns_the_frame_untouched():
     frame = busy_frame()
-    out = redact(frame, [BOX], pad=0.30, mode="blur", strength=28)
-    inside = mask_bool(frame, [BOX], 0.30)
-    # Random pixels have a high standard deviation. A downsampled copy is flat.
+    out, alpha = redact(frame, [], S)
+    assert out is frame
+    assert alpha.max() == 0
+
+
+def test_destruction_scales_with_face_size():
+    """A small face is destroyed as thoroughly as a large one."""
+    frame = busy_frame()
+    small = Detection(300.0, 300.0, 24.0, 26.0, 0.9, None)
+    out, alpha = redact(frame, [small], S.with_changes(mode="pixelate"))
+    inside = alpha >= 0.5
     assert out[inside].std() < frame[inside].std() / 2
 
 
-def test_no_boxes_returns_the_frame_untouched():
+def test_a_face_at_the_frame_edge_does_not_crash():
     frame = busy_frame()
-    out = redact(frame, [], pad=0.30, mode="blur", strength=28)
-    assert out is frame
-
-
-def test_mask_is_padded_by_the_right_amount():
-    mask = build_mask((480, 640), [[100.0, 100.0, 80.0, 80.0, 0.9]], pad=0.25)
-    ys, xs = np.where(mask > 0)
-    # 25 percent of 80 is 20 pixels on each side, so the box spans 80 to 200.
-    # A filled cv2 rectangle covers its end pixel too, which makes the mask one
-    # pixel wider than the range. Wider is the safe direction for this tool.
-    assert xs.min() == 80 and ys.min() == 80
-    assert xs.max() == 200 and ys.max() == 200
-
-
-def test_mask_is_a_rectangle_not_an_ellipse():
-    """Hairlines and ears live in the corners, so the corners must be covered."""
-    mask = build_mask((480, 640), [BOX], pad=0.0)
-    assert mask[100, 100] > 0
-    assert mask[179, 179] > 0
-
-
-def test_mask_clips_to_the_frame():
-    mask = build_mask((100, 100), [[-40.0, -40.0, 60.0, 60.0, 0.9]], pad=0.5)
-    assert mask[0, 0] > 0
-    assert mask.shape == (100, 100)
-
-
-def test_a_box_fully_outside_the_frame_marks_nothing():
-    mask = build_mask((100, 100), [[500.0, 500.0, 20.0, 20.0, 0.9]], pad=0.0)
-    assert not mask.any()
-
-
-def test_solid_cover_is_black():
-    assert cover_image(busy_frame(), "solid", 28).max() == 0
-
-
-def test_two_boxes_both_get_covered():
-    frame = busy_frame()
-    boxes = [BOX, [400.0, 300.0, 60.0, 60.0, 0.8]]
-    out = redact(frame, boxes, pad=0.30, mode="pixelate", strength=28)
-    inside = mask_bool(frame, boxes, 0.30)
-    diff = np.abs(out.astype(np.int16) - frame.astype(np.int16))
-    assert diff[inside].mean() > 20
-    assert diff[~inside].sum() == 0
+    edge = Detection(-20.0, -10.0, 60.0, 60.0, 0.9, None)
+    out, alpha = redact(frame, [edge], S)
+    assert out.shape == frame.shape
+    assert alpha[0, 0] > 0

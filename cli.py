@@ -2,7 +2,8 @@
 """Command line front end over faceblur.pipeline.
 
     faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
-             [--det-sizes 640,1280] [--stride N] [--persist N] [--pad F]
+             [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
+             [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--report PATH]
              [--no-progress] [--recursive]
 
@@ -37,12 +38,25 @@ _BANK = None
 _SETTINGS: Settings | None = None
 
 
-def _init_worker(settings: Settings) -> None:
+_WORKERS = 1
+
+
+def _threads_per_worker():
+    """Threads each worker may use. One worker keeps the library defaults,
+    which already know the machine; pinning every hyperthread is slower."""
+    if _WORKERS <= 1:
+        return None
+    return max(1, (os.cpu_count() or 2) // _WORKERS)
+
+
+def _init_worker(settings: Settings, workers: int = 1) -> None:
+    global _WORKERS
+    _WORKERS = workers
     global _BANK, _SETTINGS
     from faceblur.detect import DetectorBank
 
     _SETTINGS = settings
-    _BANK = DetectorBank(settings)
+    _BANK = DetectorBank(settings, threads=_threads_per_worker())
 
 
 def _run_one(job: tuple[str, str]) -> dict:
@@ -123,8 +137,10 @@ class Reporter:
 def describe(record: AuditRecord | dict, dst: Path) -> str:
     r = record if isinstance(record, dict) else record.to_dict()
     if r["status"] == STATUS_DONE:
-        return (f"  -> {dst}  ({r['detections']} detections over {r['frames']} frames, "
-                f"{r['frames_covered_after_propagation']}/{r['frames']} frames redacted, "
+        return (f"  -> {dst}  ({r['tracks']} faces tracked, "
+                f"{r['frames_with_mask']}/{r['frames']} frames masked, "
+                f"{100 * r['masked_mean']:.2f}% of the frame on average, "
+                f"{r['frames_over_budget']} frames over budget, "
                 f"{r['detect_seconds']}s detect, {r['encode_seconds']}s write)")
     if r["status"] == STATUS_SKIPPED:
         return f"  Already done: {dst}"
@@ -158,7 +174,7 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
     records: list[dict] = []
     context = multiprocessing.get_context("spawn")
     reporter.line(f"Running {workers} videos at a time.")
-    with context.Pool(workers, initializer=_init_worker, initargs=(settings,)) as pool:
+    with context.Pool(workers, initializer=_init_worker, initargs=(settings, workers)) as pool:
         payload = [(str(src), str(dst)) for src, dst in jobs]
         for number, record in enumerate(pool.imap(_run_one, payload), 1):
             src, dst = jobs[number - 1]
@@ -184,17 +200,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--conf", type=float, default=defaults.conf,
                         help="detection threshold (default: %(default)s). "
                              "Lower catches more faces and blurs more non-faces")
-    parser.add_argument("--det-sizes", default="640,1280",
+    parser.add_argument("--det-sizes", default="1280,1920",
                         help="detection sizes as a long side in pixels "
-                             "(default: %(default)s). Add 1920 for small faces")
+                             "(default: %(default)s)")
     parser.add_argument("--stride", type=int, default=defaults.stride,
                         help="detect faces on every Nth frame (default: %(default)s). "
                              "1 is safest, higher is faster")
-    parser.add_argument("--persist", type=int, default=defaults.persist,
-                        help="frames to carry a box forward and backward "
+    parser.add_argument("--no-verify", dest="verify", action="store_false",
+                        help="skip the second detector's confirmation of each face")
+    parser.add_argument("--max-face", type=float, default=defaults.max_face_frac,
+                        help="largest face as a share of the frame's long side "
+                             "(default: %(default)s)")
+    parser.add_argument("--min-track", type=int, default=defaults.min_track,
+                        help="detections a face needs before it is masked "
+                             "(default: %(default)s)")
+    parser.add_argument("--max-gap", type=int, default=defaults.max_gap,
+                        help="frames a face may go undetected inside a track "
+                             "(default: %(default)s)")
+    parser.add_argument("--tail", type=int, default=defaults.tail,
+                        help="frames the mask extends past a track's ends "
                              "(default: %(default)s)")
     parser.add_argument("--pad", type=float, default=defaults.pad,
-                        help="mask padding as a fraction of face size "
+                        help="ellipse pad for a box that has no landmarks "
                              "(default: %(default)s)")
     parser.add_argument("--mode", choices=["blur", "pixelate", "solid"],
                         default=defaults.mode,
@@ -222,9 +249,15 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings(
             engine=args.engine,
             conf=args.conf,
+            # Continuation can never be looser than the main threshold.
+            conf_weak=min(Settings.conf_weak, args.conf),
             det_sizes=parse_det_sizes(args.det_sizes),
             stride=args.stride,
-            persist=args.persist,
+            verify=args.verify,
+            max_face_frac=args.max_face,
+            min_track=args.min_track,
+            max_gap=args.max_gap,
+            tail=args.tail,
             pad=args.pad,
             mode=args.mode,
         )

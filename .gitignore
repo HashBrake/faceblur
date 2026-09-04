@@ -10,6 +10,7 @@ footage/
 
 # Python
 .venv/
+.venv-eval/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -21,7 +22,11 @@ dist/
 
 # Local run output
 *_blurred/
+*_blurred_v*/
 out/
 
 # PyInstaller output
 dist/
+
+# Evaluation caches derived from real footage
+eval/cache/

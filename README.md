@@ -7,36 +7,77 @@ FaceBlur runs on your PC. Your video never leaves the machine.
 
 ## What it does and does not do
 
+FaceBlur masks the smallest region that hides a person's identity: an oval over
+the eyes, nose and mouth. It leaves hair, hands, bodies and objects alone. The
+rest of the picture is untouched, so a blurred copy stays usable as training
+data.
+
 FaceBlur redacts faces. It does not redact number plates, bodies or text.
 
 FaceBlur does not change audio. It copies the audio track from the source into
-the blurred copy, untouched. A reviewer who cares about voices needs a different
-tool.
+the blurred copy, untouched.
 
 FaceBlur may miss a face. Read the next section before you rely on it.
 
-## How many faces it finds
+## How well it works
 
-Phase 3 measured this on three real Ego camera files. A person labelled 207 faces
-by hand in 42 frames. A face counts as covered when the mask covers at least 80
-percent of its rectangle.
+Every number below comes from an automatic evaluation with no human labels. The
+method is in `eval/` and the full tables are in `docs/precision_report.md`.
+Measured on a 31 second Ego camera file, 938 frames, 1600x1300.
 
-| Setting | Faces covered | Share of the frame destroyed |
+| Measure | First build | This build |
 |---|---|---|
-| Defaults | 75.8% | 33% |
-| Defaults with `--persist 14` | 93.2% | 55% |
-| Defaults with `--persist 14 --pad 0.6` | 98.1% | 70% |
-| `--engine both --conf 0.15 --pad 0.45 --persist 10` | 99.5% | 79% |
+| Share of the frame destroyed, mean | 33% | 1.3% |
+| Share of the frame destroyed, worst frame | 93% | 3.5% |
+| Masked pixels where no detector sees a face, mean | 29.7% | 0.16% |
+| Hand pixels touched | 82% | 0.00% |
+| Faces the detectors agree on, covered | 100% | 98.4% |
+| Confirmed faces kept covered while still visible | | 99.3% |
 
-Read those two columns together. Every setting that finds more faces also
-destroys more of the picture. On this footage the settings that reach 99 percent
-blur about four fifths of every frame.
+Recall against faces of known position, pasted into real frames of the same
+video, with the same settings:
 
-The hand placed rectangles carry tens of pixels of error at small face sizes, so
-the first column understates what the pipeline covers. `docs/recall_report.md`
-gives the full method, an upper bound for each row, and the numbers by face size.
+| Faces | Covered |
+|---|---|
+| 64 px and larger, sharp | 96 to 100% |
+| 64 px and larger, motion blurred | 50 to 100% |
+| 32 to 63 px | 68% |
+| under 32 px | 56% |
+
+Small and motion blurred faces carry the misses. The detectors themselves find a
+24 px face about half the time, at any threshold. On a 1600 px frame a 24 px face
+is a person far across the room.
+
+The first build reached 100 percent on the agreed faces by masking a third of
+every frame. This build gives up a few points of recall on the smallest faces to
+leave everything else intact. `docs/precision_audit.md` explains why.
 
 Check the blurred copies before you share them.
+
+## How it decides what to blur
+
+Pixels are destroyed only when several independent checks agree:
+
+1. YuNet finds a candidate at a threshold of 0.5, scanning at 1280 and 1920 px.
+2. CenterFace, a different architecture, must fire on the same spot.
+3. The box must be a plausible face: at most 15 percent of the frame's long
+   side, and roughly square.
+4. A tracker links detections across frames. A face must be seen at least three
+   times, close together, before any pixel is touched. Once a track is confirmed, YuNet
+   alone may keep it going at a lower threshold, if its box overlaps where the
+   track predicts the face to be. A hand can never start a track. Gaps of up to
+   five frames are interpolated. The mask reaches two frames past each end, at
+   the same size.
+5. The mask is an ellipse fitted to the box and rotated to the eye line, with a
+   soft edge. Inside it the pixels are replaced from a copy shrunk to six blocks
+   across, so the face cannot come back.
+
+The thresholds were chosen by `eval/sweep.py`: the highest recall that keeps
+masking outside anything a detector calls a face under 0.3 percent of the frame,
+and hands untouched.
+
+Every blurred copy comes with an audit record that says how much of each frame
+was destroyed and flags any frame over 5 percent.
 
 ## Set up
 
@@ -59,110 +100,80 @@ Drop a video or a folder on the window. Choose an output folder. Press Blur
 faces. Each row shows one video and its progress. Press Stop to end the run. Stop
 deletes unfinished files.
 
-Advanced settings hold the detector, the frame step, the redaction style and the
-number of videos to process at once.
-
 ## Use the command line
 
 ```
 faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
-         [--det-sizes 640,1280] [--stride N] [--persist N] [--pad F]
+         [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
+         [--min-track N] [--max-gap N] [--tail N] [--pad F]
          [--mode blur|pixelate|solid] [--workers N] [--report PATH]
          [--recursive] [--no-progress]
 ```
-
-Run it through the virtual environment:
 
 ```
 .venv\Scripts\python.exe cli.py C:\ego -o C:\ego_blurred --workers 8
 ```
 
-INPUT is a video or a folder. A folder run reads every video in it. Add
-`--recursive` to walk subfolders and mirror them in the output folder. OUTPUT
+INPUT is a video or a folder. A folder run reads every video in it. OUTPUT
 defaults to a folder named `<input>_blurred` next to the input. The exit code is
 1 when any video failed.
 
-To find more faces, raise `--persist` first. It costs no extra time.
-
-```
-.venv\Scripts\python.exe cli.py C:\ego -o C:\ego_blurred --persist 14
-```
+`--no-verify` and `--engine both` find more faces and also blur hands and
+objects. On the Ego footage they touched 7.7 percent of hand pixels. Use them
+only when a missed face costs more than a damaged frame.
 
 ## What it writes
 
-For each video, FaceBlur writes two files to the output folder:
+- `<name>_blurred.mp4`, the blurred copy, H.264 at crf 12 with the source audio.
+- `<name>_blurred.mp4.json`, the audit record: frames, tracks, how much of each
+  frame was masked (mean, p95, max), frames over the mask budget, every setting,
+  the sha256 of each model, and the time taken.
 
-- `<name>_blurred.mp4`, the blurred copy, H.264 video with the source audio.
-- `<name>_blurred.mp4.json`, the audit record.
+## Evaluate a new batch
 
-The audit record holds the source name, the frame count, the resolution, the
-frame rate, how many frames held a detection, how many frames the pipeline
-masked, every setting used, the sha256 of each model, and the time taken. Give
-this file to a compliance reviewer.
+The harness needs a second environment for MediaPipe, which supplies the third
+face detector and the hand regions:
 
-## How it works
+```
+py -3.12 -m venv .venv-eval
+.venv-eval\Scripts\python.exe -m pip install -r requirements-eval.txt
+```
 
-FaceBlur reads each video twice.
+Then, for a video:
 
-The first pass detects faces. It scales each frame so its long side matches each
-detection size, runs every enabled detector at each size, maps the boxes back,
-and merges them. It then copies each box forward and backward in time, growing it
-as it goes, so a detector that fires on three frames out of four still yields a
-mask on all four.
+```
+.venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
+.venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
+.venv\Scripts\python.exe -m eval.sweep VIDEO
+```
 
-The second pass destroys the pixels and encodes. It shrinks the whole frame, then
-grows it back, then paints that copy inside the padded rectangles. Shrinking
-throws information away, so the face cannot come back from the output. A plain
-blur is a linear filter and can be partly undone, so FaceBlur never ships a mode
-that only blurs.
-
-Masks are rectangles, not ellipses. An ellipse drawn inside the box leaves the
-corners, and hairlines and ears live in the corners.
+The sweep writes `docs/precision_report.md` and prints the settings that pass
+the gates. No step asks a person for anything.
 
 ## Speed
 
-Measured on one core, on a 31 second file of 1600x1300 video.
-
-| Stage | Seconds |
-|---|---|
-| Detect | 73 |
-| Encode and mux | 187 |
-| Total | 261 |
-
-That is about 8.5 hours of one core for one hour of footage. Encoding costs more
-than detection. Raise `--workers` to process several videos at once.
-
-## Detectors
-
-FaceBlur ships two, and runs them through `--engine`.
-
-| Name | Model | Licence | Size |
-|---|---|---|---|
-| `yunet`, the default | YuNet from opencv_zoo | Apache 2.0 | 232 KB |
-| `centerface` | CenterFace from the deface package | MIT | 7.3 MB |
-
-`--engine both` runs the two and merges the result. It costs about twice the
-detection time. `models/README.md` records where each file came from and its
-sha256. `tests/test_models.py` checks both hashes.
+On one worker, both detectors at 1280 and 1920 px cost about 0.7 s per
+1600x1300 frame, and near lossless encoding adds about 0.2 s. Raise `--workers`
+to process several videos at once. Each worker caps its threads so a pool does
+not oversubscribe the CPU.
 
 ## Build the packaged app
-
-The packaged app needs no Python on the target machine.
 
 ```
 .venv\Scripts\python.exe -m PyInstaller build\faceblur.spec --noconfirm
 ```
 
-The result is `dist\FaceBlur\`. Zip that folder and give it to the user. They
-unpack it and run `FaceBlur.exe`.
+The result is `dist\FaceBlur\`, about 380 MB unpacked, 150 MB zipped. The
+evaluation harness is not part of it.
 
-| Measure | Size |
-|---|---|
-| Unpacked folder | 381 MB |
-| Zip | 151 MB |
+## Detectors
 
-Most of that is three things: OpenCV at 99 MB, Qt at 92 MB and ffmpeg at 84 MB.
-The two models take 15 MB.
+| Name | Model | Licence | Size |
+|---|---|---|---|
+| `yunet`, finds faces | YuNet from opencv_zoo | Apache 2.0 | 232 KB |
+| `centerface`, confirms them | CenterFace from the deface package | MIT | 7.3 MB |
+
+`models/README.md` records where each file came from and its sha256.
 
 ## Run the tests
 
@@ -170,31 +181,9 @@ The two models take 15 MB.
 .venv\Scripts\python.exe -m pytest tests\
 ```
 
-`tests/manual_ui.md` holds the checks that need a person and a screen.
+## History
 
-## Versions
-
-These exact versions passed the tests. `requirements.txt` pins every one.
-
-| Package | Version |
-|---|---|
-| Python | 3.12.8 |
-| opencv-python-headless | 4.13.0.92 |
-| numpy | 2.5.2 |
-| onnxruntime | 1.29.0 |
-| imageio-ffmpeg | 0.6.0 (ffmpeg 7.1) |
-| PySide6 | 6.11.2 |
-| pytest | 9.0.2 |
-| pyinstaller | 6.22.2 |
-
-## Known limits
-
-No detector finds every face. Faces at a sharp angle, faces smaller than about 10
-pixels, faces behind glass and faces in mirrors get missed. Propagation lowers the
-miss rate. It cannot cover a face the detector never fires on.
-
-FaceBlur also blurs things that are not faces. On the Ego footage it masked a row
-of sinks. The plan accepts that trade, because a missed face is a data leak and an
-extra blur is not.
-
-Audio passes through untouched.
+`FACEBLUR_BUILD_PLAN.md` is the original plan. `docs/recall_report.md` is the
+Phase 3 measurement of the first build, with hand labels. `docs/precision_audit.md`
+is the audit that found why that build destroyed hands and counters, and
+`docs/precision_report.md` is the automatic measurement of this one.

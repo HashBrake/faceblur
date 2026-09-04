@@ -11,8 +11,9 @@ from conftest import audio_codec, audio_streams, stream_lines
 from faceblur import STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED
 from faceblur.pipeline import output_path, process_video, sidecar_path
 from faceblur.settings import Settings
+from faceblur.video import part_path
 
-FAST = Settings(det_sizes=(320,), persist=2)
+FAST = Settings(det_sizes=(320,), verify=False, min_track=1, tail=1)
 
 
 def test_audio_passes_through_untouched(video_with_audio, tmp_path):
@@ -154,3 +155,40 @@ def test_every_mode_writes_a_playable_file(video_silent, tmp_path, mode):
     assert record.status == STATUS_DONE, record.error
     assert dst.stat().st_size > 0
     assert any("Video: h264" in line for line in stream_lines(dst))
+
+
+def test_no_part_file_remains_after_success(video_silent, tmp_path):
+    dst = tmp_path / "out.mp4"
+    record = process_video(video_silent, dst, FAST)
+    assert record.status == STATUS_DONE, record.error
+    assert dst.exists()
+    assert not part_path(dst).exists()
+
+
+def test_no_part_file_remains_after_cancel(video_silent, tmp_path):
+    dst = tmp_path / "out.mp4"
+    cancel = threading.Event()
+
+    def on_progress(stage, done, total):
+        if stage == "writing" and done >= 2:
+            cancel.set()
+
+    process_video(video_silent, dst, FAST, on_progress=on_progress, cancel=cancel)
+    assert not dst.exists()
+    assert not part_path(dst).exists()
+
+
+def test_the_finished_file_appears_only_at_the_end(video_silent, tmp_path):
+    """While writing, only the .part file exists. The real name appears once."""
+    dst = tmp_path / "out.mp4"
+    seen = []
+
+    def on_progress(stage, done, total):
+        if stage == "writing":
+            seen.append((dst.exists(), part_path(dst).exists()))
+
+    record = process_video(video_silent, dst, FAST, on_progress=on_progress)
+    assert record.status == STATUS_DONE, record.error
+    assert all(not final for final, _ in seen)
+    assert any(part for _, part in seen)
+    assert dst.exists() and not part_path(dst).exists()

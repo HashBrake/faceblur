@@ -9,6 +9,7 @@ turns the messages into Qt signals.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -28,12 +29,14 @@ _CANCEL = None
 _MIN_SECONDS_BETWEEN_MESSAGES = 0.1
 
 
-def init_worker(settings: Settings, queue, cancel) -> None:
+def init_worker(settings: Settings, queue, cancel, workers: int = 1) -> None:
     global _BANK, _SETTINGS, _QUEUE, _CANCEL
     _SETTINGS = settings
     _QUEUE = queue
     _CANCEL = cancel
-    _BANK = DetectorBank(settings)
+    # One worker keeps the library defaults. A pool splits the cores.
+    threads = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
+    _BANK = DetectorBank(settings, threads=threads)
 
 
 def run_one(job: tuple[int, str, str]) -> tuple[int, dict]:

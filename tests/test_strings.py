@@ -110,7 +110,11 @@ def test_sentence_case(name):
 
 
 def test_every_reference_string_from_the_plan_is_present():
-    """Section 7 lists reference strings. They must match exactly."""
+    """Section 7 lists reference strings. They must match exactly.
+
+    The two engine help strings left this list when the engines changed meaning
+    in the precision rebuild. See docs/precision_audit.md.
+    """
     expected = {
         "DROP_ZONE_EMPTY": "Drop a video or a folder here",
         "CHOOSE_FILES": "Choose files",
@@ -120,9 +124,7 @@ def test_every_reference_string_from_the_plan_is_present():
         "START": "Blur faces",
         "STOP": "Stop",
         "ENGINE_STANDARD": "Standard",
-        "ENGINE_STANDARD_HELP": "One detector. Faster. May miss small or turned faces.",
         "ENGINE_MAX": "Maximum coverage",
-        "ENGINE_MAX_HELP": "Two detectors. About twice as slow. Finds more faces.",
         "STRIDE_HELP": "Detect faces on every Nth frame. 1 is safest. Higher is faster.",
         "REPLACE_EXISTING": "Replace existing files",
         "STATUS_WAITING": "Waiting",

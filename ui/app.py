@@ -38,6 +38,7 @@ if __package__ in (None, ""):  # started as `python ui/app.py`
 from faceblur.pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED,
                                STATUS_STOPPED, output_path, sidecar_path)
 from faceblur.settings import VIDEO_EXT, Settings
+from faceblur.video import part_path
 from ui import strings as S
 from ui.worker import init_worker, run_one
 
@@ -112,7 +113,7 @@ class BatchRunner(QThread):
         cancel = manager.Event()
         context = multiprocessing.get_context("spawn")
         pool = context.Pool(self.workers, initializer=init_worker,
-                            initargs=(self.settings, message_queue, cancel))
+                            initargs=(self.settings, message_queue, cancel, self.workers))
         pending = {}
         try:
             for index, (src, dst) in enumerate(self.jobs):
@@ -155,6 +156,7 @@ class BatchRunner(QThread):
         for index in pending:
             _, dst = self.jobs[index]
             Path(dst).unlink(missing_ok=True)
+            part_path(Path(dst)).unlink(missing_ok=True)
             sidecar_path(Path(dst)).unlink(missing_ok=True)
 
 
