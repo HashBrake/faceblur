@@ -5,9 +5,11 @@ wheel and this module asks it for the path.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
@@ -19,7 +21,26 @@ class VideoError(RuntimeError):
     """A video could not be read or written."""
 
 
+@lru_cache(maxsize=1)
 def ffmpeg_exe() -> str:
+    """Path to ffmpeg.
+
+    A PyInstaller build carries the binary that imageio-ffmpeg ships. Look for
+    the bundled copy first, because imageio-ffmpeg searches beside its own source
+    file and a frozen app moves that.
+    """
+    override = os.environ.get("IMAGEIO_FFMPEG_EXE")
+    if override and Path(override).is_file():
+        return override
+
+    if getattr(sys, "frozen", False):
+        root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        for folder in (root / "imageio_ffmpeg" / "binaries", root):
+            if folder.is_dir():
+                for candidate in sorted(folder.glob("ffmpeg*")):
+                    if candidate.is_file():
+                        return str(candidate)
+
     import imageio_ffmpeg
 
     return imageio_ffmpeg.get_ffmpeg_exe()

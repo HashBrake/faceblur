@@ -145,6 +145,25 @@ FaceBlur ships two, and runs them through `--engine`.
 detection time. `models/README.md` records where each file came from and its
 sha256. `tests/test_models.py` checks both hashes.
 
+## Build the packaged app
+
+The packaged app needs no Python on the target machine.
+
+```
+.venv\Scripts\python.exe -m PyInstaller build\faceblur.spec --noconfirm
+```
+
+The result is `dist\FaceBlur\`. Zip that folder and give it to the user. They
+unpack it and run `FaceBlur.exe`.
+
+| Measure | Size |
+|---|---|
+| Unpacked folder | 381 MB |
+| Zip | 151 MB |
+
+Most of that is three things: OpenCV at 99 MB, Qt at 92 MB and ffmpeg at 84 MB.
+The two models take 15 MB.
+
 ## Run the tests
 
 ```

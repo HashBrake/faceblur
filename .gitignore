@@ -22,3 +22,6 @@ dist/
 # Local run output
 *_blurred/
 out/
+
+# PyInstaller output
+dist/

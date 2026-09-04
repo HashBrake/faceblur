@@ -10,6 +10,7 @@ find large faces, so the default runs two sizes and merges the result.
 from __future__ import annotations
 
 import hashlib
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -20,7 +21,19 @@ import numpy as np
 from .settings import Settings
 from .track import nms_merge
 
-MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
+
+def _base_dir() -> Path:
+    """The folder that holds `models/`.
+
+    A PyInstaller build unpacks its data files next to the executable, so the
+    frozen app looks there rather than beside this source file.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    return Path(__file__).resolve().parents[1]
+
+
+MODEL_DIR = _base_dir() / "models"
 YUNET_MODEL = MODEL_DIR / "yunet.onnx"
 CENTERFACE_MODEL = MODEL_DIR / "centerface_dynamic.onnx"
 
