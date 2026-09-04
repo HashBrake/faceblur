@@ -23,6 +23,7 @@ dist/
 # Local run output
 *_blurred/
 *_blurred_v*/
+footage_blurred*/
 out/
 
 # PyInstaller output

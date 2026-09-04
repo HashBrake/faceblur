@@ -109,8 +109,9 @@ deletes unfinished files.
 faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
          [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
          [--min-track N] [--max-gap N] [--tail N] [--pad F]
-         [--mode blur|pixelate|solid] [--workers N] [--report PATH]
-         [--recursive] [--no-progress]
+         [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
+         [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
+         [--hwaccel none|cuda] [--report PATH] [--recursive] [--no-progress]
 ```
 
 ```
@@ -168,8 +169,10 @@ Measured on a 1600x1300 file, per frame:
 | CPU, this build | 350 ms | confirmation on crops around candidates |
 | GPU, this build | 100 ms | RTX 3070 through DirectML |
 
-End to end on the 31 s test file with 8 workers: 76 s, about 2.4 seconds of
-processing per second of video. The window uses the same pool.
+End to end on the four sample files (264 s of video) with 10 workers: 367 s,
+about 1.4 seconds of processing per second of video. The busiest file (215
+tracks, every frame masked) runs at 2.7 to 1. The window uses the same pool.
+`docs/report.md` has the table.
 
 Three things make a batch scale:
 
@@ -179,7 +182,10 @@ Three things make a batch scale:
 - **Copied stretches.** A group of pictures with no mask is copied from the
   source byte for byte, so it keeps its original quality and costs nothing to
   encode. Only stretches that hold a mask are re-encoded, and long ones are cut
-  at keyframes so several workers share them.
+  at keyframes so several workers share them. Copied and encoded pieces only
+  join exactly when they carry the same frame reordering delay, so the encoder
+  writes no B-frames and a source that has them is encoded whole. The audit
+  record's `reorder_delay` says which happened.
 - **A verified join.** The pieces are joined at keyframes with the source
   audio. The result is checked for a clean demux, the exact frame count, forward
   timestamps and the source's length. If a join with copied pieces fails that
@@ -237,6 +243,12 @@ because MediaPipe pins numpy below 2.
 ```
 .venv\Scripts\python.exe -m pytest tests\
 ```
+
+## Report and handover
+
+`docs/report.md` holds the measurements: quality, accuracy, speed, the hardware
+they were taken on, the assumptions, and what was done and not done on
+purpose. `STATE.md` says where the project stands for whoever picks it up.
 
 ## History
 

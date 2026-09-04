@@ -66,6 +66,7 @@ class AuditRecord:
     compute: dict = field(default_factory=dict)   # provider each model ran on
     frames_copied: int = 0        # frames copied from the source untouched
     join_attempts: int = 0
+    reorder_delay: int = 0        # source B-frame delay in frames; copies need 0
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0

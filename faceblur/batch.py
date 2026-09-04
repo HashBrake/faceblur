@@ -30,7 +30,7 @@ from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPE
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
 from .redact import redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
-                       keyframes, plan_segments, split_long, verify)
+                       keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
 from .video import VideoError, VideoInfo, part_path, probe
 
@@ -268,8 +268,12 @@ def run_video(src: Path, dst: Path, settings: Settings,
     keys = keyframes(src, times)
     masked_flags = [bool(f) for f in per_frame]
     min_copy = max(1, int(round(settings.min_copy_seconds * info.fps)))
-    for attempt, copy_clean in enumerate((settings.copy_clean, False)):
-        if attempt and not settings.copy_clean:
+    # Copied pieces must carry the same reordering delay as the encoded ones,
+    # which have none. A source with B-frames is encoded whole.
+    record.reorder_delay = reorder_delay(src)
+    want_copy = settings.copy_clean and record.reorder_delay == 0
+    for attempt, copy_clean in enumerate((want_copy, False)):
+        if attempt and not want_copy:
             break
         segments = plan_segments(masked_flags, keys, n, min_copy, copy_clean)
         piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
@@ -285,11 +289,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
             dst.unlink(missing_ok=True)
             return record
         masked, problem, copied = outcome
+        record.join_attempts = attempt + 1
+        record.error = problem
         if not problem:
             record.frames_copied = copied
-            record.join_attempts = attempt + 1
             break
-        record.error = problem
         dst.unlink(missing_ok=True)
     if record.error:
         record.wall_seconds = round(time.time() - started, 2)

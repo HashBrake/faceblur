@@ -61,11 +61,17 @@ def nvenc_available() -> bool:
 
 def video_codec_args(encoder: str, crf: int, preset: str, nvenc_cq: int) -> list[str]:
     """The ffmpeg video codec arguments for the chosen encoder."""
+    # No B-frames. A segment that is joined to a stream copied piece of the
+    # source must carry the same frame reordering delay as that piece, or the
+    # concat demuxer places the two a few frames apart. Copies are only made
+    # from sources without reordering (see `reorder_delay`), so the encoded
+    # pieces get none either. This costs some file size at the same quality.
     use_nvenc = encoder == "nvenc" or (encoder == "auto" and nvenc_available())
     if use_nvenc:
         return ["-c:v", "h264_nvenc", "-preset", "p6", "-tune", "hq",
-                "-rc", "vbr", "-cq", str(nvenc_cq), "-b:v", "0", "-profile:v", "high"]
-    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+                "-rc", "vbr", "-cq", str(nvenc_cq), "-b:v", "0", "-profile:v", "high",
+                "-bf", "0"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-bf", "0"]
 
 
 # On Windows, keep the console window of a child process hidden. The packaged UI

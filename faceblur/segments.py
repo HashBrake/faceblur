@@ -57,6 +57,34 @@ def frame_times(src: Path) -> list[float]:
     return times
 
 
+def reorder_delay(src: Path, packets: int = 60) -> int:
+    """How many frames the decoder holds back before it can show one, taken
+    from the gap between the first packets' decode and presentation times.
+
+    Zero for a stream without B-frames. Pieces with different delays do not
+    join cleanly with the concat demuxer, so clean stretches are only copied
+    from a source whose delay is zero, matching the encoder's own output.
+    """
+    r = _run(["-v", "error", "-copyts", "-i", str(src), "-map", "0:v:0", "-c", "copy",
+              "-frames:v", str(packets), "-f", "framecrc", "-"])
+    if r.returncode != 0:
+        raise VideoError("Could not read this video. Check that the file is not open in "
+                         "another program.")
+    rows = []
+    for line in r.stdout.decode(errors="replace").splitlines():
+        if line.startswith("0,"):
+            cols = [c.strip() for c in line.split(",")]
+            try:
+                rows.append((int(cols[1]), int(cols[2]), int(cols[3])))    # dts, pts, duration
+            except (IndexError, ValueError):
+                continue
+    if not rows:
+        return 0
+    step = max(1, min(d for _, _, d in rows if d > 0) if any(d > 0 for _, _, d in rows) else 1)
+    gap = max(pts - dts for dts, pts, _ in rows)
+    return max(0, int(round(gap / step)))
+
+
 def keyframes(src: Path, times: Sequence[float]) -> list[int]:
     """Indices of the frames a decoder can start at."""
     r = _run(["-v", "info", "-skip_frame", "nokey", "-i", str(src), "-map", "0:v:0",
