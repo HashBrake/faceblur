@@ -46,6 +46,28 @@ def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+@lru_cache(maxsize=1)
+def nvenc_available() -> bool:
+    """True when the bundled ffmpeg can encode with the NVIDIA encoder here."""
+    try:
+        r = subprocess.run(
+            [ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "color=size=256x256:rate=1",
+             "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, timeout=30, **_no_window())
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def video_codec_args(encoder: str, crf: int, preset: str, nvenc_cq: int) -> list[str]:
+    """The ffmpeg video codec arguments for the chosen encoder."""
+    use_nvenc = encoder == "nvenc" or (encoder == "auto" and nvenc_available())
+    if use_nvenc:
+        return ["-c:v", "h264_nvenc", "-preset", "p6", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(nvenc_cq), "-b:v", "0", "-profile:v", "high"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+
+
 # On Windows, keep the console window of a child process hidden. The packaged UI
 # is a windowed build and a visible console flash on every file looks like a bug.
 def _no_window() -> dict:
@@ -121,7 +143,8 @@ class Encoder:
     re-encoded, so FaceBlur does not change it.
     """
 
-    def __init__(self, src: Path, dst: Path, info: VideoInfo, crf: int, preset: str):
+    def __init__(self, src: Path, dst: Path, info: VideoInfo, crf: int, preset: str,
+                 encoder: str = "x264", nvenc_cq: int = 16):
         self.dst = Path(dst)
         self.dst.parent.mkdir(parents=True, exist_ok=True)
         # ffmpeg writes a .part file. It becomes the real file only when the
@@ -134,7 +157,7 @@ class Encoder:
             "-s", f"{info.width}x{info.height}", "-r", f"{info.fps}", "-i", "-",
             "-i", str(src),
             "-map", "0:v:0", "-map", "1:a?",
-            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            *video_codec_args(encoder, crf, preset, nvenc_cq),
             "-pix_fmt", "yuv420p", "-c:a", "copy",
             "-movflags", "+faststart", "-f", "mp4", str(self.part),
         ]

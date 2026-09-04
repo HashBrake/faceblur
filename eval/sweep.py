@@ -55,10 +55,10 @@ def passes(r: dict) -> bool:
 
 def grid() -> list[dict]:
     out = []
-    for conf, cap, mt, gap, weak in itertools.product([0.5, 0.6, 0.7], [0.15, 0.20],
-                                                      [2, 3], [2, 3, 5], [0.2, 0.3, 0.4]):
+    for conf, cap, mt, gap, weak, stride in itertools.product(
+            [0.5, 0.6, 0.7], [0.15, 0.20], [2, 3], [2, 3, 5], [0.2, 0.3, 0.4], [1, 2]):
         out.append({"conf": conf, "max_face_frac": cap, "min_track": mt, "max_gap": gap,
-                    "conf_weak": weak})
+                    "conf_weak": weak, "stride": stride})
     for conf in (0.5, 0.6, 0.7):
         out.append({"conf": conf, "conf_weak": conf, "max_face_frac": 0.15,
                     "min_track": 2, "max_gap": 3})   # no continuation

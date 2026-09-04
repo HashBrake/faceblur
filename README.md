@@ -27,22 +27,22 @@ Measured on a 31 second Ego camera file, 938 frames, 1600x1300.
 
 | Measure | First build | This build |
 |---|---|---|
-| Share of the frame destroyed, mean | 33% | 1.3% |
-| Share of the frame destroyed, worst frame | 93% | 3.5% |
+| Share of the frame destroyed, mean | 33% | 1.5% |
+| Share of the frame destroyed, worst frame | 93% | 3.8% |
 | Masked pixels where no detector sees a face, mean | 29.7% | 0.16% |
 | Hand pixels touched | 82% | 0.00% |
-| Faces the detectors agree on, covered | 100% | 98.4% |
-| Confirmed faces kept covered while still visible | | 99.3% |
+| Faces the detectors agree on, covered | 100% | 98.5% |
+| Confirmed faces kept covered while still visible | | 99.0% |
 
 Recall against faces of known position, pasted into real frames of the same
 video, with the same settings:
 
 | Faces | Covered |
 |---|---|
-| 64 px and larger, sharp | 96 to 100% |
-| 64 px and larger, motion blurred | 50 to 100% |
-| 32 to 63 px | 68% |
-| under 32 px | 56% |
+| 64 px and larger, sharp | 89% |
+| 64 px and larger, motion blurred | 73% |
+| 32 to 63 px | 94% |
+| under 32 px | 46% |
 
 Small and motion blurred faces carry the misses. The detectors themselves find a
 24 px face about half the time, at any threshold. On a 1600 px frame a 24 px face
@@ -58,12 +58,13 @@ Check the blurred copies before you share them.
 
 Pixels are destroyed only when several independent checks agree:
 
-1. YuNet finds a candidate at a threshold of 0.5, scanning at 1280 and 1920 px.
-2. CenterFace, a different architecture, must fire on the same spot.
+1. YuNet finds a candidate at a threshold of 0.6, scanning at 1280 and 1920 px.
+2. CenterFace, a different architecture, must fire on the same spot. It looks
+   at a crop around each candidate rather than the whole frame.
 3. The box must be a plausible face: at most 15 percent of the frame's long
    side, and roughly square.
-4. A tracker links detections across frames. A face must be seen at least three
-   times, close together, before any pixel is touched. Once a track is confirmed, YuNet
+4. A tracker links detections across frames. A face must be seen at least twice,
+   close together, before any pixel is touched. Once a track is confirmed, YuNet
    alone may keep it going at a lower threshold, if its box overlaps where the
    track predicts the face to be. A hand can never start a track. Gaps of up to
    five frames are interpolated. The mask reaches two frames past each end, at
@@ -152,10 +153,41 @@ the gates. No step asks a person for anything.
 
 ## Speed
 
-On one worker, both detectors at 1280 and 1920 px cost about 0.7 s per
-1600x1300 frame, and near lossless encoding adds about 0.2 s. Raise `--workers`
-to process several videos at once. Each worker caps its threads so a pool does
-not oversubscribe the CPU.
+FaceBlur uses the GPU when it finds one. Both detectors run through onnxruntime
+with DirectML on Windows, so any DirectX 12 card works, and with CUDA on a cloud
+machine. Encoding uses NVENC on an NVIDIA card and x264 otherwise, at matching
+quality.
+
+Measured on a 1600x1300 file, per frame:
+
+| Path | Detection | Notes |
+|---|---|---|
+| CPU, first precision build | 700 ms | both detectors, whole frame, two sizes |
+| CPU, this build | 350 ms | confirmation on crops around candidates |
+| GPU, this build | 100 ms | RTX 3070 through DirectML |
+
+Three things make a batch scale:
+
+- **Frame ranges.** Detection runs on ranges of `chunk_seconds` (default 15) in
+  parallel worker processes. Ranges need no overlap, because the tracker runs
+  once over the whole timeline afterwards.
+- **Copied stretches.** A group of pictures with no mask is copied from the
+  source byte for byte, so it keeps its original quality and costs nothing to
+  encode. Only stretches that hold a mask are re-encoded, and long ones are cut
+  at keyframes so several workers share them.
+- **A verified join.** The pieces are joined at keyframes with the source
+  audio. The result is checked for a clean demux, the exact frame count, forward
+  timestamps and the source's length. If a join with copied pieces fails that
+  check, the video is encoded end to end instead, without asking anyone.
+
+`--workers N` sets the worker processes. `--chunk-seconds`, `--no-copy`,
+`--device cpu` and `--encoder x264` turn each piece off when you need to. The
+audit record says which processor each model ran on and how many frames were
+copied untouched.
+
+Detecting on every second frame (`--stride 2`) halves detection time. The
+automatic sweep measures what it costs in recall on your footage and only picks
+it if it stays inside the gates.
 
 ## Build the packaged app
 
@@ -163,8 +195,9 @@ not oversubscribe the CPU.
 .venv\Scripts\python.exe -m PyInstaller build\faceblur.spec --noconfirm
 ```
 
-The result is `dist\FaceBlur\`, about 380 MB unpacked, 150 MB zipped. The
-evaluation harness is not part of it.
+The result is `dist\FaceBlur\`. The evaluation harness is not part of it.
+DirectML travels with the onnxruntime package, so the packaged app uses the GPU
+too.
 
 ## Detectors
 
@@ -174,6 +207,25 @@ evaluation harness is not part of it.
 | `centerface`, confirms them | CenterFace from the deface package | MIT | 7.3 MB |
 
 `models/README.md` records where each file came from and its sha256.
+
+## Versions
+
+These exact versions passed the tests. `requirements.txt` pins every one.
+
+| Package | Version |
+|---|---|
+| Python | 3.12.8 |
+| opencv-python-headless | 4.13.0.92 |
+| numpy | 2.5.2 |
+| onnx | 1.17.0 |
+| onnxruntime-directml | 1.24.4 |
+| imageio-ffmpeg | 0.6.0 (ffmpeg 7.1, with NVENC) |
+| PySide6 | 6.11.2 |
+| pytest | 9.0.2 |
+| pyinstaller | 6.22.2 |
+
+The evaluation harness needs `requirements-eval.txt` in its own environment,
+because MediaPipe pins numpy below 2.
 
 ## Run the tests
 

@@ -116,7 +116,9 @@ def test_blank_frame_finds_nothing():
 
 def test_raw_candidates_are_cheap_to_refilter(lena):
     image = cv2.imread(str(lena))
-    bank = DetectorBank(Settings())
+    # The bank's cap decides which candidates get a confirmation crop, so a
+    # portrait needs the cap lifted at the bank too.
+    bank = DetectorBank(Settings(max_face_frac=1.0))
     raw = bank.detect_raw(image)
     strict = filter_candidates(raw, Settings(conf=0.9, max_face_frac=1.0), image.shape[:2])
     loose = filter_candidates(raw, Settings(conf=0.3, conf_weak=0.3, max_face_frac=1.0), image.shape[:2])

@@ -31,12 +31,9 @@ from faceblur.pipeline import (
 )
 from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_sizes
 
-# One detector bank per worker process, built once and reused across that
-# worker's files. A bank holds an onnxruntime session, which cannot be pickled,
-# so it is never passed between processes.
-_BANK = None
-_SETTINGS: Settings | None = None
-
+# Worker processes run the phases of one video at a time: detection in frame
+# ranges, then segment encodes. Each worker keeps one detector bank.
+from faceblur.batch import run_video, serial_submit  # noqa: E402
 
 _WORKERS = 1
 
@@ -49,20 +46,33 @@ def _threads_per_worker():
     return max(1, (os.cpu_count() or 2) // _WORKERS)
 
 
-def _init_worker(settings: Settings, workers: int = 1) -> None:
+def _init_worker(workers: int = 1) -> None:
     global _WORKERS
     _WORKERS = workers
-    global _BANK, _SETTINGS
-    from faceblur.detect import DetectorBank
+    import faceblur.batch as batch
+    threads = _threads_per_worker()
+    if threads:
+        import cv2
+        cv2.setNumThreads(threads)
+    batch._THREADS = threads
 
-    _SETTINGS = settings
-    _BANK = DetectorBank(settings, threads=_threads_per_worker())
 
+class PoolSubmit:
+    """Maps phase jobs over a process pool, at most `limit` in flight."""
 
-def _run_one(job: tuple[str, str]) -> dict:
-    src, dst = job
-    record = process_video(Path(src), Path(dst), _SETTINGS, bank=_BANK)
-    return record.to_dict()
+    def __init__(self, pool):
+        self.pool = pool
+
+    def __call__(self, func, jobs, limit):
+        limit = max(1, limit)
+        pending, results = [], []
+        for job in jobs:
+            pending.append(self.pool.apply_async(func, (job,)))
+            if len(pending) >= limit:
+                results.append(pending.pop(0).get())
+        while pending:
+            results.append(pending.pop(0).get())
+        return results
 
 
 def find_videos(src: Path, recursive: bool) -> list[Path]:
@@ -141,7 +151,9 @@ def describe(record: AuditRecord | dict, dst: Path) -> str:
                 f"{r['frames_with_mask']}/{r['frames']} frames masked, "
                 f"{100 * r['masked_mean']:.2f}% of the frame on average, "
                 f"{r['frames_over_budget']} frames over budget, "
-                f"{r['detect_seconds']}s detect, {r['encode_seconds']}s write)")
+                f"{r.get('frames_copied', 0)} frames copied untouched, "
+                f"{r['detect_seconds']}s detect, {r['encode_seconds']}s write, "
+                f"{'/'.join(sorted(set(r.get('compute', {}).values())) or ['cpu'])})")
     if r["status"] == STATUS_SKIPPED:
         return f"  Already done: {dst}"
     if r["status"] == STATUS_STOPPED:
@@ -150,9 +162,6 @@ def describe(record: AuditRecord | dict, dst: Path) -> str:
 
 
 def run_serial(jobs, settings, reporter) -> list[dict]:
-    from faceblur.detect import DetectorBank
-
-    bank = DetectorBank(settings)
     records = []
     for number, (src, dst) in enumerate(jobs, 1):
         reporter.line(f"[{number}/{len(jobs)}] {src.name}")
@@ -163,7 +172,7 @@ def run_serial(jobs, settings, reporter) -> list[dict]:
             else:
                 reporter.status(f"  {name}: {stage} frame {done}")
 
-        record = process_video(src, dst, settings, on_progress=on_progress, bank=bank)
+        record = run_video(src, dst, settings, serial_submit, on_progress=on_progress)
         reporter.clear()
         reporter.line(describe(record, dst))
         records.append(record.to_dict())
@@ -171,16 +180,24 @@ def run_serial(jobs, settings, reporter) -> list[dict]:
 
 
 def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
+    """One video at a time, its phases spread over the pool."""
     records: list[dict] = []
     context = multiprocessing.get_context("spawn")
-    reporter.line(f"Running {workers} videos at a time.")
-    with context.Pool(workers, initializer=_init_worker, initargs=(settings, workers)) as pool:
-        payload = [(str(src), str(dst)) for src, dst in jobs]
-        for number, record in enumerate(pool.imap(_run_one, payload), 1):
-            src, dst = jobs[number - 1]
+    reporter.line(f"Running with {workers} workers.")
+    with context.Pool(workers, initializer=_init_worker, initargs=(workers,)) as pool:
+        submit = PoolSubmit(pool)
+        for number, (src, dst) in enumerate(jobs, 1):
             reporter.line(f"[{number}/{len(jobs)}] {src.name}")
+
+            def on_progress(stage, done, total, name=src.name):
+                if total:
+                    reporter.status(f"  {name}: {stage} {100 * done / total:5.1f}%")
+
+            record = run_video(src, dst, settings, submit, on_progress=on_progress,
+                               workers=workers)
+            reporter.clear()
             reporter.line(describe(record, dst))
-            records.append(record)
+            records.append(record.to_dict())
     return records
 
 
@@ -227,8 +244,19 @@ def build_parser() -> argparse.ArgumentParser:
                         default=defaults.mode,
                         help="how to destroy the face pixels (default: %(default)s)")
     parser.add_argument("--workers", type=int, default=None,
-                        help="videos to process at the same time "
-                             "(default: half the CPU count)")
+                        help="worker processes for detection ranges and segment "
+                             "encodes (default: half the CPU count)")
+    parser.add_argument("--device", choices=["auto", "gpu", "cpu"], default=defaults.device,
+                        help="run the detectors on the GPU when one is available "
+                             "(default: %(default)s)")
+    parser.add_argument("--encoder", choices=["auto", "nvenc", "x264"],
+                        default=defaults.encoder,
+                        help="video encoder (default: %(default)s, NVENC when available)")
+    parser.add_argument("--chunk-seconds", type=float, default=defaults.chunk_seconds,
+                        help="detection runs in ranges of this length, in parallel "
+                             "(default: %(default)s)")
+    parser.add_argument("--no-copy", dest="copy_clean", action="store_false",
+                        help="re-encode every frame instead of copying face free stretches")
     parser.add_argument("--report", default=None,
                         help="write one JSON file holding every audit record here")
     parser.add_argument("--recursive", action="store_true",
@@ -260,6 +288,10 @@ def main(argv: list[str] | None = None) -> int:
             tail=args.tail,
             pad=args.pad,
             mode=args.mode,
+            device=args.device,
+            encoder=args.encoder,
+            chunk_seconds=args.chunk_seconds,
+            copy_clean=args.copy_clean,
         )
     except SettingsError as exc:
         print(f"faceblur: {exc}", file=sys.stderr)
@@ -286,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
             for f in files]
 
     workers = args.workers if args.workers is not None else default_workers()
-    workers = max(1, min(workers, len(jobs)))
+    workers = max(1, workers)
 
     reporter = Reporter(args.progress)
     reporter.line(f"{len(jobs)} videos. Output folder: {out_dir}")

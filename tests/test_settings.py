@@ -9,11 +9,11 @@ from faceblur.settings import Settings, SettingsError, parse_det_sizes
 def test_defaults_are_the_precision_first_ones():
     s = Settings()
     assert s.engine == "yunet"
-    assert s.conf == 0.5
+    assert s.conf == 0.6
     assert s.det_sizes == (1280, 1920)
     assert s.verify is True
     assert s.max_face_frac == 0.15
-    assert s.min_track == 3
+    assert s.min_track == 2
     assert s.max_gap == 5
     assert s.tail == 2
     assert s.ellipse_w == 1.10

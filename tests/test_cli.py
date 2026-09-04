@@ -113,7 +113,7 @@ def test_the_report_holds_one_record_per_video(batch, tmp_path):
     records = json.loads(report.read_text(encoding="utf-8"))
     assert len(records) == 3
     assert {r["status"] for r in records} == {STATUS_DONE}
-    assert all(r["model_sha256"]["yunet"].startswith("8f2383e4") for r in records)
+    assert all(r["model_sha256"]["yunet"].startswith("c0aa2a66") for r in records)
 
 
 def test_running_twice_skips_the_copies_that_exist(batch, tmp_path, capsys):

@@ -11,6 +11,10 @@ EXPECTED = {
         "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
         232589,
     ),
+    "yunet_dynamic.onnx": (
+        "c0aa2a665abc3daba84ab666ee6b15352852128c84c5267897ad18e590ac466f",
+        232622,
+    ),
     "centerface.onnx": (
         "09189deaaf8646c5c51a68447e3c744ea1e211798155d4728c20507b9f5aefbc",
         7304518,

@@ -63,6 +63,9 @@ class AuditRecord:
     flagged_frames: list = field(default_factory=list)
     engine: str = ""
     model_sha256: dict = field(default_factory=dict)
+    compute: dict = field(default_factory=dict)   # provider each model ran on
+    frames_copied: int = 0        # frames copied from the source untouched
+    join_attempts: int = 0
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0
@@ -176,6 +179,7 @@ def process_video(
     if bank is None:
         bank = DetectorBank(settings)
     record.model_sha256 = bank.model_hashes
+    record.compute = bank.compute
 
     try:
         p = plan(src, settings, bank, on_progress, cancel)
@@ -205,7 +209,8 @@ def process_video(
     t1 = time.time()
     written = 0
     masked: list[float] = []
-    encoder = Encoder(src, dst, p.info, settings.crf, settings.preset)
+    encoder = Encoder(src, dst, p.info, settings.crf, settings.preset,
+                      settings.encoder, settings.nvenc_cq)
     try:
         for index, frame in enumerate(read_frames(src)):
             if _cancelled(cancel):

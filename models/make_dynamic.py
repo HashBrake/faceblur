@@ -1,4 +1,4 @@
-"""Derive centerface_dynamic.onnx from centerface.onnx. Run once, offline.
+"""Derive the dynamic-axis copies of both models. Run once, offline.
 
 The CenterFace model in the deface wheel declares a fixed input shape of
 [10, 3, 32, 32]. onnxruntime honours that, so the model cannot see a frame at
@@ -30,24 +30,28 @@ OUTPUT_DIMS = {
 }
 
 
-def main():
-    src = HERE / "centerface.onnx"
-    dst = HERE / "centerface_dynamic.onnx"
-
+def derive(src, dst, in_dims, out_dims):
     model = onnx.load(str(src))
-    in_dims = {n.name: [d.dim_value for d in n.type.tensor_type.shape.dim]
-               for n in model.graph.input}
-    out_dims = {n.name: [d.dim_value for d in n.type.tensor_type.shape.dim]
-                for n in model.graph.output}
-    in_dims.update(INPUT_DIMS)
-    out_dims.update(OUTPUT_DIMS)
-
-    dyn = update_inputs_outputs_dims(model, in_dims, out_dims)
-    onnx.save(dyn, str(dst))
-
+    ins = {n.name: [d.dim_value for d in n.type.tensor_type.shape.dim] for n in model.graph.input}
+    outs = {n.name: [d.dim_value for d in n.type.tensor_type.shape.dim] for n in model.graph.output}
+    ins.update(in_dims)
+    outs.update(out_dims)
+    onnx.save(update_inputs_outputs_dims(model, ins, outs), str(dst))
     for p in (src, dst):
         data = p.read_bytes()
         print(f"{p.name}  {hashlib.sha256(data).hexdigest()}  {len(data)} bytes")
+
+
+def main():
+    derive(HERE / "centerface.onnx", HERE / "centerface_dynamic.onnx", INPUT_DIMS, OUTPUT_DIMS)
+    # YuNet: input [1, 3, 640, 640] becomes [N, 3, H, W]; every output keeps its
+    # last axis and gets a free anchor count per stride.
+    yunet_out = {}
+    for name, last in (("cls", 1), ("obj", 1), ("bbox", 4), ("kps", 10)):
+        for s in (8, 16, 32):
+            yunet_out[f"{name}_{s}"] = ["N", f"A{s}", last]
+    derive(HERE / "yunet.onnx", HERE / "yunet_dynamic.onnx",
+           {"input": ["N", 3, "H", "W"]}, yunet_out)
 
 
 if __name__ == "__main__":

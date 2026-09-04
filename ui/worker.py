@@ -13,8 +13,8 @@ import os
 import time
 from pathlib import Path
 
-from faceblur.detect import DetectorBank
-from faceblur.pipeline import process_video
+from faceblur.batch import run_video, serial_submit
+import faceblur.batch as batch
 from faceblur.settings import Settings
 
 # Per worker process. A detector bank holds an onnxruntime session, which cannot
@@ -35,8 +35,8 @@ def init_worker(settings: Settings, queue, cancel, workers: int = 1) -> None:
     _QUEUE = queue
     _CANCEL = cancel
     # One worker keeps the library defaults. A pool splits the cores.
-    threads = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
-    _BANK = DetectorBank(settings, threads=threads)
+    batch._THREADS = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
+    _BANK = None
 
 
 def run_one(job: tuple[int, str, str]) -> tuple[int, dict]:
@@ -57,6 +57,6 @@ def run_one(job: tuple[int, str, str]) -> tuple[int, dict]:
             # A closed queue means the run was stopped. Losing progress is fine.
             pass
 
-    record = process_video(Path(src), Path(dst), _SETTINGS,
-                           on_progress=on_progress, cancel=_CANCEL, bank=_BANK)
+    record = run_video(Path(src), Path(dst), _SETTINGS, serial_submit,
+                       on_progress=on_progress, cancel=_CANCEL)
     return index, record.to_dict()

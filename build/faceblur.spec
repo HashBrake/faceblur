@@ -16,6 +16,7 @@ ROOT = Path(SPECPATH).resolve().parent
 # Both detectors, and the licence that travels with CenterFace.
 datas = [
     (str(ROOT / "models" / "yunet.onnx"), "models"),
+    (str(ROOT / "models" / "yunet_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.onnx"), "models"),
     (str(ROOT / "models" / "centerface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
@@ -31,6 +32,12 @@ hiddenimports = [
     "onnxruntime",
     "onnxruntime.capi",
     "onnxruntime.capi._pybind_state",
+    # The GPU path builds static graphs per input size with onnx.
+    "onnx",
+    "onnx.tools.update_model_dims",
+    "onnx.shape_inference",
+    "faceblur.batch",
+    "faceblur.segments",
     # Started in a worker process by name, so the analysis cannot see them.
     "ui.worker",
     "faceblur.detect",
@@ -43,7 +50,7 @@ hiddenimports = [
 # Nothing here is used at run time, and each one adds tens of megabytes.
 excludes = [
     "tkinter", "matplotlib", "scipy", "pandas", "IPython", "jupyter",
-    "pytest", "onnx", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
+    "pytest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
     "PySide6.Qt3DCore", "PySide6.QtCharts", "PySide6.QtDataVisualization",
     "PySide6.QtMultimedia", "PySide6.QtQuick", "PySide6.QtQml",
     "PySide6.QtBluetooth", "PySide6.QtPositioning", "PySide6.QtDesigner",

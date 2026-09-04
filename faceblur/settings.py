@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 ENGINES = ("yunet", "centerface", "both")
+DEVICES = ("auto", "gpu", "cpu")
+ENCODERS = ("auto", "nvenc", "x264")
 MODES = ("blur", "pixelate", "solid")
 
 # Video extensions the batch walker treats as input.
@@ -30,7 +32,7 @@ class Settings:
     engine: str = "yunet"
     # YuNet score threshold. Chosen by eval/sweep.py: the highest recall that
     # keeps off-face masking under 0.3 percent and hands untouched.
-    conf: float = 0.5
+    conf: float = 0.6
     # Absolute long side lengths to scan at. 640 was dropped: on a 1600 px frame
     # it shrinks a 35 px face to 14 px while a sink becomes a face.
     det_sizes: tuple[int, ...] = (1280, 1920)
@@ -38,6 +40,13 @@ class Settings:
     verify: bool = True
     verify_conf: float = 0.3
     verify_iou: float = 0.3
+    # Confirmation runs on a crop around each candidate rather than on the
+    # whole frame at every size. The crop is crop_scale times the box, scaled
+    # so its long side is crop_size pixels. Same confirmations, a fraction of
+    # the cost, and one fixed shape for the GPU.
+    confirm_on_crops: bool = True
+    crop_size: int = 224
+    crop_scale: float = 4.0
     # Once a track is confirmed, YuNet alone may keep it alive at this lower
     # threshold, if the box overlaps where the track predicts the face to be.
     # A hand can never start a track, so this costs no precision.
@@ -50,10 +59,13 @@ class Settings:
     min_aspect: float = 0.4
     max_aspect: float = 2.5
     stride: int = 1
+    # auto uses the GPU when onnxruntime can see one (DirectML on Windows,
+    # CUDA elsewhere) and falls back to the CPU.
+    device: str = "auto"
 
     # --- tracking -----------------------------------------------------------
     # A detection counts only when its track holds at least min_track detections.
-    min_track: int = 3
+    min_track: int = 2
     # Frames a track may go undetected before it closes. Gaps are interpolated.
     max_gap: int = 5
     # Frames the mask extends past the first and last detection, without growth.
@@ -78,10 +90,24 @@ class Settings:
     # Near lossless. Untouched pixels are training data.
     crf: int = 12
     preset: str = "fast"
+    # auto uses NVENC when the GPU and the bundled ffmpeg both support it.
+    encoder: str = "auto"
+    # NVENC constant quality, the counterpart of crf. 16 is near lossless.
+    nvenc_cq: int = 16
     suffix: str = "_blurred"
     replace_existing: bool = False
     # A frame masked beyond this share is flagged in the audit record.
     mask_budget: float = 0.05
+
+    # --- segments ------------------------------------------------------------
+    # Detection runs in frame ranges of this many seconds, in parallel. 0 means
+    # one range for the whole video.
+    chunk_seconds: float = 15.0
+    # Stretches with no mask are copied from the source byte for byte. If the
+    # joined file does not verify, the video is encoded end to end instead.
+    copy_clean: bool = True
+    # A clean stretch shorter than this is encoded with its neighbours.
+    min_copy_seconds: float = 2.0
 
     nms_detect: float = 0.35
     nms_yunet: float = 0.30
@@ -95,8 +121,16 @@ class Settings:
             raise SettingsError(f"engine must be one of {ENGINES}, got {self.engine!r}")
         if self.mode not in MODES:
             raise SettingsError(f"mode must be one of {MODES}, got {self.mode!r}")
+        if self.device not in DEVICES:
+            raise SettingsError(f"device must be one of {DEVICES}, got {self.device!r}")
+        if self.encoder not in ENCODERS:
+            raise SettingsError(f"encoder must be one of {ENCODERS}, got {self.encoder!r}")
         if not 0.0 < self.conf <= 1.0:
             raise SettingsError(f"conf must be above 0 and at most 1, got {self.conf}")
+        if self.chunk_seconds < 0 or self.min_copy_seconds < 0:
+            raise SettingsError("chunk_seconds and min_copy_seconds must be 0 or more")
+        if self.crop_size < 64 or self.crop_scale < 1.0:
+            raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
             raise SettingsError(f"conf_weak must be above 0 and at most conf, got {self.conf_weak}")
         if not self.det_sizes:
@@ -128,10 +162,12 @@ class Settings:
     def to_dict(self) -> dict:
         d = {k: getattr(self, k) for k in (
             "engine", "conf", "conf_weak", "det_sizes", "verify", "verify_conf", "verify_iou",
-            "max_face_frac", "min_aspect", "max_aspect", "stride",
+            "confirm_on_crops", "crop_size", "crop_scale",
+            "max_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "min_track", "max_gap", "tail", "track_iou",
             "ellipse_w", "ellipse_h", "pad", "feather",
-            "mode", "strength", "crf", "preset", "mask_budget",
+            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
+            "chunk_seconds", "copy_clean", "min_copy_seconds",
             "nms_detect", "nms_yunet")}
         d["det_sizes"] = list(self.det_sizes)
         return d

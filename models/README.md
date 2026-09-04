@@ -31,3 +31,16 @@ endpoint above. This repo runs the model through `cv2.FaceDetectorYN`.
 Taken from the deface wheel on 2026-09-04. The build plan calls this file
 `centerface.bnmerged.onnx`. The wheel names it `centerface.onnx`. It is the same
 model. This repo runs it through `onnxruntime` and does not import deface.
+
+## yunet_dynamic.onnx and centerface_dynamic.onnx
+
+Derived copies with dynamic input and output axes, made once, offline, by
+`models/make_dynamic.py`. The originals declare fixed shapes (YuNet 640x640,
+CenterFace 10x3x32x32) that onnxruntime enforces. OpenCV ignores the declared
+shape, which is why the first build could use the original YuNet file. This
+build runs both models through onnxruntime so they can use the GPU.
+
+| File | sha256 | Size |
+|---|---|---|
+| yunet_dynamic.onnx | c0aa2a665abc3daba84ab666ee6b15352852128c84c5267897ad18e590ac466f | 232622 |
+| centerface_dynamic.onnx | e50c58b64599f94a343ac1dc58fa4902635c2e1939b316afb39142c39c99b22e | 7304533 |

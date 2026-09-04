@@ -59,7 +59,7 @@ def test_the_sidecar_holds_the_audit_record(video_silent, tmp_path):
     assert saved["resolution"] == "320x240"
     assert saved["engine"] == "yunet"
     assert saved["settings"]["det_sizes"] == [320]
-    assert saved["model_sha256"]["yunet"].startswith("8f2383e4")
+    assert saved["model_sha256"]["yunet"].startswith("c0aa2a66")
     assert saved["wall_seconds"] > 0
     assert saved == record.to_dict()
 

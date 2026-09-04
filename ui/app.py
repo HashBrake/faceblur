@@ -152,12 +152,18 @@ class BatchRunner(QThread):
                 self.progress.emit(index, stage, done, total)
 
     def _remove_partial_files(self, pending) -> None:
-        """Stop never leaves half a video in the output folder."""
+        """Stop never leaves half a video, or its segment folder, behind."""
+        import shutil
         for index in pending:
             _, dst = self.jobs[index]
             Path(dst).unlink(missing_ok=True)
             part_path(Path(dst)).unlink(missing_ok=True)
             sidecar_path(Path(dst)).unlink(missing_ok=True)
+        folders = {Path(dst).parent for _, dst in self.jobs}
+        for folder in folders:
+            for temp in folder.glob("faceblur_*"):
+                if temp.is_dir():
+                    shutil.rmtree(temp, ignore_errors=True)
 
 
 class DropZone(QFrame):

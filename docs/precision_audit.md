@@ -58,4 +58,8 @@ On the 42 hand labelled frames from Phase 3:
 | Pixel destruction | whole frame downsample | per face, blocks scale with face size |
 | Encode | crf 20 medium | crf 12 fast |
 | Quality report | none | masked share per frame, flagged frames, tracks |
-| Evaluation | hand labels, recall only | no labels: synthetic recall, detector consensus, hand regions, mask budget |
+| Evaluation | hand labels, recall only | no labels: synthetic recall, detector consensus, hand regions, continuity, mask budget |
+| Compute | CPU only | GPU through onnxruntime, DirectML or CUDA, CPU fallback; NVENC encode |
+| Confirmation | second detector over the whole frame at two sizes | second detector on a crop around each candidate, batched |
+| Long videos | one process per video | detection in frame ranges across workers, tracker once, segments encoded in parallel |
+| Clean stretches | re-encoded | copied from the source byte for byte, joined at keyframes, verified |
