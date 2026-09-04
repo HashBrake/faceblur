@@ -139,3 +139,14 @@ def test_long_encode_segments_split_at_keyframes():
 
 def test_split_leaves_a_segment_without_inner_keyframes_alone():
     assert split_long([Segment(0, 100, False)], keys=[0], max_frames=35) == [Segment(0, 100, False)]
+
+
+def test_progress_ticks_inside_a_range_not_only_at_its_end(video_long, tmp_path):
+    """The window shows movement within a range, not one jump per range."""
+    seen = []
+    run_video(video_long, tmp_path / "out.mp4", FAST.with_changes(chunk_seconds=100),
+              serial_submit, on_progress=lambda s, d, n: seen.append((s, d)))
+    detect = [d for s, d in seen if s == "detecting"]
+    assert detect[0] == 0
+    assert len(set(detect)) > 3
+    assert detect == sorted(detect)

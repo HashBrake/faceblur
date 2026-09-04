@@ -67,8 +67,11 @@ def detect_job(job: dict) -> dict:
     bank = _bank(settings)
     strong, weak = {}, {}
     shape = (info.height, info.width)
+    progress = job.get("progress")          # only when the job runs in-process
     for offset, frame in enumerate(decode_range(src, times, start, end, info)):
         i = start + offset
+        if progress is not None and offset % 5 == 0:
+            progress(offset)
         if i % settings.stride:
             continue
         raw = bank.detect_raw(frame)
@@ -88,8 +91,11 @@ def encode_job(job: dict) -> dict:
     encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
                              settings.encoder, settings.nvenc_cq)
     masked = []
+    progress = job.get("progress")
     try:
         for offset, frame in enumerate(decode_range(src, times, seg.start, seg.end, info)):
+            if progress is not None and offset % 5 == 0:
+                progress(offset)
             d = dets.get(seg.start + offset, [])
             frame_out, alpha = redact(frame, d, settings)
             masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
@@ -171,6 +177,13 @@ def run_video(src: Path, dst: Path, settings: Settings,
     weak: list[list[Detection]] = [[] for _ in range(n)]
     done_frames = 0
     compute, hashes = {}, {}
+    in_process = submit is serial_submit
+    if in_process:
+        # Jobs run here, so they can report every few frames rather than only
+        # when a whole range finishes. A pool cannot carry the callable.
+        for job in jobs:
+            job["progress"] = (lambda k, base=job["start"]: report("detecting", done_frames + k, n))
+    report("detecting", 0, n)
 
     def collect_detect(result):
         nonlocal done_frames, compute, hashes
@@ -276,6 +289,10 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
     masked = [0.0] * len(per_frame)
     done = 0
     total = sum(s.frames for s in segments)
+    if submit is serial_submit:
+        for job in encode_jobs:
+            job["progress"] = (lambda k: report("writing", done + k, total))
+    report("writing", 0, total)
     # NVENC allows a handful of concurrent sessions on a consumer GPU.
     encode_limit = min(workers, 3) if settings.encoder != "x264" else workers
     try:
