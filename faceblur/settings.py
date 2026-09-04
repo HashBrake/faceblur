@@ -68,8 +68,15 @@ class Settings:
     min_track: int = 2
     # Frames a track may go undetected before it closes. Gaps are interpolated.
     max_gap: int = 5
-    # Frames the mask extends past the first and last detection, without growth.
+    # Frames the mask extends past the last sighting of a track.
     tail: int = 2
+    # Frames the mask extends before the first sighting. Longer than tail:
+    # a face entering the picture is visible for a few frames before the
+    # detectors lock on, and those frames are the ones that show a face.
+    tail_before: int = 6
+    # Tails follow the track's motion and grow by this share per frame, so an
+    # entering or leaving face stays under the mask as it moves.
+    tail_grow: float = 0.05
     track_iou: float = 0.3
 
     # --- mask geometry -------------------------------------------------------
@@ -108,6 +115,14 @@ class Settings:
     copy_clean: bool = True
     # A clean stretch shorter than this is encoded with its neighbours.
     min_copy_seconds: float = 2.0
+    # Masked stretches are cut at keyframes into pieces of about this length,
+    # so several workers encode them at once.
+    encode_seconds: float = 5.0
+    # Concurrent NVENC encodes. GeForce drivers from 2024 allow 8; 6 is safe.
+    nvenc_sessions: int = 6
+    # ffmpeg hardware decode: none or cuda. Measured equal to the CPU on a
+    # 1600x1300 file, so it is off by default.
+    hwaccel: str = "none"
 
     nms_detect: float = 0.35
     nms_yunet: float = 0.30
@@ -143,8 +158,12 @@ class Settings:
             raise SettingsError(f"stride must be at least 1, got {self.stride}")
         if self.min_track < 1:
             raise SettingsError(f"min_track must be at least 1, got {self.min_track}")
-        if self.max_gap < 0 or self.tail < 0:
-            raise SettingsError("max_gap and tail must be 0 or more")
+        if self.max_gap < 0 or self.tail < 0 or self.tail_before < 0 or self.tail_grow < 0:
+            raise SettingsError("max_gap, tail, tail_before and tail_grow must be 0 or more")
+        if self.hwaccel not in ("none", "cuda"):
+            raise SettingsError(f"hwaccel must be none or cuda, got {self.hwaccel!r}")
+        if self.encode_seconds < 0 or self.nvenc_sessions < 1:
+            raise SettingsError("encode_seconds must be 0 or more and nvenc_sessions at least 1")
         if self.ellipse_w <= 0 or self.ellipse_h <= 0:
             raise SettingsError("ellipse_w and ellipse_h must be above 0")
         if self.pad < 0:
@@ -164,10 +183,11 @@ class Settings:
             "engine", "conf", "conf_weak", "det_sizes", "verify", "verify_conf", "verify_iou",
             "confirm_on_crops", "crop_size", "crop_scale",
             "max_face_frac", "min_aspect", "max_aspect", "stride", "device",
-            "min_track", "max_gap", "tail", "track_iou",
+            "min_track", "max_gap", "tail", "tail_before", "tail_grow", "track_iou",
             "ellipse_w", "ellipse_h", "pad", "feather",
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
-            "chunk_seconds", "copy_clean", "min_copy_seconds",
+            "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
+            "nvenc_sessions", "hwaccel",
             "nms_detect", "nms_yunet")}
         d["det_sizes"] = list(self.det_sizes)
         return d

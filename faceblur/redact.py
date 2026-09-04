@@ -116,11 +116,24 @@ def redact(frame: np.ndarray, dets: Sequence[Detection],
     if not dets:
         return frame, np.zeros(frame.shape[:2], np.float32)
     alpha = build_alpha(frame.shape[:2], dets, settings)
-    cover = frame.copy()
-    for det in dets:
-        _cover_region(frame, cover, ellipse_for(det, settings), settings.mode,
-                      settings.strength, settings.feather)
-    a = alpha[:, :, None]
-    blended = (frame.astype(np.float32) * (1.0 - a) + cover.astype(np.float32) * a)
-    out = np.where(a > 0, np.clip(blended + 0.5, 0, 255).astype(np.uint8), frame)
+    H, W = frame.shape[:2]
+    # Everything happens inside the box around the ellipses. Blending the whole
+    # frame in float was most of the cost of the write pass.
+    ellipses = [ellipse_for(det, settings) for det in dets]
+    margin = settings.feather * 2 + 2
+    x0 = max(0, min(e.bounds(margin)[0] for e in ellipses))
+    y0 = max(0, min(e.bounds(margin)[1] for e in ellipses))
+    x1 = min(W, max(e.bounds(margin)[2] for e in ellipses))
+    y1 = min(H, max(e.bounds(margin)[3] for e in ellipses))
+    if x1 <= x0 or y1 <= y0:
+        return frame, alpha
+    out = frame.copy()
+    roi = frame[y0:y1, x0:x1]
+    cover = roi.copy()
+    for e in ellipses:
+        shifted = FaceEllipse(e.cx - x0, e.cy - y0, e.ax, e.ay, e.angle)
+        _cover_region(roi, cover, shifted, settings.mode, settings.strength, settings.feather)
+    a = alpha[y0:y1, x0:x1, None]
+    blended = roi.astype(np.float32) * (1.0 - a) + cover.astype(np.float32) * a
+    out[y0:y1, x0:x1] = np.where(a > 0, np.clip(blended + 0.5, 0, 255).astype(np.uint8), roi)
     return out, alpha

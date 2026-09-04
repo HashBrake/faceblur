@@ -105,7 +105,8 @@ def tracker_for(settings: Settings) -> Tracker:
     # With a stride, consecutive detections are stride frames apart, so the
     # allowed gap must cover that.
     return Tracker(settings.min_track, max(settings.max_gap, settings.stride - 1),
-                   settings.tail, settings.track_iou)
+                   settings.tail, settings.track_iou, tail_before=settings.tail_before,
+                   tail_grow=settings.tail_grow)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

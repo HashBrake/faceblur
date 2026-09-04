@@ -18,8 +18,8 @@ this environment, so its rule list was applied by hand:
 from __future__ import annotations
 
 import multiprocessing
-import queue as queue_module
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -40,7 +40,7 @@ from faceblur.pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED,
 from faceblur.settings import VIDEO_EXT, Settings
 from faceblur.video import part_path
 from ui import strings as S
-from ui.worker import init_worker, run_one
+from faceblur.batch import PoolSubmit, init_pool_worker, run_video
 
 GRID = 8
 MARGIN = 2 * GRID          # 16
@@ -91,7 +91,12 @@ def help_label(text: str) -> QLabel:
 
 
 class BatchRunner(QThread):
-    """Runs the batch in worker processes and reports back through signals."""
+    """Runs the batch: one video at a time, its phases spread over a pool.
+
+    The phases (detection in frame ranges, segment encodes) go to worker
+    processes through faceblur.batch.PoolSubmit. Tracking and the join run
+    here. Progress arrives per finished range or segment.
+    """
 
     progress = Signal(int, str, int, int)   # index, stage, done, total
     one_finished = Signal(int, dict)        # index, audit record
@@ -103,64 +108,51 @@ class BatchRunner(QThread):
         self.settings = settings
         self.workers = max(1, workers)
         self._stop_wanted = False
+        self._cancel = threading.Event()
 
     def stop(self) -> None:
         self._stop_wanted = True
+        self._cancel.set()
 
     def run(self) -> None:  # runs in the worker thread, never touches widgets
-        manager = multiprocessing.Manager()
-        message_queue = manager.Queue()
-        cancel = manager.Event()
         context = multiprocessing.get_context("spawn")
-        pool = context.Pool(self.workers, initializer=init_worker,
-                            initargs=(self.settings, message_queue, cancel, self.workers))
-        pending = {}
+        pool = context.Pool(self.workers, initializer=init_pool_worker, initargs=(self.workers,))
+        submit = PoolSubmit(pool)
         try:
             for index, (src, dst) in enumerate(self.jobs):
-                pending[index] = pool.apply_async(run_one, ((index, str(src), str(dst)),))
-            pool.close()
-
-            while pending:
-                if self._stop_wanted and not cancel.is_set():
-                    cancel.set()
-                self._drain(message_queue)
-                for index in [i for i, task in pending.items() if task.ready()]:
-                    task = pending.pop(index)
-                    try:
-                        _, record = task.get()
-                    except Exception as exc:  # a worker died, report it as a failure
-                        record = {"status": STATUS_FAILED, "error": str(exc)}
-                    self.one_finished.emit(index, record)
-                if self._stop_wanted and not pending:
+                if self._stop_wanted:
                     break
-                self.msleep(40)
+
+                def on_progress(stage, done, total, index=index):
+                    self.progress.emit(index, stage, done, total)
+
+                try:
+                    record = run_video(Path(src), Path(dst), self.settings, submit,
+                                       on_progress=on_progress, cancel=self._cancel,
+                                       workers=self.workers).to_dict()
+                except Exception as exc:  # a worker died, report it as a failure
+                    record = {"status": STATUS_FAILED, "error": str(exc)}
+                if self._stop_wanted and record.get("status") != STATUS_DONE:
+                    record["status"] = STATUS_STOPPED
+                self.one_finished.emit(index, record)
         finally:
             if self._stop_wanted:
                 pool.terminate()
-                self._remove_partial_files(pending)
+                self._remove_partial_files()
+            else:
+                pool.close()
             pool.join()
-            manager.shutdown()
         self.all_finished.emit(self._stop_wanted)
 
-    def _drain(self, message_queue) -> None:
-        for _ in range(200):
-            try:
-                kind, index, stage, done, total = message_queue.get_nowait()
-            except (queue_module.Empty, OSError, EOFError):
-                return
-            if kind == "progress":
-                self.progress.emit(index, stage, done, total)
-
-    def _remove_partial_files(self, pending) -> None:
+    def _remove_partial_files(self) -> None:
         """Stop never leaves half a video, or its segment folder, behind."""
         import shutil
-        for index in pending:
-            _, dst = self.jobs[index]
-            Path(dst).unlink(missing_ok=True)
-            part_path(Path(dst)).unlink(missing_ok=True)
-            sidecar_path(Path(dst)).unlink(missing_ok=True)
-        folders = {Path(dst).parent for _, dst in self.jobs}
-        for folder in folders:
+        for _, dst in self.jobs:
+            dst = Path(dst)
+            if dst.exists() and not sidecar_path(dst).exists():
+                dst.unlink(missing_ok=True)
+            part_path(dst).unlink(missing_ok=True)
+        for folder in {Path(dst).parent for _, dst in self.jobs}:
             for temp in folder.glob("faceblur_*"):
                 if temp.is_dir():
                     shutil.rmtree(temp, ignore_errors=True)

@@ -41,6 +41,35 @@ def serial_submit(func: Callable, jobs: list, limit: int = 1) -> list:
     return [func(job) for job in jobs]
 
 
+class PoolSubmit:
+    """Maps phase jobs over a multiprocessing pool, at most `limit` in flight."""
+
+    def __init__(self, pool):
+        self.pool = pool
+
+    def __call__(self, func, jobs, limit):
+        limit = max(1, limit)
+        pending, results = [], []
+        for job in jobs:
+            pending.append(self.pool.apply_async(func, (job,)))
+            if len(pending) >= limit:
+                results.append(pending.pop(0).get())
+        while pending:
+            results.append(pending.pop(0).get())
+        return results
+
+
+def init_pool_worker(workers: int = 1) -> None:
+    """Pool initialiser: split the cores between workers."""
+    import os
+
+    global _THREADS
+    _THREADS = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
+    if _THREADS:
+        import cv2
+        cv2.setNumThreads(_THREADS)
+
+
 # ------------------------------------------------------------- worker side
 
 _BANKS: dict = {}
@@ -68,7 +97,7 @@ def detect_job(job: dict) -> dict:
     strong, weak = {}, {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
-    for offset, frame in enumerate(decode_range(src, times, start, end, info)):
+    for offset, frame in enumerate(decode_range(src, times, start, end, info, settings.hwaccel)):
         i = start + offset
         if progress is not None and offset % 5 == 0:
             progress(offset)
@@ -88,28 +117,37 @@ def encode_job(job: dict) -> dict:
     seg: Segment = job["segment"]
     dets: dict[int, list[Detection]] = job["dets"]
     out = Path(job["out"])
-    encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
-                             settings.encoder, settings.nvenc_cq)
-    masked = []
     progress = job.get("progress")
-    try:
-        for offset, frame in enumerate(decode_range(src, times, seg.start, seg.end, info)):
-            if progress is not None and offset % 5 == 0:
-                progress(offset)
-            d = dets.get(seg.start + offset, [])
-            frame_out, alpha = redact(frame, d, settings)
-            masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
-            encoder.write(frame_out)
-    except BaseException:
-        encoder.abort()
-        raise
-    error = encoder.close()
-    if error:
-        raise VideoError(f"Could not write the blurred copy. ffmpeg said: {error[:300]}")
-    if len(masked) != seg.frames:
-        raise VideoError(f"Segment {seg.start}-{seg.end} decoded {len(masked)} frames, "
-                         f"expected {seg.frames}")
-    return {"segment": seg, "masked": masked, "out": str(out)}
+    encoders = [settings.encoder]
+    if settings.encoder != "x264":
+        encoders.append("x264")      # if the GPU encoder refuses, the CPU one will not
+    last_error = ""
+    for encoder_name in encoders:
+        encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
+                                 encoder_name, settings.nvenc_cq)
+        masked = []
+        try:
+            for offset, frame in enumerate(decode_range(src, times, seg.start, seg.end,
+                                                        info, settings.hwaccel)):
+                if progress is not None and offset % 5 == 0:
+                    progress(offset)
+                d = dets.get(seg.start + offset, [])
+                frame_out, alpha = redact(frame, d, settings)
+                masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
+                encoder.write(frame_out)
+            error = encoder.close()
+        except VideoError as exc:
+            encoder.abort()
+            error = str(exc)
+        except BaseException:
+            encoder.abort()
+            raise
+        if not error and len(masked) == seg.frames:
+            return {"segment": seg, "masked": masked, "out": str(out), "encoder": encoder_name}
+        last_error = error or (f"decoded {len(masked)} frames, expected {seg.frames}")
+        out.unlink(missing_ok=True)
+    raise VideoError(f"Could not write the blurred copy. Segment {seg.start}-{seg.end}: "
+                     f"{last_error[:300]}")
 
 
 def copy_job(job: dict) -> dict:
@@ -234,7 +272,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
         if attempt and not settings.copy_clean:
             break
         segments = plan_segments(masked_flags, keys, n, min_copy, copy_clean)
-        segments = split_long(segments, keys, chunk)
+        piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
+        segments = split_long(segments, keys, piece)
         work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
         try:
             outcome = _write_and_join(src, dst, info, times, settings, segments, per_frame,
@@ -294,7 +333,7 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             job["progress"] = (lambda k: report("writing", done + k, total))
     report("writing", 0, total)
     # NVENC allows a handful of concurrent sessions on a consumer GPU.
-    encode_limit = min(workers, 3) if settings.encoder != "x264" else workers
+    encode_limit = min(workers, settings.nvenc_sessions) if settings.encoder != "x264" else workers
     try:
         for result in submit(encode_job, encode_jobs, encode_limit):
             if cancelled():

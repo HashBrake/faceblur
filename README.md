@@ -27,12 +27,12 @@ Measured on a 31 second Ego camera file, 938 frames, 1600x1300.
 
 | Measure | First build | This build |
 |---|---|---|
-| Share of the frame destroyed, mean | 33% | 1.5% |
+| Share of the frame destroyed, mean | 33% | 1.7% |
 | Share of the frame destroyed, worst frame | 93% | 3.8% |
-| Masked pixels where no detector sees a face, mean | 29.7% | 0.16% |
+| Masked pixels where no detector sees a face, mean | 29.7% | 0.30% |
 | Hand pixels touched | 82% | 0.00% |
-| Faces the detectors agree on, covered | 100% | 98.5% |
-| Confirmed faces kept covered while still visible | | 99.0% |
+| Faces the detectors agree on, covered | 100% | 99.0% |
+| Confirmed faces kept covered while still visible | | 99.6% |
 
 Recall against faces of known position, pasted into real frames of the same
 video, with the same settings:
@@ -65,10 +65,12 @@ Pixels are destroyed only when several independent checks agree:
    side, and roughly square.
 4. A tracker links detections across frames. A face must be seen at least twice,
    close together, before any pixel is touched. Once a track is confirmed, YuNet
-   alone may keep it going at a lower threshold, if its box overlaps where the
-   track predicts the face to be. A hand can never start a track. Gaps of up to
-   five frames are interpolated. The mask reaches two frames past each end, at
-   the same size.
+   alone may keep it going at a lower threshold, forwards and backwards in time,
+   if its box overlaps where the track predicts the face to be. A hand can never
+   start a track. Gaps of up to five frames are interpolated. The mask reaches
+   six frames before the first sighting and two after the last, following the
+   face's motion, so a face entering the picture is covered before the detectors
+   lock on.
 5. The mask is an ellipse fitted to the box and rotated to the eye line, with a
    soft edge. Inside it the pixels are replaced from a copy shrunk to six blocks
    across, so the face cannot come back.
@@ -165,6 +167,9 @@ Measured on a 1600x1300 file, per frame:
 | CPU, first precision build | 700 ms | both detectors, whole frame, two sizes |
 | CPU, this build | 350 ms | confirmation on crops around candidates |
 | GPU, this build | 100 ms | RTX 3070 through DirectML |
+
+End to end on the 31 s test file with 8 workers: 76 s, about 2.4 seconds of
+processing per second of video. The window uses the same pool.
 
 Three things make a batch scale:
 

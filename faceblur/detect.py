@@ -329,7 +329,8 @@ class YuNetOrtBackend:
 
     def detect_resized(self, image: np.ndarray) -> list[Detection]:
         padded, pw, ph = _pad32(image)
-        blob = padded.transpose(2, 0, 1)[None].astype(np.float32)   # BGR, no scaling
+        # BGR, no scaling. blobFromImage does the transpose and cast in C.
+        blob = cv2.dnn.blobFromImage(padded, 1.0, (pw, ph), (0, 0, 0), False, False)
         outs = dict(zip(self.outputs, self.pool.run(blob)))
         boxes, scores, lms = [], [], []
         for s in self.strides:

@@ -173,7 +173,7 @@ def _first_frame_after_seek(src: Path, seek: float, times: Sequence[float]) -> i
 
 
 def decode_range(src: Path, times: Sequence[float], start: int, end: int,
-                 info: VideoInfo) -> Iterator[np.ndarray]:
+                 info: VideoInfo, hwaccel: str = "none") -> Iterator[np.ndarray]:
     """Yield frames start to end (exclusive) as BGR arrays, decoded by ffmpeg.
 
     Starts on exactly frame `start`: the seek is probed first and any frames
@@ -192,7 +192,8 @@ def decode_range(src: Path, times: Sequence[float], start: int, end: int,
         if first > start:
             raise VideoError(f"Could not seek to frame {start} of this video.")
     skip = start - first
-    cmd = [ffmpeg_exe(), "-hide_banner", "-v", "error", "-ss", f"{seek:.6f}",
+    accel = ["-hwaccel", hwaccel] if hwaccel and hwaccel != "none" else []
+    cmd = [ffmpeg_exe(), "-hide_banner", "-v", "error", *accel, "-ss", f"{seek:.6f}",
            "-i", str(src), "-map", "0:v:0", "-frames:v", str(n + skip),
            "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     size = info.width * info.height * 3

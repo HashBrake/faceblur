@@ -32,47 +32,8 @@ from faceblur.pipeline import (
 from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_sizes
 
 # Worker processes run the phases of one video at a time: detection in frame
-# ranges, then segment encodes. Each worker keeps one detector bank.
-from faceblur.batch import run_video, serial_submit  # noqa: E402
-
-_WORKERS = 1
-
-
-def _threads_per_worker():
-    """Threads each worker may use. One worker keeps the library defaults,
-    which already know the machine; pinning every hyperthread is slower."""
-    if _WORKERS <= 1:
-        return None
-    return max(1, (os.cpu_count() or 2) // _WORKERS)
-
-
-def _init_worker(workers: int = 1) -> None:
-    global _WORKERS
-    _WORKERS = workers
-    import faceblur.batch as batch
-    threads = _threads_per_worker()
-    if threads:
-        import cv2
-        cv2.setNumThreads(threads)
-    batch._THREADS = threads
-
-
-class PoolSubmit:
-    """Maps phase jobs over a process pool, at most `limit` in flight."""
-
-    def __init__(self, pool):
-        self.pool = pool
-
-    def __call__(self, func, jobs, limit):
-        limit = max(1, limit)
-        pending, results = [], []
-        for job in jobs:
-            pending.append(self.pool.apply_async(func, (job,)))
-            if len(pending) >= limit:
-                results.append(pending.pop(0).get())
-        while pending:
-            results.append(pending.pop(0).get())
-        return results
+# ranges, then segment encodes. faceblur.batch holds the pool helpers.
+from faceblur.batch import PoolSubmit, init_pool_worker, run_video, serial_submit  # noqa: E402
 
 
 def find_videos(src: Path, recursive: bool) -> list[Path]:
@@ -184,7 +145,7 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
     records: list[dict] = []
     context = multiprocessing.get_context("spawn")
     reporter.line(f"Running with {workers} workers.")
-    with context.Pool(workers, initializer=_init_worker, initargs=(workers,)) as pool:
+    with context.Pool(workers, initializer=init_pool_worker, initargs=(workers,)) as pool:
         submit = PoolSubmit(pool)
         for number, (src, dst) in enumerate(jobs, 1):
             reporter.line(f"[{number}/{len(jobs)}] {src.name}")
@@ -257,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: %(default)s)")
     parser.add_argument("--no-copy", dest="copy_clean", action="store_false",
                         help="re-encode every frame instead of copying face free stretches")
+    parser.add_argument("--hwaccel", choices=["none", "cuda"], default=defaults.hwaccel,
+                        help="hardware decode (default: %(default)s)")
     parser.add_argument("--report", default=None,
                         help="write one JSON file holding every audit record here")
     parser.add_argument("--recursive", action="store_true",
@@ -292,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             encoder=args.encoder,
             chunk_seconds=args.chunk_seconds,
             copy_clean=args.copy_clean,
+            hwaccel=args.hwaccel,
         )
     except SettingsError as exc:
         print(f"faceblur: {exc}", file=sys.stderr)
