@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faceblur"
+version = "0.1.0"
+description = "Blur every face in a video or a folder of videos, on this PC."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "opencv-python-headless==4.13.0.92",
+    "numpy==2.5.2",
+    "imageio-ffmpeg==0.6.0",
+    "onnxruntime==1.29.0",
+    "PySide6==6.11.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.0.2"]
+build = ["pyinstaller==6.22.2"]
+
+[project.scripts]
+faceblur = "cli:main"
+
+[tool.setuptools]
+packages = ["faceblur", "ui"]
+py-modules = ["cli"]
+
+[tool.setuptools.package-data]
+faceblur = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:faceblur.*"]

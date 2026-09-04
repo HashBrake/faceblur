@@ -1,0 +1,24 @@
+# Real Ego camera footage never enters git.
+footage/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.m4v
+*.webm
+!tests/data/*.mp4
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output
+build/*/
+dist/
+*.spec.bak
+
+# Local run output
+*_blurred/
+out/
