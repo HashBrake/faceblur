@@ -1,6 +1,6 @@
 # Models
 
-Two ONNX face detectors ship with this repo. Both are committed so that a build
+Three ONNX face detectors ship with this repo. Both are committed so that a build
 never downloads a model. `tests/test_models.py` checks the sha256 of each file.
 
 ## yunet.onnx
@@ -44,3 +44,27 @@ build runs both models through onnxruntime so they can use the GPU.
 |---|---|---|
 | yunet_dynamic.onnx | c0aa2a665abc3daba84ab666ee6b15352852128c84c5267897ad18e590ac466f | 232622 |
 | centerface_dynamic.onnx | e50c58b64599f94a343ac1dc58fa4902635c2e1939b316afb39142c39c99b22e | 7304533 |
+
+## ultraface.onnx
+
+| Field | Value |
+|---|---|
+| Original name | version-RFB-320.onnx |
+| Source | Linzaer, Ultra-Light-Fast-Generic-Face-Detector-1MB, models/onnx |
+| URL | https://raw.githubusercontent.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/master/models/onnx/version-RFB-320.onnx |
+| Licence | MIT, see ultraface.LICENSE.txt |
+| Size | 1270727 bytes |
+| sha256 | 34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017 |
+
+Taken on 2026-09-07. The third detector family. It is asked only about a
+candidate that CenterFace is unsure of, on the same crop. Input 320x240 RGB,
+`(x - 127) / 128`; outputs `scores` [N, 4420, 2] and `boxes` [N, 4420, 4] in
+normalised x1, y1, x2, y2. No landmarks.
+
+`ultraface_dynamic.onnx` is the derived copy from `models/make_dynamic.py`:
+batch 1 becomes N, the input keeps 320x240 (the anchor layout is built for
+it), and the weights the opset 9 export listed as graph inputs are moved out.
+
+| File | sha256 | Size |
+|---|---|---|
+| ultraface_dynamic.onnx | 043540a05268e7b6392a949ec708a707da66151a32bcb5dbb6f9e685bc393051 | 1259728 |

@@ -4,8 +4,8 @@
     faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
              [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
-             [--mode blur|pixelate|solid] [--workers N] [--report PATH]
-             [--no-progress] [--recursive]
+             [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
+             [--no-third] [--no-camera] [--report PATH] [--no-progress] [--recursive]
 
 INPUT is a video file or a folder of videos. OUTPUT defaults to a folder named
 <input>_blurred next to the input. The exit code is 1 when any file failed.
@@ -186,6 +186,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "1 is safest, higher is faster")
     parser.add_argument("--no-verify", dest="verify", action="store_false",
                         help="skip the second detector's confirmation of each face")
+    parser.add_argument("--tta", type=int, choices=[0, 1, 2], default=defaults.confirm_tta,
+                        help="views the confirmation looks at: 0 the crop, 1 also its "
+                             "mirror, 2 also a tighter crop (default: %(default)s)")
+    parser.add_argument("--no-third", dest="third_opinion", action="store_false",
+                        help="do not ask the third detector when the second is unsure")
+    parser.add_argument("--no-camera", dest="camera_comp", action="store_false",
+                        help="ignore the camera's own movement in the tracker")
     parser.add_argument("--max-face", type=float, default=defaults.max_face_frac,
                         help="largest face as a share of the frame's long side "
                              "(default: %(default)s)")
@@ -230,7 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def default_workers() -> int:
-    return max(1, (os.cpu_count() or 2) // 2)
+    from faceblur.detect import default_workers as _default
+    return _default()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
             det_sizes=parse_det_sizes(args.det_sizes),
             stride=args.stride,
             verify=args.verify,
+            confirm_tta=args.tta,
+            third_opinion=args.third_opinion,
+            camera_comp=args.camera_comp,
             max_face_frac=args.max_face,
             min_track=args.min_track,
             max_gap=args.max_gap,

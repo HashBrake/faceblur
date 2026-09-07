@@ -20,6 +20,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from .detect import Detection, DetectorBank, filter_candidates, weak_candidates
+from .motion import downscale, estimate_shift
 from .redact import redact
 from .settings import Settings
 from .track import Track, Tracker
@@ -67,6 +68,12 @@ class AuditRecord:
     frames_copied: int = 0        # frames copied from the source untouched
     join_attempts: int = 0
     reorder_delay: int = 0        # source B-frame delay in frames; copies need 0
+    camera_shift_p95: float = 0.0     # source pixels per frame
+    camera_shift_max: float = 0.0
+    # Stretches where the primary detector saw a box nothing confirmed and no
+    # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
+    unconfirmed_runs: list = field(default_factory=list)
+    unconfirmed_frames: int = 0
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0
@@ -107,7 +114,10 @@ def tracker_for(settings: Settings) -> Tracker:
     # allowed gap must cover that.
     return Tracker(settings.min_track, max(settings.max_gap, settings.stride - 1),
                    settings.tail, settings.track_iou, tail_before=settings.tail_before,
-                   tail_grow=settings.tail_grow)
+                   tail_grow=settings.tail_grow, link_dist=settings.link_dist,
+                   fast_shift=settings.fast_shift if settings.camera_comp else 0.0,
+                   max_gap_fast=settings.max_gap_fast,
+                   tail_before_max=settings.tail_before_max, tail_trend=settings.tail_trend)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,
@@ -123,11 +133,19 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
     t0 = time.time()
     detected: list[list[Detection]] = []
     weak: list[list[Detection]] = []
+    shifts: list[tuple[float, float]] = []
     last: list[Detection] = []
     verified = 0
+    prev_small = None
+    shape = None
     for index, frame in enumerate(read_frames(src)):
         if _cancelled(cancel):
             return Plan(info, [], [], 0, 0, 0, time.time() - t0, stopped=True)
+        shape = frame.shape[:2]
+        if settings.camera_comp:
+            small = downscale(frame)
+            shifts.append(estimate_shift(prev_small, small, max(shape)))
+            prev_small = small
         if index % settings.stride == 0:
             if raw_cache is not None and index in raw_cache:
                 raw = raw_cache[index]
@@ -147,7 +165,8 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
     if not detected:
         raise VideoError(UNREADABLE)
 
-    per_frame, tracks = tracker_for(settings).run(detected, weak)
+    per_frame, tracks = tracker_for(settings).run(
+        detected, weak, shifts if settings.camera_comp else None, shape)
     return Plan(info, per_frame, tracks,
                 raw_hits=sum(1 for f in detected if f),
                 raw_boxes=sum(len(f) for f in detected),

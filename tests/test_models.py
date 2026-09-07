@@ -19,6 +19,18 @@ EXPECTED = {
         "09189deaaf8646c5c51a68447e3c744ea1e211798155d4728c20507b9f5aefbc",
         7304518,
     ),
+    "centerface_dynamic.onnx": (
+        "e50c58b64599f94a343ac1dc58fa4902635c2e1939b316afb39142c39c99b22e",
+        7304533,
+    ),
+    "ultraface.onnx": (
+        "34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017",
+        1270727,
+    ),
+    "ultraface_dynamic.onnx": (
+        "043540a05268e7b6392a949ec708a707da66151a32bcb5dbb6f9e685bc393051",
+        1259728,
+    ),
 }
 
 

@@ -9,6 +9,10 @@ Numbers per settings:
 - off_face_strict: the same, counting only pseudo-faces as face. A real face
   the pseudo-label set missed counts against the pipeline here, so this is an
   upper bound. It stays in the report.
+- off_face_detections: the part of off_face that comes from boxes a detector
+  produced, as against tails and gap fills the tracker drew. A tail before a
+  face enters the picture is off-face by construction; a detection box off a
+  face is the thing the gate exists to catch.
 - hand_damage: share of hand pixels the mask touches
 - masked: share of the frame masked, mean, p95, max
 
@@ -25,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from eval.common import (CACHE_DIR, REFERENCE, build_cache, det_from_dict,
-                         ellipse_mask, load_json, polygon_mask, size_bucket)
+                         ellipse_mask, load_json, polygon_mask, shifts_list, size_bucket)
 from faceblur.detect import filter_candidates, iou, weak_candidates
 from faceblur.pipeline import tracker_for
 from faceblur.redact import build_alpha
@@ -40,7 +44,8 @@ def tracked(cache: dict, settings: Settings):
            for i in range(n)]
     weak = [weak_candidates(cache["frames"][i], settings, shape) if have[i] else []
             for i in range(n)]
-    return tracker_for(settings).run(per, weak)
+    shifts = shifts_list(cache, n) if settings.camera_comp else None
+    return tracker_for(settings).run(per, weak, shifts, shape)
 
 
 def dilated_box(d, factor=0.5):
@@ -93,7 +98,7 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
 
     covered = total = 0
     by_size = defaultdict(lambda: [0, 0])
-    off, off_loose, masked = [], [], []
+    off, off_loose, off_det, masked = [], [], [], []
     hand_hit = hand_area = 0.0
     for key, faces in consensus["frames"].items():
         i = int(key)
@@ -127,6 +132,10 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
                 _paint(loose_zone, (b[0] - 0.25 * b[2], b[1] - 0.25 * b[3],
                                     1.5 * b[2], 1.5 * b[3]), W, H)
         off_loose.append(float((hard & ~loose_zone).mean()))
+        dets_only = [d for d in per_frame[i] if d.source != "track"]
+        hard_det = (build_alpha(shape, dets_only, settings) >= 0.5) if dets_only \
+            else np.zeros(shape, bool)
+        off_det.append(float((hard_det & ~loose_zone).mean()))
 
         hands = oracle["frames"].get(key, {}).get("hands", [])
         if hands:
@@ -135,6 +144,7 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
             hand_hit += float((hm & hard).sum())
 
     off_a, off_l, m_a = np.asarray(off), np.asarray(off_loose), np.asarray(masked)
+    off_d = np.asarray(off_det)
     return {
         "settings": settings.to_dict(),
         "pseudo_faces": total,
@@ -144,6 +154,7 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
         "off_face_strict_max": float(off_a.max()),
         "off_face_mean": float(off_l.mean()),
         "off_face_max": float(off_l.max()),
+        "off_face_detections_mean": float(off_d.mean()),
         "hand_damage": hand_hit / hand_area if hand_area else None,
         "masked_mean": float(m_a.mean()),
         "masked_p95": float(np.percentile(m_a, 95)),
@@ -166,7 +177,8 @@ def describe(r: dict) -> str:
     rb = "  ".join(f"{k}: {v[0]}/{v[1]}" for k, v in r["recall_by_size"].items())
     hd = "n/a" if r["hand_damage"] is None else f"{100*r['hand_damage']:.2f}%"
     return (f"recall {100*(r['recall'] or 0):5.1f}%  off-face mean {100*r['off_face_mean']:.2f}% "
-            f"max {100*r['off_face_max']:.2f}% (strict {100*r['off_face_strict_mean']:.2f}%)  "
+            f"max {100*r['off_face_max']:.2f}% (strict {100*r['off_face_strict_mean']:.2f}%, "
+            f"detections {100*r['off_face_detections_mean']:.2f}%)  "
             f"hands {hd}  continuity {100*r['continuity']:.1f}%  masked mean {100*r['masked_mean']:.2f}% "
             f"p95 {100*r['masked_p95']:.2f}% max {100*r['masked_max']:.2f}%  "
             f"tracks {r['tracks']}  [{rb}]")

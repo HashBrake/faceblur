@@ -42,8 +42,27 @@ def derive(src, dst, in_dims, out_dims):
         print(f"{p.name}  {hashlib.sha256(data).hexdigest()}  {len(data)} bytes")
 
 
+def derive_ultraface(src, dst):
+    """UltraFace: batch 1 becomes N; the input stays 320x240, which the
+    anchor layout is built for. The export lists every weight as a graph
+    input (opset 9 style); those are moved out so onnxruntime treats them as
+    constants."""
+    model = onnx.load(str(src))
+    inits = {t.name for t in model.graph.initializer}
+    keep = [i for i in model.graph.input if i.name not in inits]
+    del model.graph.input[:]
+    model.graph.input.extend(keep)
+    ins = {"input": ["N", 3, 240, 320]}
+    outs = {"scores": ["N", 4420, 2], "boxes": ["N", 4420, 4]}
+    onnx.save(update_inputs_outputs_dims(model, ins, outs), str(dst))
+    for p in (src, dst):
+        data = p.read_bytes()
+        print(f"{p.name}  {hashlib.sha256(data).hexdigest()}  {len(data)} bytes")
+
+
 def main():
     derive(HERE / "centerface.onnx", HERE / "centerface_dynamic.onnx", INPUT_DIMS, OUTPUT_DIMS)
+    derive_ultraface(HERE / "ultraface.onnx", HERE / "ultraface_dynamic.onnx")
     # YuNet: input [1, 3, 640, 640] becomes [N, 3, H, W]; every output keeps its
     # last axis and gets a free anchor count per stride.
     yunet_out = {}

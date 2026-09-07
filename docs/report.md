@@ -245,3 +245,111 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO                  # writes docs/precision_report.md
 ```
+
+## 10. Missed faces, second pass (2026-09-07)
+
+After the first push the user reported faces still showing, most in `004100`,
+when the camera moves fast and when people enter the frame. This section
+records what was found, what was built, and what it measured.
+
+### 10.1 What the diagnostic found
+
+Every YuNet candidate at 0.3 or more that ended up unmasked on `004100` was
+classified by where it was dropped, then the frames were looked at.
+
+- Raising sensitivity is the wrong lever. YuNet scores the wearer's own hand on
+  the mop handle at 0.74-0.82, a wall sign at 0.80, a whole person seen through
+  a doorway at 0.6-0.8. CenterFace rejects all of these; that confirmation is
+  the only thing between the output and the hand-blurring of the first build.
+- The real misses fell into four groups: faces cut by the frame edge (a
+  person entering; CenterFace's crop was truncated and scored 0.25 against a
+  bar of 0.3), faces turned down at the sinks, faces during a fast pan
+  (CenterFace's confirmation rate fell from 88 to 81 percent between the
+  calmest and fastest quarter of frames, and the tracker's overlap link broke
+  at 30-56 px a frame), and small dark faces far away.
+
+### 10.2 What was built
+
+| Change | Why | Measured effect |
+|---|---|---|
+| Reflect-padded square crops | a face half out of the picture keeps its context | edge recall in the synthetic set 51 percent before the tracker work |
+| Mirror and tight views, counted only at 0.4 or more | faces turned down clear the bar in another view | `004100` unconfirmed frames 80 to 66; "best view at 0.3" instead let hands through (1.45 percent) |
+| UltraFace tie-break when CenterFace scores 0.25-0.3 | a third family on the near misses | `004100` unconfirmed frames to 64; asked from 0.1 up it cost 5.5 percent of hand pixels, since it fires on hands too |
+| Camera shift out of the tracker's prediction | a pan no longer breaks a track | synthetic pan recall 58 to 73 percent |
+| Centre-distance link, longer gap while the camera moves fast | small fast faces have no overlap frame to frame | synthetic edge recall 51 to 72 percent, entry delay 6.5 to 3.3 frames |
+| Entry tail to twelve frames for a moving face, growth 5 to 3 percent | cover the face before the detectors lock on | edge recall 75 percent with the views; worst-frame masking back under 3 percent |
+| Confirmed track may follow a face to 35 percent of the frame | people walking up to the camera | no measured cost |
+| Crops only from `min(conf, 0.5)` up | a box below `conf` can never be confirmed | 20 to 8 crops a frame on `004310`, no result changes |
+| GPU workers capped at six | ten workers made DirectML page (7.8 GB of 8) | cache build 62 s instead of stalling |
+
+Not adopted, with the number that decided it: tails that follow the size
+trend (worst-frame masking 5.6 percent, no recall gain); a graded rule
+letting a strong YuNet box pass with CenterFace at 0.2 (in the sweep, see
+`docs/precision_report.md`); any threshold below `conf` 0.6.
+
+### 10.3 Results
+
+Hands: 0.00 percent of hand pixels on `004310` at the final defaults, as before.
+
+Unconfirmed stretches (three frames or more where YuNet saw a box at full
+threshold that nothing confirmed and no mask covers; hands and objects mostly):
+
+| File | Before | After |
+|---|---|---|
+| `004100` | 13 stretches, 80 frames | 13 stretches, 64 frames |
+| `004310` | 18 stretches | 12 stretches, 57 frames |
+
+Every stretch left on `004100` was looked at: the wearer's hand on the mop
+and a wall sign. The faces that were missed before (the crouching person at
+the left edge at frame 210, the person bent over the sink at 611, the mirror
+reflections at 778, the two small faces at 69) are masked in the new output.
+
+Synthetic recall on `004310`, old tracker and plain confirmation against the
+final defaults: interior 85 to 86 percent, edge 51 to 75, pan 58 to 73; entry
+delay (frames from half visible to masked) 6.5 to 3.3.
+
+The sweeps (`docs/precision_report.md` for `004310`,
+`docs/precision_report_004100.md` for `004100`), with the unconfirmed frame
+count as the tie-break behind continuity:
+
+- `004310`: the camera-aware tracker with the three views at the 0.4 bar,
+  recall 99.3 percent, synthetic 80.1 percent, hands 0.00 percent, off-face
+  0.44 percent (0.16 from detector boxes), continuity 99.6 percent. The third
+  opinion made no difference on this file either way.
+- `004100`: the same plus the third opinion, recall 98.4 percent, synthetic
+  84.6 percent, hands 0.00 percent, off-face 0.19 percent (0.01 from detector
+  boxes), continuity 99.9 percent. This file would also accept the looser
+  view bar (0.3); `004310` showed that costs 1.45 percent of hand pixels, so
+  0.4 ships.
+- `max_gap` split 3 against 5 with nothing between them; 5 ships because it
+  keeps a face covered over more missed frames.
+
+The shipped defaults are the union that passes the gates on both files.
+
+### 10.4 Cost
+
+Detection per frame in one process went from about 100 ms to about 130 ms
+before the crop floor, less after it. End to end on the four sample files:
+
+| Run | Workers | Total for 264 s of video | Ratio |
+|---|---|---|---|
+| Before this pass (section 4.2) | 10 | 367 s | 1.39 : 1 |
+| Views and third detector, crops from 0.2 up | 6 | 498 s | 1.89 : 1 |
+| Crops from `min(conf, 0.5)` up, four workers | 4 | 394 s | 1.49 : 1 |
+
+Per file, the last run: `003939` 58 s detect + 34 s write, `004100` 33 + 12,
+`004310` 58 + 23, `005035` 126 + 48. Four workers on the RTX 3070 use about
+4.9 GB of the card and 40 percent of it; six pushed it to 7.3 GB and it
+crawled.
+
+### 10.5 Assumptions added
+
+- The camera's frame to frame movement is a translation. Rotation and zoom
+  are ignored; for a chest camera that is right frame to frame, and the
+  shift is only used to predict, never to draw.
+- A face that CenterFace scores below 0.25 in every view is not a face, no
+  matter what UltraFace says. This is what keeps hands out, and it means a
+  face all three detectors read as a hand stays visible.
+- The synthetic edge and pan sequences stand in for real entries and pans.
+  They use the footage's own faces and backgrounds, but a pasted face is
+  sharper than a real one in motion.

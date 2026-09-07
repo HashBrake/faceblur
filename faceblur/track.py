@@ -6,15 +6,23 @@ This tracker does the opposite. A face has to be seen at least `min_track`
 times, close together, before any pixel is touched. Gaps inside a track are
 filled by interpolation, not growth. The mask reaches `tail` frames past the
 ends of a track, at the same size.
+
+The camera moves. Given the per frame camera shift (see motion.py) the tracker
+predicts where a face will be from its own motion plus the camera's, so a pan
+does not break the track, and it allows a longer gap while the camera moves
+fast, which is when the detectors miss.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence
 
 import numpy as np
 
 from .detect import Detection, Landmarks, iou
+
+Shifts = Sequence[tuple[float, float]]     # per frame: camera shift from the frame before
 
 
 def nms_merge(boxes: Sequence[Sequence[float]], thr: float = 0.35) -> list[list[float]]:
@@ -74,7 +82,8 @@ class Track:
         return len(self.dets)
 
     def predict(self, frame: int) -> Detection:
-        """Where the face should be at `frame`, from the last two detections."""
+        """Where the face should be at `frame`, from the last two detections,
+        with no knowledge of the camera. The tracker has a camera aware one."""
         frames = sorted(self.dets)
         last = self.dets[frames[-1]]
         if len(frames) < 2:
@@ -103,18 +112,107 @@ def _lerp(a: Detection, b: Detection, t: float) -> Detection:
     )
 
 
+def _moved(d: Detection, dx: float, dy: float, grow: float = 1.0) -> Detection:
+    """The same box shifted by (dx, dy) and scaled about its centre."""
+    w, h = d.w * grow, d.h * grow
+    cx, cy = d.cx + dx, d.cy + dy
+    lm = None
+    if d.landmarks is not None:
+        lm = tuple((px + dx, py + dy) for px, py in d.landmarks)
+    return Detection(cx - w / 2, cy - h / 2, w, h, d.score, lm, "track", d.verified)
+
+
 class Tracker:
     """Offline tracker over a whole video's detections."""
 
     def __init__(self, min_track: int = 3, max_gap: int = 3, tail: int = 2,
                  iou_thr: float = 0.3, tail_before: Optional[int] = None,
-                 tail_grow: float = 0.0):
+                 tail_grow: float = 0.0, link_dist: float = 0.0,
+                 fast_shift: float = 0.0, max_gap_fast: Optional[int] = None,
+                 tail_before_max: Optional[int] = None, tail_trend: bool = True):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
         self.tail_before = tail if tail_before is None else tail_before
         self.tail_grow = tail_grow
         self.iou_thr = iou_thr
+        self.link_dist = link_dist
+        self.fast_shift = fast_shift
+        self.max_gap_fast = max_gap if max_gap_fast is None else max(max_gap, max_gap_fast)
+        self.tail_before_max = max(self.tail_before, tail_before_max or 0)
+        self.tail_trend = tail_trend
+        self._cum = None        # cumulative camera shift per frame, or None
+
+    # ------------------------------------------------------------ camera
+
+    def _set_shifts(self, shifts: Optional[Shifts], n: int) -> None:
+        if shifts is None or not any(dx or dy for dx, dy in shifts):
+            self._cum = None
+            return
+        arr = np.zeros((n + 1, 2), np.float64)
+        for i, (dx, dy) in enumerate(shifts[:n]):
+            arr[i + 1] = arr[i] + (dx, dy)
+        self._cum = arr[1:]
+
+    def _camera(self, a: int, b: int) -> tuple[float, float]:
+        """How far the picture moved between frames a and b, in pixels."""
+        if self._cum is None:
+            return 0.0, 0.0
+        n = len(self._cum)
+        a, b = min(max(a, 0), n - 1), min(max(b, 0), n - 1)
+        d = self._cum[b] - self._cum[a]
+        return float(d[0]), float(d[1])
+
+    def _fast(self, a: int, b: int) -> bool:
+        """Did the camera move faster than fast_shift, on average, from a to b?"""
+        if self.fast_shift <= 0 or self._cum is None or b <= a:
+            return False
+        dx, dy = self._camera(a, b)
+        return math.hypot(dx, dy) / (b - a) >= self.fast_shift
+
+    def _gap_ok(self, last: int, frame: int) -> bool:
+        gap = abs(frame - last) - 1
+        if gap <= self.max_gap:
+            return True
+        return gap <= self.max_gap_fast and self._fast(min(last, frame), max(last, frame))
+
+    def _own_velocity(self, t: Track, pair) -> tuple[float, float]:
+        """The face's motion per frame between two of its detections, with
+        the camera's movement taken out."""
+        if len(pair) < 2 or pair[1] == pair[0]:
+            return 0.0, 0.0
+        a, b = t.dets[pair[0]], t.dets[pair[1]]
+        span = pair[1] - pair[0]
+        cx, cy = self._camera(pair[0], pair[1])
+        return (b.cx - a.cx - cx) / span, (b.cy - a.cy - cy) / span
+
+    def _predict(self, t: Track, frame: int) -> Detection:
+        """Where the face should be at `frame`: its own motion plus the camera's."""
+        frames = sorted(t.dets)
+        last = t.dets[frames[-1]]
+        cx, cy = self._camera(frames[-1], frame)
+        if len(frames) < 2:
+            return _moved(last, cx, cy)
+        vx, vy = self._own_velocity(t, frames[-2:])
+        ahead = frame - frames[-1]
+        return _moved(last, vx * ahead + cx, vy * ahead + cy)
+
+    # ------------------------------------------------------------ linking
+
+    def _affinity(self, pred: Detection, d: Detection) -> float:
+        """How well `d` fits the prediction. Overlap first; failing that, a
+        centre close to the prediction and a similar size. 0 means no."""
+        v = iou(pred, d)
+        if v >= self.iou_thr:
+            return v
+        if self.link_dist > 0:
+            size = max(pred.long_side, d.long_side)
+            if size > 0 and min(pred.long_side, d.long_side) / size >= 0.5:
+                gate = self.link_dist * size
+                dist = math.hypot(pred.cx - d.cx, pred.cy - d.cy)
+                if dist <= gate:
+                    return max(1e-6, self.iou_thr * (1.0 - dist / gate))
+        return 0.0
 
     def link(self, per_frame: Sequence[Sequence[Detection]],
              weak: Optional[Sequence[Sequence[Detection]]] = None) -> list[Track]:
@@ -129,7 +227,7 @@ class Tracker:
         active: list[Track] = []
         next_id = 0
         for i, dets in enumerate(per_frame):
-            active = [t for t in active if i - t.last - 1 <= self.max_gap]
+            active = [t for t in active if self._gap_ok(t.last, i)]
             used = self._match(active, i, list(dets), set(), weak_boxes=False)
             if weak is not None and weak[i]:
                 rest = [t for ti, t in enumerate(active)
@@ -155,30 +253,29 @@ class Tracker:
         """
         claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
         for t in sorted(kept, key=lambda t: t.first):
-            anchor = t.dets[t.first]
+            anchor_frame = t.first
+            anchor = t.dets[anchor_frame]
             frame = t.first - 1
-            gap = 0
-            while frame >= 0 and gap <= self.max_gap:
+            while frame >= 0 and self._gap_ok(anchor_frame, frame):
                 pool = list(per_frame[frame]) + (list(weak[frame]) if weak is not None else [])
                 pool = [d for d in pool if (frame, id(d)) not in claimed]
-                best = max(pool, key=lambda d: iou(anchor, d), default=None)
-                if best is not None and iou(anchor, best) >= self.iou_thr:
+                cx, cy = self._camera(anchor_frame, frame)
+                pred = _moved(anchor, cx, cy)
+                best = max(pool, key=lambda d: self._affinity(pred, d), default=None)
+                if best is not None and self._affinity(pred, best) > 0:
                     t.dets[frame] = replace(best, source="continued")
                     claimed.add((frame, id(best)))
-                    anchor = best
-                    gap = 0
-                else:
-                    gap += 1
+                    anchor, anchor_frame = best, frame
                 frame -= 1
 
     def _match(self, tracks: list[Track], frame: int, dets: list[Detection],
                used_t: set, weak_boxes: bool) -> set:
         pairs = []
         for ti, t in enumerate(tracks):
-            pred = t.predict(frame)
+            pred = self._predict(t, frame)
             for di, d in enumerate(dets):
-                score = iou(pred, d)
-                if score >= self.iou_thr:
+                score = self._affinity(pred, d)
+                if score > 0:
                     pairs.append((score, ti, di))
         pairs.sort(reverse=True)
         used_d = set()
@@ -195,8 +292,15 @@ class Tracker:
             used_d.add(di)
         return used_t
 
-    def render(self, tracks: Sequence[Track], n_frames: int) -> list[list[Detection]]:
-        """Per frame detections: real, interpolated inside gaps, short tails."""
+    # ------------------------------------------------------------ rendering
+
+    def render(self, tracks: Sequence[Track], n_frames: int,
+               shape: Optional[tuple[int, int]] = None) -> list[list[Detection]]:
+        """Per frame detections: real, interpolated inside gaps, short tails.
+
+        `shape` (height, width) lets the entry tail of a moving face reach
+        further back, until the extrapolated box has left the picture.
+        """
         out: list[list[Detection]] = [[] for _ in range(n_frames)]
         for t in tracks:
             frames = sorted(t.dets)
@@ -209,36 +313,74 @@ class Tracker:
             head, foot = t.dets[frames[0]], t.dets[frames[-1]]
             # Tails follow the motion at each end of the track and grow a little
             # per frame, so a face moving into or out of the picture stays
-            # covered while the detector has not seen it yet.
-            hv = self._velocity(t, frames[:2])
-            fv = self._velocity(t, frames[-2:])
-            for k in range(1, self.tail_before + 1):
+            # covered while the detector has not seen it yet. The size follows
+            # its trend too: a face that was shrinking was larger before.
+            hv = self._own_velocity(t, frames[:2])
+            fv = self._own_velocity(t, frames[-2:])
+            head_grow = self.tail_grow + self._size_trend(t, frames[:2], backwards=True)
+            foot_grow = self.tail_grow + self._size_trend(t, frames[-2:], backwards=False)
+            reach = self._entry_reach(t, frames, hv, shape)
+            for k in range(1, reach + 1):
                 if frames[0] - k >= 0:
-                    out[frames[0] - k].append(self._tail_box(head, hv, -k))
+                    out[frames[0] - k].append(self._tail_box(head, frames[0], hv, -k, head_grow))
             for k in range(1, self.tail + 1):
                 if frames[-1] + k < n_frames:
-                    out[frames[-1] + k].append(self._tail_box(foot, fv, k))
+                    out[frames[-1] + k].append(self._tail_box(foot, frames[-1], fv, k, foot_grow))
         return out
+
+    def _size_trend(self, t: Track, pair, backwards: bool) -> float:
+        """Growth per frame to apply along a tail, from how the box size changed
+        between two detections. Only growth, never shrinking, capped."""
+        if not self.tail_trend or len(pair) < 2 or pair[1] == pair[0]:
+            return 0.0
+        a, b = t.dets[pair[0]], t.dets[pair[1]]
+        if a.long_side <= 0 or b.long_side <= 0:
+            return 0.0
+        rate = (b.long_side - a.long_side) / a.long_side / (pair[1] - pair[0])
+        rate = -rate if backwards else rate
+        return min(0.2, max(0.0, rate))
+
+    def _entry_reach(self, t: Track, frames, hv, shape) -> int:
+        """Frames the entry tail reaches back. tail_before for a face that
+        stands still; up to tail_before_max for one that moves, until the
+        extrapolated box has left the picture."""
+        reach = self.tail_before
+        if shape is None or self.tail_before_max <= self.tail_before:
+            return reach
+        head = t.dets[frames[0]]
+        speed = math.hypot(hv[0], hv[1])
+        if speed < 2.0 and self._cum is None:
+            return reach
+        H, W = shape
+        for k in range(self.tail_before + 1, self.tail_before_max + 1):
+            box = self._tail_box(head, frames[0], hv, -k, self.tail_grow)
+            if box.cx < 0 or box.cy < 0 or box.cx > W or box.cy > H:
+                break
+            reach = k
+        return reach
+
+    def _tail_box(self, d: Detection, at: int, v: tuple[float, float], k: int,
+                  grow: float) -> Detection:
+        """The box `k` frames from `at` (k negative for earlier), following the
+        face's own motion and the camera's, enlarged by `grow` per frame."""
+        cx, cy = self._camera(at, at + k)
+        return _moved(d, v[0] * k + cx, v[1] * k + cy, 1.0 + grow * abs(k))
 
     @staticmethod
     def _velocity(t: Track, pair) -> tuple[float, float]:
+        """Plain image velocity between two detections. Kept for callers that
+        do not know the camera."""
         if len(pair) < 2 or pair[1] == pair[0]:
             return 0.0, 0.0
         a, b = t.dets[pair[0]], t.dets[pair[1]]
         span = pair[1] - pair[0]
         return (b.cx - a.cx) / span, (b.cy - a.cy) / span
 
-    def _tail_box(self, d: Detection, v: tuple[float, float], k: int) -> Detection:
-        g = 1.0 + self.tail_grow * abs(k)
-        w, h = d.w * g, d.h * g
-        cx, cy = d.cx + v[0] * k, d.cy + v[1] * k
-        lm = None
-        if d.landmarks is not None:
-            lm = tuple((px + v[0] * k, py + v[1] * k) for px, py in d.landmarks)
-        return Detection(cx - w / 2, cy - h / 2, w, h, d.score, lm, "track", d.verified)
-
     def run(self, per_frame: Sequence[Sequence[Detection]],
-            weak: Optional[Sequence[Sequence[Detection]]] = None
+            weak: Optional[Sequence[Sequence[Detection]]] = None,
+            shifts: Optional[Shifts] = None,
+            shape: Optional[tuple[int, int]] = None,
             ) -> tuple[list[list[Detection]], list[Track]]:
+        self._set_shifts(shifts, len(per_frame))
         tracks = self.link(per_frame, weak)
-        return self.render(tracks, len(per_frame)), tracks
+        return self.render(tracks, len(per_frame), shape), tracks

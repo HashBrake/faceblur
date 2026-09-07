@@ -15,7 +15,12 @@ def test_defaults_are_the_precision_first_ones():
     assert s.max_face_frac == 0.15
     assert s.min_track == 2
     assert s.max_gap == 5
+    assert s.max_gap_fast == 10
     assert s.tail == 2
+    assert s.tail_before_max == 12
+    assert s.confirm_tta == 2 and s.verify_conf_view == 0.4
+    assert s.third_opinion is True and s.verify_conf_low == 0.25
+    assert s.camera_comp is True and s.link_dist == 0.75
     assert s.ellipse_w == 1.10
     assert s.ellipse_h == 1.15
     assert s.mode == "blur"

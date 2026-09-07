@@ -19,6 +19,7 @@ datas = [
     (str(ROOT / "models" / "yunet_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.onnx"), "models"),
     (str(ROOT / "models" / "centerface_dynamic.onnx"), "models"),
+    (str(ROOT / "models" / "ultraface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "README.md"), "models"),
 ]

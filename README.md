@@ -60,24 +60,41 @@ Pixels are destroyed only when several independent checks agree:
 
 1. YuNet finds a candidate at a threshold of 0.6, scanning at 1280 and 1920 px.
 2. CenterFace, a different architecture, must fire on the same spot. It looks
-   at a crop around each candidate rather than the whole frame.
-3. The box must be a plausible face: at most 15 percent of the frame's long
-   side, and roughly square.
-4. A tracker links detections across frames. A face must be seen at least twice,
-   close together, before any pixel is touched. Once a track is confirmed, YuNet
-   alone may keep it going at a lower threshold, forwards and backwards in time,
-   if its box overlaps where the track predicts the face to be. A hand can never
-   start a track. Gaps of up to five frames are interpolated. The mask reaches
-   six frames before the first sighting and two after the last, following the
-   face's motion, so a face entering the picture is covered before the detectors
-   lock on.
-5. The mask is an ellipse fitted to the box and rotated to the eye line, with a
+   at a crop around each candidate rather than the whole frame. A crop that
+   runs past the frame edge is filled with the picture reflected, so a face
+   half out of the picture still sits in context. CenterFace also sees the
+   crop's mirror image and a tighter crop; those views count only when they
+   are more sure (0.4) than the plain view needs to be (0.3), because every
+   extra view is an extra chance for a hand to slip through.
+3. When CenterFace is unsure, scoring between 0.25 and 0.3, a third detector
+   of a third family, UltraFace, breaks the tie on the same crop. It is never
+   asked about a box CenterFace scored below 0.25, which is where hands and
+   signs land: UltraFace itself fires on hands, so it can only ever confirm,
+   never overrule.
+4. The box must be a plausible face: at most 15 percent of the frame's long
+   side, and roughly square. A confirmed track may follow a face that grows
+   past that, to 35 percent, as a person walks up to the camera; a box that
+   large can never start a track.
+5. A tracker links detections across frames. A face must be seen at least twice,
+   close together, before any pixel is touched. The camera's own movement
+   between frames, measured by phase correlation, is taken out of the
+   prediction, so a pan does not break a track, and a detection may join a
+   track by centre distance when a small fast face has no overlap frame to
+   frame. Once a track is confirmed, YuNet alone may keep it going at a lower
+   threshold, forwards and backwards in time. A hand can never start a track.
+   Gaps of up to five frames are interpolated, ten while the camera moves
+   fast. The mask reaches six frames before the first sighting, twelve for a
+   face that is moving in from the edge, and two after the last, following the
+   face's motion and the camera's, so a face entering the picture is covered
+   before the detectors lock on.
+6. The mask is an ellipse fitted to the box and rotated to the eye line, with a
    soft edge. Inside it the pixels are replaced from a copy shrunk to six blocks
    across, so the face cannot come back.
 
 The thresholds were chosen by `eval/sweep.py`: the highest recall that keeps
-masking outside anything a detector calls a face under 0.3 percent of the frame,
-and hands untouched.
+masking outside anything a detector calls a face under 0.5 percent of the frame
+(0.2 percent counting detector boxes alone, the rest being the tails that cover
+a face before it is fully in the picture), and hands untouched.
 
 Every blurred copy comes with an audit record that says how much of each frame
 was destroyed and flags any frame over 5 percent.
@@ -111,7 +128,8 @@ faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
          [--min-track N] [--max-gap N] [--tail N] [--pad F]
          [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
-         [--hwaccel none|cuda] [--report PATH] [--recursive] [--no-progress]
+         [--hwaccel none|cuda] [--tta 0|1|2] [--no-third] [--no-camera]
+         [--report PATH] [--recursive] [--no-progress]
 ```
 
 ```
@@ -149,7 +167,14 @@ Then, for a video:
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO
+.venv\Scripts\python.exe -m eval.misses VIDEO --images SOME_FOLDER
 ```
+
+`eval.misses` lists the stretches where YuNet saw a box at full threshold that
+nothing confirmed and no mask covers, with one annotated frame each. The same
+list is in every audit record as `unconfirmed_runs`. Most are hands and
+objects; a change that finds more faces makes the count fall while the gates
+hold.
 
 The sweep writes `docs/precision_report.md` and prints the settings that pass
 the gates. No step asks a person for anything.
@@ -167,11 +192,11 @@ Measured on a 1600x1300 file, per frame:
 |---|---|---|
 | CPU, first precision build | 700 ms | both detectors, whole frame, two sizes |
 | CPU, this build | 350 ms | confirmation on crops around candidates |
-| GPU, this build | 100 ms | RTX 3070 through DirectML |
+| GPU, this build | 110 ms | RTX 3070 through DirectML, three confirmation views and the third detector |
 
-End to end on the four sample files (264 s of video) with 10 workers: 367 s,
-about 1.4 seconds of processing per second of video. The busiest file (215
-tracks, every frame masked) runs at 2.7 to 1. The window uses the same pool.
+End to end on the four sample files (264 s of video) with four workers: 394 s,
+about 1.5 seconds of processing per second of video. The busiest file (163
+tracks, every frame masked) runs at 2.6 to 1. The window uses the same pool.
 `docs/report.md` has the table.
 
 Three things make a batch scale:
@@ -191,7 +216,9 @@ Three things make a batch scale:
   timestamps and the source's length. If a join with copied pieces fails that
   check, the video is encoded end to end instead, without asking anyone.
 
-`--workers N` sets the worker processes. `--chunk-seconds`, `--no-copy`,
+`--workers N` sets the worker processes; the default is half the cores, and
+at most four when they share a GPU, since each holds every model's graphs
+(about 850 MB on an RTX 3070) and the desktop keeps about 2 GB of the card. `--chunk-seconds`, `--no-copy`,
 `--device cpu` and `--encoder x264` turn each piece off when you need to. The
 audit record says which processor each model ran on and how many frames were
 copied untouched.
@@ -216,6 +243,7 @@ too.
 |---|---|---|---|
 | `yunet`, finds faces | YuNet from opencv_zoo | Apache 2.0 | 232 KB |
 | `centerface`, confirms them | CenterFace from the deface package | MIT | 7.3 MB |
+| `ultraface`, breaks ties | UltraFace RFB-320 from Linzaer | MIT | 1.3 MB |
 
 `models/README.md` records where each file came from and its sha256.
 

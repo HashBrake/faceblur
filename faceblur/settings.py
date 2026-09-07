@@ -47,6 +47,22 @@ class Settings:
     confirm_on_crops: bool = True
     crop_size: int = 224
     crop_scale: float = 4.0
+    # Confirmation looks at more than one view of each crop: 0 the crop only,
+    # 1 also its mirror image, 2 also a tighter crop where the face is larger.
+    # The best view counts. A face turned down or cut by the frame edge is
+    # confirmed in one of them where the plain crop fails.
+    confirm_tta: int = 2
+    # A mirror or tight view has to be more sure than the plain view needs to
+    # be. Every extra view is an extra chance for a hand to cross the line;
+    # a face the plain view nearly confirmed clears this in another view.
+    verify_conf_view: float = 0.4
+    # Third detector, a different family (UltraFace), asked only when the
+    # second one is unsure: it scored between verify_conf_low and verify_conf.
+    # Two of three then decide. Never asked about a box the second detector
+    # scored below verify_conf_low, which is where hands and signs land.
+    third_opinion: bool = True
+    third_conf: float = 0.5
+    verify_conf_low: float = 0.25
     # Once a track is confirmed, YuNet alone may keep it alive at this lower
     # threshold, if the box overlaps where the track predicts the face to be.
     # A hand can never start a track, so this costs no precision.
@@ -55,6 +71,10 @@ class Settings:
     # real face in the Ego footage was 150 px of 1600. False positives ran to 800.
     # 0.15 of 1600 is 240 px.
     max_face_frac: float = 0.15
+    # A confirmed track may follow a face that grows past max_face_frac, up to
+    # this share, as the person walks up to the camera. A box that large can
+    # continue a track but never start one. Never below max_face_frac.
+    grow_face_frac: float = 0.35
     # Faces are roughly square. Anything wider or taller than this is not one.
     min_aspect: float = 0.4
     max_aspect: float = 2.5
@@ -67,6 +87,9 @@ class Settings:
     # A detection counts only when its track holds at least min_track detections.
     min_track: int = 2
     # Frames a track may go undetected before it closes. Gaps are interpolated.
+    # The sweeps of 2026-09-07 split 3 against 5 with nothing between them;
+    # 5 keeps a face covered over more missed frames. A longer gap still is
+    # allowed while the camera moves fast (max_gap_fast).
     max_gap: int = 5
     # Frames the mask extends past the last sighting of a track.
     tail: int = 2
@@ -75,9 +98,29 @@ class Settings:
     # detectors lock on, and those frames are the ones that show a face.
     tail_before: int = 6
     # Tails follow the track's motion and grow by this share per frame, so an
-    # entering or leaving face stays under the mask as it moves.
-    tail_grow: float = 0.05
+    # entering or leaving face stays under the mask as it moves. 0.03 since
+    # the tails follow the camera; 0.05 before.
+    tail_grow: float = 0.03
     track_iou: float = 0.3
+    # The camera's own movement between frames, measured by phase correlation,
+    # is taken out of the tracker's prediction. A pan no longer breaks a track.
+    camera_comp: bool = True
+    # Besides overlap, a detection may join a track when its centre lies within
+    # this share of the box size of the prediction and the sizes agree. Overlap
+    # alone is brittle for a 30 px face that moves 20 px a frame.
+    link_dist: float = 0.75
+    # While the camera moves faster than this (source pixels per frame), a
+    # track may survive a longer gap, max_gap_fast, since that is when the
+    # detectors miss.
+    fast_shift: float = 10.0
+    max_gap_fast: int = 10
+    # A moving face gets a longer entry tail than tail_before, up to this,
+    # until the extrapolated box has left the picture.
+    tail_before_max: int = 12
+    # Tails follow the size trend of the track's end: a face that was
+    # shrinking is drawn larger further back. Off: measured to add masking
+    # on the worst frame and nothing to recall.
+    tail_trend: bool = False
 
     # --- mask geometry -------------------------------------------------------
     # Ellipse axes as a share of the detector box, rotated to the eye line.
@@ -148,6 +191,20 @@ class Settings:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
             raise SettingsError(f"conf_weak must be above 0 and at most conf, got {self.conf_weak}")
+        if self.confirm_tta not in (0, 1, 2):
+            raise SettingsError(f"confirm_tta must be 0, 1 or 2, got {self.confirm_tta}")
+        if not 0.0 < self.third_conf <= 1.0:
+            raise SettingsError(f"third_conf must be above 0 and at most 1, got {self.third_conf}")
+        if not 0.0 <= self.verify_conf_low <= self.verify_conf:
+            raise SettingsError("verify_conf_low must be between 0 and verify_conf")
+        if not 0.0 < self.grow_face_frac <= 1.0:
+            raise SettingsError(f"grow_face_frac must be in (0, 1], got {self.grow_face_frac}")
+        if self.link_dist < 0 or self.fast_shift < 0:
+            raise SettingsError("link_dist and fast_shift must be 0 or more")
+        if self.max_gap_fast < self.max_gap:
+            raise SettingsError("max_gap_fast must be at least max_gap")
+        if self.tail_before_max < self.tail_before:
+            raise SettingsError("tail_before_max must be at least tail_before")
         if not self.det_sizes:
             raise SettingsError("det_sizes must name at least one size")
         if any(s < 64 for s in self.det_sizes):
@@ -182,8 +239,11 @@ class Settings:
         d = {k: getattr(self, k) for k in (
             "engine", "conf", "conf_weak", "det_sizes", "verify", "verify_conf", "verify_iou",
             "confirm_on_crops", "crop_size", "crop_scale",
-            "max_face_frac", "min_aspect", "max_aspect", "stride", "device",
+            "confirm_tta", "verify_conf_view", "third_opinion", "third_conf", "verify_conf_low",
+            "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "min_track", "max_gap", "tail", "tail_before", "tail_grow", "track_iou",
+            "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
+            "tail_trend",
             "ellipse_w", "ellipse_h", "pad", "feather",
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",

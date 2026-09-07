@@ -31,3 +31,7 @@ dist/
 
 # Evaluation caches derived from real footage
 eval/cache/
+
+# Run logs
+*_run.log
+sweep_*.log

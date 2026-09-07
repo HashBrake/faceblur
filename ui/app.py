@@ -467,7 +467,8 @@ class MainWindow(QMainWindow):
 
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(1, max(1, multiprocessing.cpu_count()))
-        self.workers_spin.setValue(max(1, multiprocessing.cpu_count() // 2))
+        from faceblur.detect import default_workers
+        self.workers_spin.setValue(default_workers())
         self.workers_spin.setMinimumHeight(CONTROL_HEIGHT)
         numbers.addWidget(QLabel(S.WORKERS_LABEL), 2, 0)
         numbers.addWidget(self.workers_spin, 2, 1)

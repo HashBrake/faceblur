@@ -27,10 +27,19 @@ Landmarks = tuple[Point, Point, Point, Point, Point]  # eye, eye, nose, mouth, m
 
 # Everything below this score is discarded at the detector and never cached.
 RAW_FLOOR = 0.05
-# Primary candidates at or above this score get a confirmation crop.
-CROP_FLOOR = 0.2
+# Primary candidates get a confirmation crop from min(conf, CROP_FLOOR) up.
+# Confirmation only matters for a box at conf or above, so nothing is lost
+# below that; the floor keeps a cache built at one conf usable for a sweep
+# down to CROP_FLOOR. Cutting crops for every box from 0.2 up cost twice the
+# confirmation time on busy footage.
+CROP_FLOOR = 0.5
 # Crops go to the second detector in batches of this size.
 CROP_BATCH = 8
+# UltraFace has no suppression of its own and scores thousands of anchors
+# above the raw floor on every crop. It is only ever consulted at third_conf,
+# so it keeps its own floor and the top anchors before suppression.
+ULTRAFACE_FLOOR = 0.3
+ULTRAFACE_TOP_K = 64
 
 
 def _base_dir() -> Path:
@@ -44,6 +53,7 @@ MODEL_DIR = _base_dir() / "models"
 YUNET_MODEL = MODEL_DIR / "yunet.onnx"
 YUNET_DYNAMIC_MODEL = MODEL_DIR / "yunet_dynamic.onnx"
 CENTERFACE_MODEL = MODEL_DIR / "centerface_dynamic.onnx"
+ULTRAFACE_MODEL = MODEL_DIR / "ultraface_dynamic.onnx"
 
 
 class ModelMissing(FileNotFoundError):
@@ -196,6 +206,22 @@ class YuNetBackend:
             out.append(Detection(float(f[0]), float(f[1]), float(f[2]), float(f[3]),
                                  float(f[-1]), lm, "yunet"))
         return out
+
+
+# Worker processes that share one consumer GPU. Each holds every model's
+# graphs at every size, about 850 MB on an RTX 3070, and the desktop keeps
+# about 2 GB of the 8 for itself. Six workers reached 7.3 GB and DirectML
+# crawled; four leave room. The GPU is the bottleneck, not the worker count.
+GPU_WORKERS = 4
+
+
+def default_workers(cpu_count: Optional[int] = None, device: str = "auto") -> int:
+    """Half the cores, capped when the models would share a GPU."""
+    import os
+    n = max(1, (cpu_count or os.cpu_count() or 2) // 2)
+    if providers_for(device)[0] != "CPUExecutionProvider":
+        n = min(n, GPU_WORKERS)
+    return n
 
 
 def providers_for(device: str) -> list[str]:
@@ -430,15 +456,121 @@ class CenterFaceBackend:
         return dets
 
 
+def _ultraface_output_dims(n: int, h: int, w: int) -> dict:
+    # The anchor layout is built for 320x240; that is the only size used.
+    return {"scores": [n, 4420, 2], "boxes": [n, 4420, 4]}
+
+
+class UltraFaceBackend:
+    """UltraFace RFB-320 through onnxruntime. MIT, from Linzaer's
+    Ultra-Light-Fast-Generic-Face-Detector-1MB. A third family, asked only
+    when CenterFace is unsure about a YuNet candidate."""
+
+    name = "ultraface"
+    input_name = "input"
+    width, height = 320, 240
+
+    def __init__(self, conf: float = ULTRAFACE_FLOOR, nms: float = 0.30,
+                 threads: Optional[int] = None, device: str = "auto"):
+        self.model_path = _require(ULTRAFACE_MODEL)
+        self.conf = conf
+        self.nms = nms
+        self.pool = SessionPool(self.model_path, device, threads, self.input_name,
+                                _ultraface_output_dims)
+        self.provider = self.pool.provider
+
+    def canvas(self, image: np.ndarray) -> tuple[np.ndarray, float]:
+        """Fit an image into the 320x240 input, top left, and the scale used."""
+        h, w = image.shape[:2]
+        f = min(self.width / float(w), self.height / float(h))
+        small = cv2.resize(image, (max(1, int(round(w * f))), max(1, int(round(h * f)))),
+                           interpolation=cv2.INTER_AREA if f < 1 else cv2.INTER_LINEAR)
+        out = np.zeros((self.height, self.width, 3), np.uint8)
+        out[:small.shape[0], :small.shape[1]] = small
+        return out, f
+
+    def detect_resized(self, image: np.ndarray) -> list[Detection]:
+        canvas, f = self.canvas(image)
+        return [d.scaled(f) for d in self.detect_batch([canvas])[0]]
+
+    def detect_batch(self, images: list[np.ndarray]) -> list[list[Detection]]:
+        """Run several 320x240 canvases in one call. Boxes per image, in
+        canvas pixels."""
+        if not images:
+            return []
+        blob = np.stack([((cv2.cvtColor(im, cv2.COLOR_BGR2RGB).astype(np.float32) - 127.0)
+                          / 128.0).transpose(2, 0, 1) for im in images])
+        outs = dict(zip(self.pool.outputs, self.pool.run(blob)))
+        scores, boxes = outs["scores"], outs["boxes"]
+        result = []
+        for k in range(len(images)):
+            p = scores[k, :, 1]
+            sel = np.where(p >= self.conf)[0]
+            if sel.size == 0:
+                result.append([])
+                continue
+            if sel.size > ULTRAFACE_TOP_K:
+                sel = sel[np.argsort(-p[sel])[:ULTRAFACE_TOP_K]]
+            b = boxes[k, sel].astype(np.float64)
+            x1 = np.clip(b[:, 0] * self.width, 0, self.width)
+            y1 = np.clip(b[:, 1] * self.height, 0, self.height)
+            x2 = np.clip(b[:, 2] * self.width, 0, self.width)
+            y2 = np.clip(b[:, 3] * self.height, 0, self.height)
+            xywh = np.stack([x1, y1, x2 - x1, y2 - y1], axis=1)
+            ok = (xywh[:, 2] > 1) & (xywh[:, 3] > 1)
+            xywh, sc = xywh[ok], p[sel][ok].astype(np.float64)
+            keep = nms_indices(xywh, sc, self.nms)
+            result.append([Detection(float(xywh[i, 0]), float(xywh[i, 1]), float(xywh[i, 2]),
+                                     float(xywh[i, 3]), float(sc[i]), None, "ultraface")
+                           for i in keep])
+        return result
+
+
 RawCandidates = dict[str, list[Detection]]  # backend name -> detections, floor score
 
 
-def _plausible(d: Detection, shape, settings: Settings) -> bool:
-    cap = settings.max_face_frac * max(shape[0], shape[1])
+def _plausible(d: Detection, shape, settings: Settings, cap_frac: Optional[float] = None) -> bool:
+    cap = (settings.max_face_frac if cap_frac is None else cap_frac) * max(shape[0], shape[1])
     if d.long_side > cap or d.w < 2 or d.h < 2:
         return False
     aspect = d.w / d.h
     return settings.min_aspect <= aspect <= settings.max_aspect
+
+
+def _best_over(view: list[Detection], d: Detection, thr: float) -> float:
+    best = 0.0
+    for c in view:
+        if c.score > best and iou(d, c) >= thr:
+            best = c.score
+    return best
+
+
+def confirmation(d: Detection, raw: RawCandidates, settings: Settings) -> tuple[float, bool]:
+    """What the confirming detectors say about a primary box: CenterFace's
+    score, taking a mirror or tight view into account only where that view
+    clears the higher bar those views must meet, and whether the third
+    detector fired on it."""
+    best = _best_over(raw.get("centerface", []), d, settings.verify_iou)
+    extra = []
+    if settings.confirm_tta >= 1:
+        extra.append(raw.get("centerface_flip", []))
+    if settings.confirm_tta >= 2:
+        extra.append(raw.get("centerface_tight", []))
+    for view in extra:
+        v = _best_over(view, d, settings.verify_iou)
+        if v >= settings.verify_conf_view:
+            best = max(best, v)
+    third = any(u.score >= settings.third_conf and iou(d, u) >= settings.verify_iou
+                for u in raw.get("ultraface", []))
+    return best, third
+
+
+def confirmed(d: Detection, raw: RawCandidates, settings: Settings) -> bool:
+    """CenterFace agrees, or it is unsure and UltraFace agrees."""
+    score, third = confirmation(d, raw, settings)
+    if score >= settings.verify_conf:
+        return True
+    return settings.third_opinion and score >= settings.verify_conf_low and third
 
 
 def filter_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Detection]:
@@ -454,9 +586,7 @@ def filter_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Det
     primary = [d for d in primary if _plausible(d, shape, settings)]
 
     if settings.engine == "yunet" and settings.verify:
-        confirmers = [d for d in cf_all if d.score >= settings.verify_conf]
-        primary = [replace(d, verified=True) for d in primary
-                   if any(iou(d, c) >= settings.verify_iou for c in confirmers)]
+        primary = [replace(d, verified=True) for d in primary if confirmed(d, raw, settings)]
     return nms_detections(primary, settings.nms_detect)
 
 
@@ -471,11 +601,51 @@ def weak_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Detec
     weak = [d for d in raw.get(source, [])
             if settings.conf_weak <= d.score < settings.conf and _plausible(d, shape, settings)]
     if settings.engine == "yunet" and settings.verify:
-        confirmers = [d for d in raw.get("centerface", []) if d.score >= settings.verify_conf]
-        weak += [d for d in raw.get("yunet", [])
-                 if d.score >= settings.conf and _plausible(d, shape, settings)
-                 and not any(iou(d, c) >= settings.verify_iou for c in confirmers)]
+        for d in raw.get("yunet", []):
+            if d.score < settings.conf:
+                continue
+            if _plausible(d, shape, settings):
+                if not confirmed(d, raw, settings):
+                    weak.append(d)
+            elif _plausible(d, shape, settings, max(settings.grow_face_frac,
+                                                    settings.max_face_frac)) \
+                    and confirmed(d, raw, settings):
+                # Larger than a face may be to start a track, confirmed all
+                # the same: a person walking up to the camera. A track that
+                # exists may follow it.
+                weak.append(replace(d, verified=True))
     return nms_detections(weak, settings.nms_detect)
+
+
+def _crop_reflect(frame: np.ndarray, x0: int, y0: int, side: int) -> np.ndarray:
+    """A square crop that may run past the frame edge; the missing part is
+    the picture reflected, so a face cut by the edge keeps its context."""
+    H, W = frame.shape[:2]
+    x1, y1 = x0 + side, y0 + side
+    left, top = max(0, -x0), max(0, -y0)
+    right, bottom = max(0, x1 - W), max(0, y1 - H)
+    inner = frame[max(0, y0):min(H, y1), max(0, x0):min(W, x1)]
+    if inner.size == 0:
+        return np.zeros((side, side, 3), np.uint8)
+    if left or top or right or bottom:
+        # Reflection needs at least as much picture as it mirrors; a crop far
+        # past the edge gets the edge pixels repeated instead.
+        ih, iw = inner.shape[:2]
+        mode = cv2.BORDER_REFLECT_101 if max(left, right) < iw and max(top, bottom) < ih \
+            else cv2.BORDER_REPLICATE
+        inner = cv2.copyMakeBorder(inner, top, bottom, left, right, mode)
+    return inner
+
+
+def _offset(d: Detection, x0: int, y0: int) -> Detection:
+    lm = None if d.landmarks is None else tuple((px + x0, py + y0) for px, py in d.landmarks)
+    return replace(d, x=d.x + x0, y=d.y + y0, landmarks=lm)
+
+
+def _unflip(d: Detection, side: int) -> Detection:
+    """Map a box found in the mirror image back, in crop coordinates."""
+    lm = None if d.landmarks is None else tuple((side - px, py) for px, py in d.landmarks)
+    return replace(d, x=side - (d.x + d.w), landmarks=lm)
 
 
 class DetectorBank:
@@ -488,6 +658,7 @@ class DetectorBank:
         self.settings = settings
         self.yunet = None
         self.centerface = None
+        self.ultraface = None
         if threads:
             cv2.setNumThreads(threads)
         needs_yunet = settings.engine in ("yunet", "both")
@@ -499,10 +670,14 @@ class DetectorBank:
         if needs_cf:
             self.centerface = CenterFaceBackend(RAW_FLOOR, settings.nms_yunet, threads,
                                                 device=settings.device)
+        if needs_cf and settings.engine == "yunet" and settings.confirm_on_crops \
+                and settings.third_opinion:
+            self.ultraface = UltraFaceBackend(ULTRAFACE_FLOOR, settings.nms_yunet, threads,
+                                              device=settings.device)
 
     @property
     def backends(self) -> list:
-        return [b for b in (self.yunet, self.centerface) if b is not None]
+        return [b for b in (self.yunet, self.centerface, self.ultraface) if b is not None]
 
     @property
     def model_hashes(self) -> dict[str, str]:
@@ -525,7 +700,7 @@ class DetectorBank:
         crops_only = (s.engine == "yunet" and s.verify and s.confirm_on_crops
                       and self.centerface is not None)
         for backend in self.backends:
-            if backend is self.centerface and crops_only:
+            if backend is self.ultraface or (backend is self.centerface and crops_only):
                 continue
             found: list[Detection] = []
             for det_size in s.det_sizes:
@@ -533,59 +708,78 @@ class DetectorBank:
                 found.extend(d.scaled(factor) for d in backend.detect_resized(image))
             raw[backend.name] = nms_detections(found, s.nms_detect)
         if crops_only:
-            raw["centerface"] = self.confirm_on_crops(frame, raw.get("yunet", []))
+            raw.update(self.confirm_on_crops(frame, raw.get("yunet", [])))
         return raw
 
-    def confirm_on_crops(self, frame: np.ndarray, candidates: list[Detection]) -> list[Detection]:
-        """CenterFace on a crop around each candidate worth confirming."""
+    def confirm_on_crops(self, frame: np.ndarray, candidates: list[Detection]) -> RawCandidates:
+        """The confirming detectors on a crop around each candidate.
+
+        Returns CenterFace's boxes for the plain crop ("centerface"), its
+        mirror image ("centerface_flip") and a tighter crop ("centerface_tight"),
+        and UltraFace's boxes on the plain crop ("ultraface"), all in frame
+        coordinates. A crop that runs past the frame edge is filled with the
+        picture reflected, so a face cut by the edge still sits in context.
+        """
         s = self.settings
         H, W = frame.shape[:2]
         size = s.crop_size
         # The crop path keeps its own floor and cap, wider than the settings, so
-        # that a sweep over conf_weak or max_face_frac still has raw candidates
-        # to work with. Nothing below CROP_FLOOR is ever confirmed anyway.
-        cap = min(1.0, 2.0 * s.max_face_frac) * max(H, W)
-        crops, offsets, factors = [], [], []
-        seen: list[tuple[int, int, int, int]] = []
+        # that a sweep over conf or max_face_frac still has raw candidates to
+        # work with. Nothing below conf is ever confirmed anyway.
+        floor = min(s.conf, CROP_FLOOR)
+        cap = min(1.0, max(2.0 * s.max_face_frac, s.grow_face_frac)) * max(H, W)
+        windows: list[tuple[int, int, int]] = []       # x0, y0, side of the plain crop
         for d in candidates:
-            if d.score < CROP_FLOOR or d.long_side > cap or d.w < 2 or d.h < 2:
+            if d.score < floor or d.long_side > cap or d.w < 2 or d.h < 2:
                 continue
-            side = max(48.0, d.long_side * s.crop_scale)
-            x0 = int(round(max(0.0, d.cx - side / 2)))
-            y0 = int(round(max(0.0, d.cy - side / 2)))
-            x1 = int(round(min(float(W), d.cx + side / 2)))
-            y1 = int(round(min(float(H), d.cy + side / 2)))
-            if x1 - x0 < 16 or y1 - y0 < 16:
-                continue
-            box = (x0, y0, x1, y1)
-            if any(abs(box[0] - b[0]) < 8 and abs(box[1] - b[1]) < 8
-                   and abs(box[2] - b[2]) < 8 and abs(box[3] - b[3]) < 8 for b in seen):
+            side = int(round(max(48.0, d.long_side * s.crop_scale)))
+            x0 = int(round(d.cx - side / 2))
+            y0 = int(round(d.cy - side / 2))
+            if any(abs(x0 - a) < 8 and abs(y0 - b) < 8 and abs(side - c) < 8
+                   for a, b, c in windows):
                 continue                        # two candidates on one face share a crop
-            seen.append(box)
-            image, factor = resize_long_side(frame[y0:y1, x0:x1], size)
-            # Letterbox to a square so every crop shares one shape, which lets
-            # the whole batch go to the GPU in one call.
-            ih, iw = image.shape[:2]
-            if (ih, iw) != (size, size):
-                image = cv2.copyMakeBorder(image, 0, size - ih, 0, size - iw,
-                                           cv2.BORDER_CONSTANT, value=0)
-            crops.append(image)
-            offsets.append((x0, y0))
-            factors.append(factor)
-        found: list[Detection] = []
-        for start in range(0, len(crops), CROP_BATCH):
-            chunk = crops[start:start + CROP_BATCH]
-            # Pad the batch to a fixed size so the GPU sees at most a few shapes.
-            padded = chunk + [np.zeros_like(chunk[0])] * (CROP_BATCH - len(chunk))
-            for k, dets in enumerate(self.centerface.detect_batch(padded)[: len(chunk)]):
-                x0, y0 = offsets[start + k]
-                factor = factors[start + k]
+            windows.append((x0, y0, side))
+        out: RawCandidates = {"centerface": [], "centerface_flip": [], "centerface_tight": [],
+                              "ultraface": []}
+        if not windows:
+            return out
+        # Every view of every crop shares one shape, so the whole lot goes to
+        # the GPU in a few calls.
+        views: list[tuple[str, np.ndarray, int, int, float, int]] = []
+        third: list[tuple[np.ndarray, int, int, float]] = []
+        for x0, y0, side in windows:
+            plain = _crop_reflect(frame, x0, y0, side)
+            factor = size / float(side)
+            image = cv2.resize(plain, (size, size), interpolation=cv2.INTER_AREA if factor < 1
+                               else cv2.INTER_LINEAR)
+            views.append(("centerface", image, x0, y0, factor, side))
+            views.append(("centerface_flip", cv2.flip(image, 1), x0, y0, factor, side))
+            tight_side = max(16, int(round(side * 0.6)))
+            tx0, ty0 = x0 + (side - tight_side) // 2, y0 + (side - tight_side) // 2
+            tight = _crop_reflect(frame, tx0, ty0, tight_side)
+            tf = size / float(tight_side)
+            views.append(("centerface_tight",
+                          cv2.resize(tight, (size, size), interpolation=cv2.INTER_AREA if tf < 1
+                                     else cv2.INTER_LINEAR), tx0, ty0, tf, tight_side))
+            if self.ultraface is not None:
+                canvas, uf = self.ultraface.canvas(plain)
+                third.append((canvas, x0, y0, uf))
+        for start in range(0, len(views), CROP_BATCH):
+            chunk = views[start:start + CROP_BATCH]
+            padded = [v[1] for v in chunk] + [np.zeros_like(chunk[0][1])] * (CROP_BATCH - len(chunk))
+            for (name, _, x0, y0, factor, side), dets in zip(
+                    chunk, self.centerface.detect_batch(padded)[: len(chunk)]):
                 for c in dets:
                     c = c.scaled(factor)
-                    lm = None if c.landmarks is None else tuple(
-                        (px + x0, py + y0) for px, py in c.landmarks)
-                    found.append(replace(c, x=c.x + x0, y=c.y + y0, landmarks=lm))
-        return nms_detections(found, s.nms_detect)
+                    if name == "centerface_flip":
+                        c = _unflip(c, side)
+                    out[name].append(_offset(c, x0, y0))
+        for start in range(0, len(third), CROP_BATCH):
+            chunk = third[start:start + CROP_BATCH]
+            padded = [v[0] for v in chunk] + [np.zeros_like(chunk[0][0])] * (CROP_BATCH - len(chunk))
+            for (_, x0, y0, uf), dets in zip(chunk, self.ultraface.detect_batch(padded)[: len(chunk)]):
+                out["ultraface"].extend(_offset(u.scaled(uf), x0, y0) for u in dets)
+        return {k: nms_detections(v, s.nms_detect) for k, v in out.items()}
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
         """Faces in a BGR frame, after every check in the settings."""

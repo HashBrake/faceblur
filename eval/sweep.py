@@ -16,11 +16,15 @@ import pickle
 import sys
 from pathlib import Path
 
-from eval import measure, synthetic
+from eval import measure, misses, synthetic
 from eval.common import CACHE_DIR, REPORT_DIR, build_cache, load_json, save_json
 from faceblur.settings import Settings
 
-GATES = {"off_face_mean": 0.003, "off_face_max": 0.03, "hand_damage": 0.001}
+# off_face_mean was 0.3 percent until the entry tails grew to follow a face
+# in from the frame edge; a tail before the face is visible is off-face by
+# construction. The part from detector boxes has its own, tighter gate.
+GATES = {"off_face_mean": 0.005, "off_face_max": 0.03, "off_face_detections_mean": 0.002,
+         "hand_damage": 0.001}
 
 _INPUTS = None
 _SYNTH = None
@@ -30,7 +34,7 @@ def _init(video):
     global _INPUTS, _SYNTH
     video = Path(video)
     _INPUTS = measure.load_inputs(video)
-    _SYNTH = pickle.loads((CACHE_DIR / f"{video.stem}.synthetic.pkl").read_bytes())
+    _SYNTH = pickle.loads(synthetic.data_path(video).read_bytes())
 
 
 def _run(changes):
@@ -39,6 +43,11 @@ def _run(changes):
     y = synthetic.evaluate(s, _SYNTH)["recall"]
     r["synthetic"] = {k: v[2] for k, v in y.items()}
     r["synthetic_recall"] = y["all"][2]
+    # Stretches where YuNet saw a box at full threshold that nothing
+    # confirmed and no mask covers: the yardstick for the misses work.
+    runs = misses.find(_INPUTS[0], s)
+    r["unconfirmed_runs"] = len(runs)
+    r["unconfirmed_frames"] = sum(b - a + 1 for a, b, *_ in runs)
     # The number the choice is made on: both kinds of recall, equal weight.
     r["score"] = 0.5 * (r["recall"] or 0.0) + 0.5 * r["synthetic_recall"]
     r["changes"] = changes
@@ -48,20 +57,39 @@ def _run(changes):
 def passes(r: dict) -> bool:
     if r["off_face_mean"] > GATES["off_face_mean"] or r["off_face_max"] > GATES["off_face_max"]:
         return False
+    if r["off_face_detections_mean"] > GATES["off_face_detections_mean"]:
+        return False
     if r["hand_damage"] is not None and r["hand_damage"] > GATES["hand_damage"]:
         return False
     return True
 
 
+OLD_TRACKER = {"camera_comp": False, "link_dist": 0.0, "tail_before_max": 6, "tail_grow": 0.05}
+NEW_TRACKER = {"camera_comp": True, "link_dist": 0.75, "tail_before_max": 12, "tail_grow": 0.03}
+VIEWS = ({"confirm_tta": 0}, {"confirm_tta": 2, "verify_conf_view": 0.4},
+         {"confirm_tta": 2, "verify_conf_view": 0.3})     # the last: any view counts as the plain one
+THIRD = ({"third_opinion": False}, {"third_opinion": True, "verify_conf_low": 0.25},
+         {"third_opinion": True, "verify_conf_low": 0.1})
+
+
 def grid() -> list[dict]:
     out = []
-    for conf, cap, mt, gap, weak, stride in itertools.product(
-            [0.5, 0.6, 0.7], [0.15, 0.20], [2, 3], [2, 3, 5], [0.2, 0.3, 0.4], [1, 2]):
-        out.append({"conf": conf, "max_face_frac": cap, "min_track": mt, "max_gap": gap,
-                    "conf_weak": weak, "stride": stride})
+    for conf, gap, weak, views, third, tracker in itertools.product(
+            [0.5, 0.6], [3, 5], [0.3, 0.4], VIEWS, THIRD, [OLD_TRACKER, NEW_TRACKER]):
+        out.append({"conf": conf, "max_face_frac": 0.15, "min_track": 2, "max_gap": gap,
+                    "conf_weak": weak, **views, **third, **tracker})
+    full = {"max_face_frac": 0.15, "min_track": 2, "max_gap": 5, "conf_weak": 0.4,
+            **VIEWS[1], **THIRD[1], **NEW_TRACKER}
+    # The graded rule: a strong YuNet box needs less from CenterFace.
+    for conf in (0.6, 0.7):
+        out.append({"conf": conf, **full, "verify_conf": 0.2, "verify_conf_low": 0.15})
+    # Tails that follow the size trend, and every second frame.
+    out.append({"conf": 0.6, "tail_trend": True, **full})
+    out.append({"conf": 0.6, "stride": 2, **full})
     for conf in (0.5, 0.6, 0.7):
         out.append({"conf": conf, "conf_weak": conf, "max_face_frac": 0.15,
-                    "min_track": 2, "max_gap": 3})   # no continuation
+                    "min_track": 2, "max_gap": 3, "confirm_tta": 0, "third_opinion": False,
+                    **OLD_TRACKER})   # no continuation, the old confirmation
     # Reference points: the first build's behaviour, and no verification.
     out.append({"conf": 0.25, "conf_weak": 0.25, "det_sizes": (640, 1280), "verify": False,
                 "max_face_frac": 1.0, "min_track": 1, "max_gap": 6, "tail": 6,
@@ -75,6 +103,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--workers", type=int, default=10)
+    ap.add_argument("--report", default="precision_report.md",
+                    help="file name under docs/ for the report")
     args = ap.parse_args()
     video = Path(args.video)
 
@@ -88,12 +118,16 @@ def main() -> int:
     ok = [r for r in results if r["passes"] and r["recall"] is not None]
     ok.sort(key=lambda r: (-round(r["score"], 4), r["off_face_mean"], r["masked_mean"]))
     # Tie break: among settings within one point of the best score, prefer the
-    # one that keeps confirmed faces covered longest. The two recalls cannot
-    # see that, because it lives where the detectors disagree.
+    # one that keeps confirmed faces covered longest, then the one that leaves
+    # the fewest unconfirmed frames. The two recalls cannot see either: the
+    # pseudo-faces are built from the confirmers' agreement and the synthetic
+    # faces are sharp and frontal, so a face only the mirror view or the third
+    # detector confirms shows up nowhere else. The gates have already held.
     if ok:
         best = ok[0]["score"]
         near = [r for r in ok if r["score"] >= best - 0.01]
-        near.sort(key=lambda r: (-round(r["continuity"], 3), r["off_face_mean"], r["masked_mean"]))
+        near.sort(key=lambda r: (-round(r["continuity"], 3), r["unconfirmed_frames"],
+                                 r["off_face_mean"], r["masked_mean"]))
         ok = near + [r for r in ok if r not in near]
     chosen = ok[0] if ok else None
 
@@ -116,7 +150,7 @@ def main() -> int:
     out = {"video": video.name, "gates": GATES, "results": results, "chosen": chosen,
            "ellipse": ellipse_rows, "synthetic_at_chosen": synth_at_default}
     save_json(CACHE_DIR / f"{video.stem}.sweep.json", out)
-    write_report(video, results, chosen, ellipse_rows, synth_at_default)
+    write_report(video, results, chosen, ellipse_rows, synth_at_default, args.report)
     if chosen:
         print("CHOSEN:", json.dumps(chosen["changes"]), measure.describe(chosen),
               f"synthetic {100*chosen['synthetic_recall']:.1f}%")
@@ -127,7 +161,8 @@ def main() -> int:
     return 0
 
 
-def write_report(video, results, chosen, ellipse_rows, synth) -> None:
+def write_report(video, results, chosen, ellipse_rows, synth,
+                 name: str = "precision_report.md") -> None:
     def pct(v):
         return "n/a" if v is None else f"{100*v:.2f}%"
 
@@ -135,11 +170,14 @@ def write_report(video, results, chosen, ellipse_rows, synth) -> None:
              f"Automatic sweep on `{video.name}`. No human labels. See `eval/` for the method.",
              "", "## Gates", "",
              f"- off-face masked area, where no detector sees a face: mean at most "
-             f"{pct(GATES['off_face_mean'])}, any frame at most {pct(GATES['off_face_max'])}",
+             f"{pct(GATES['off_face_mean'])}, any frame at most {pct(GATES['off_face_max'])}; "
+             f"the part from detector boxes rather than tails at most "
+             f"{pct(GATES['off_face_detections_mean'])}",
              f"- hand pixels touched: at most {pct(GATES['hand_damage'])}",
              "- among settings inside the gates, the highest mean of consensus recall "
              "and synthetic recall wins; within one point of the best, the setting "
-             "that keeps confirmed faces covered longest (continuity) wins", "",
+             "that keeps confirmed faces covered longest (continuity) wins, then the "
+             "one with the fewest unconfirmed frames", "",
              "## Chosen", ""]
     if chosen:
         lines += ["```", json.dumps(chosen["changes"]), "```", "",
@@ -164,19 +202,26 @@ def write_report(video, results, chosen, ellipse_rows, synth) -> None:
                      f"| {r['ellipse_w']} | {r['ellipse_h']} | {pct(r['recall'])} | n/a |")
     lines += ["", "## Every setting tried", "",
               "Off-face is masked area where no detector sees a face. Strict counts only "
-              "consensus faces as face, so it is an upper bound.", "",
-              "| Passes | Score | Recall | Synthetic | Continuity | Off-face mean | "
-              "Off-face max | Strict mean | Hands | Masked mean | Masked max | Tracks | Changes |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "consensus faces as face, so it is an upper bound. Edge and pan are synthetic "
+              "recall on faces entering at the frame edge and on faces during a camera pan. "
+              "Unconfirmed runs are stretches of three frames or more where YuNet saw a box "
+              "at full threshold that nothing confirmed and no mask covers; most are hands "
+              "and objects, fewer is better only if the gates hold.", "",
+              "| Passes | Score | Recall | Synthetic | Edge | Pan | Continuity | Unconfirmed runs | "
+              "Off-face mean | Off-face max | Off-face detections | Strict mean | Hands | "
+              "Masked mean | Masked max | Tracks | Changes |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(results, key=lambda r: (-r["score"], r["off_face_mean"])):
         lines.append(f"| {'yes' if r['passes'] else 'no'} | {pct(r['score'])} | "
-                     f"{pct(r['recall'])} | {pct(r['synthetic_recall'])} | {pct(r['continuity'])} | "
+                     f"{pct(r['recall'])} | {pct(r['synthetic_recall'])} | "
+                     f"{pct(r['synthetic'].get('edge'))} | {pct(r['synthetic'].get('pan'))} | "
+                     f"{pct(r['continuity'])} | {r['unconfirmed_runs']} ({r['unconfirmed_frames']} fr) | "
                      f"{pct(r['off_face_mean'])} | {pct(r['off_face_max'])} | "
-                     f"{pct(r['off_face_strict_mean'])} | "
+                     f"{pct(r['off_face_detections_mean'])} | {pct(r['off_face_strict_mean'])} | "
                      f"{pct(r['hand_damage'])} | {pct(r['masked_mean'])} | "
                      f"{pct(r['masked_max'])} | {r['tracks']} | `{json.dumps(r['changes'])}` |")
     REPORT_DIR.mkdir(exist_ok=True)
-    (REPORT_DIR / "precision_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (REPORT_DIR / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

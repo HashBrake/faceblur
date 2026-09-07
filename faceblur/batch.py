@@ -25,7 +25,8 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .detect import Detection, DetectorBank, filter_candidates, weak_candidates
+from .detect import Detection, DetectorBank, filter_candidates, iou, weak_candidates
+from .motion import downscale, estimate_shift
 from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED,
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
 from .redact import redact
@@ -79,7 +80,8 @@ _THREADS = None      # a pool initialiser may cap the threads per worker
 def _bank(settings: Settings) -> DetectorBank:
     key = (settings.engine, settings.det_sizes, settings.verify, settings.device,
            settings.confirm_on_crops, settings.crop_size, settings.crop_scale,
-           settings.max_face_frac, settings.nms_detect, settings.nms_yunet)
+           settings.max_face_frac, settings.grow_face_frac, settings.third_opinion,
+           settings.nms_detect, settings.nms_yunet)
     bank = _BANKS.get(key)
     if bank is None:
         bank = DetectorBank(settings, threads=_THREADS)
@@ -94,19 +96,26 @@ def detect_job(job: dict) -> dict:
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     bank = _bank(settings)
-    strong, weak = {}, {}
+    strong, weak, shifts = {}, {}, {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
+    prev_small = None
     for offset, frame in enumerate(decode_range(src, times, start, end, info, settings.hwaccel)):
         i = start + offset
         if progress is not None and offset % 5 == 0:
             progress(offset)
+        if settings.camera_comp:
+            # The first frame of a range has no frame before it here; its
+            # shift stays zero, one frame in fifteen seconds.
+            small = downscale(frame)
+            shifts[i] = estimate_shift(prev_small, small, max(info.width, info.height))
+            prev_small = small
         if i % settings.stride:
             continue
         raw = bank.detect_raw(frame)
         strong[i] = filter_candidates(raw, settings, shape)
         weak[i] = weak_candidates(raw, settings, shape)
-    return {"start": start, "end": end, "strong": strong, "weak": weak,
+    return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
             "compute": bank.compute, "hashes": bank.model_hashes}
 
 
@@ -157,6 +166,33 @@ def copy_job(job: dict) -> dict:
 
 
 # ------------------------------------------------------------- parent side
+
+def unconfirmed_runs(weak, per_frame, conf: float, min_run: int = 3,
+                     limit: int = 100) -> tuple[list[list[int]], int]:
+    """Stretches of at least `min_run` frames in which the primary detector
+    saw a box at full threshold that nothing confirmed and no mask covers.
+
+    Most are hands and objects, some are faces the confirmers did not
+    recognise. The audit record lists them so a batch can be spot checked
+    where it matters, and the evaluation harness counts them before and
+    after a change. Returns ([start, end] pairs, flagged frame count).
+    """
+    flagged = []
+    for i, boxes in enumerate(weak):
+        hit = any(d.score >= conf and not any(iou(d, m) >= 0.3 for m in per_frame[i])
+                  for d in boxes)
+        flagged.append(hit)
+    runs: list[list[int]] = []
+    start = None
+    for i, f in enumerate(flagged + [False]):
+        if f and start is None:
+            start = i
+        elif not f and start is not None:
+            if i - start >= min_run:
+                runs.append([start, i - 1])
+            start = None
+    return runs[:limit], sum(flagged)
+
 
 def _chunks(n: int, size: int) -> list[tuple[int, int]]:
     size = max(1, size)
@@ -213,6 +249,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
              "start": a, "end": b} for a, b in _chunks(n, chunk)]
     strong: list[list[Detection]] = [[] for _ in range(n)]
     weak: list[list[Detection]] = [[] for _ in range(n)]
+    shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
     compute, hashes = {}, {}
     in_process = submit is serial_submit
@@ -229,6 +266,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
             strong[i] = d
         for i, d in result["weak"].items():
             weak[i] = d
+        for i, sh in result.get("shifts", {}).items():
+            shifts[i] = sh
         compute, hashes = result["compute"], result["hashes"]
         done_frames += result["end"] - result["start"]
         report("detecting", done_frames, n)
@@ -250,8 +289,15 @@ def run_video(src: Path, dst: Path, settings: Settings,
     record.verified_detections = sum(1 for f in strong for d in f if d.verified)
 
     # ---- 2. track
-    per_frame, tracks = tracker_for(settings).run(strong, weak)
+    per_frame, tracks = tracker_for(settings).run(
+        strong, weak, shifts if settings.camera_comp else None, (info.height, info.width))
     record.tracks = len(tracks)
+    if settings.camera_comp:
+        mag = np.hypot(*np.asarray(shifts, dtype=np.float64).T) if n else np.zeros(1)
+        record.camera_shift_p95 = round(float(np.percentile(mag, 95)), 2)
+        record.camera_shift_max = round(float(mag.max()), 2)
+    record.unconfirmed_runs, record.unconfirmed_frames = unconfirmed_runs(
+        weak, per_frame, settings.conf)
     if tracks:
         lengths = [len(t) for t in tracks]
         record.track_length_min = min(lengths)
