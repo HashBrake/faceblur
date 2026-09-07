@@ -14,6 +14,13 @@ Numbers per settings:
   face enters the picture is off-face by construction; a detection box off a
   face is the thing the gate exists to catch.
 - hand_damage: share of hand pixels the mask touches
+- exposed_40, exposed_24_40: frames in which a face a confirmed track knew
+  about is still visible (YuNet at 0.3 or more within a box size of where the
+  track's motion and the camera put it, up to 30 frames from a sighting) and
+  no mask covers it, for faces of 40 px and more, and of 24 to 40 px. The
+  proxy for the hard gate: every such frame is a possible leak. Some are the
+  detector firing on the wearer's hand next to a face; the count can be
+  compared between settings, not read as a truth.
 - masked: share of the frame masked, mean, p95, max
 
     .venv\\Scripts\\python.exe -m eval.measure VIDEO
@@ -21,6 +28,7 @@ Numbers per settings:
 from __future__ import annotations
 
 import argparse
+import math
 import json
 import sys
 from collections import defaultdict
@@ -30,7 +38,7 @@ import numpy as np
 
 from eval.common import (CACHE_DIR, REFERENCE, build_cache, det_from_dict,
                          ellipse_mask, load_json, polygon_mask, shifts_list, size_bucket)
-from faceblur.detect import filter_candidates, iou, weak_candidates
+from faceblur.detect import confirmation, filter_candidates, iou, weak_candidates
 from faceblur.pipeline import tracker_for
 from faceblur.redact import build_alpha
 from faceblur.settings import Settings
@@ -91,6 +99,63 @@ def continuity(cache: dict, settings: Settings, per_frame, tracks, reach: int = 
     return masked / seen if seen else 1.0
 
 
+def exposure(cache: dict, settings: Settings, per_frame, tracks, gap: int = 45,
+             slack: float = 8.0) -> dict:
+    """Frames between two sightings of one face that carry no mask near it.
+
+    A sighting is a detection that passed every check with CenterFace at 0.5
+    or more (hands almost never reach that). Two sightings up to `gap` frames
+    apart, of similar size, within a box size plus `slack` pixels a frame of
+    each other, bracket a stretch where the face was there all along, at
+    about the straight line between them. A frame in that stretch is exposed
+    when no mask centre lies within one and a half box sizes of that line.
+    Counted by the size of the face: 40 px and more, and 24 to 40 px. The
+    reference is the detections, so the count means the same thing whatever
+    the tracker does.
+    """
+    from faceblur.detect import filter_candidates
+    n = len(per_frame)
+    shape = tuple(cache["shape"])
+    strong = {}
+    for i in cache["frames"]:
+        if i % settings.stride:
+            continue
+        sure = []
+        for d in filter_candidates(cache["frames"][i], settings, shape):
+            cf, _ = confirmation(d, cache["frames"][i], settings)
+            if cf >= 0.5 and d.long_side >= 24:
+                sure.append(d)
+        if sure:
+            strong[i] = sure
+    keys = sorted(strong)
+    big, mid = set(), set()
+    for ai, a in enumerate(keys):
+        for da in strong[a]:
+            # The next sighting of this face: the nearest later frame with a
+            # matching box, so a run of sightings gives short stretches.
+            for b in keys[ai + 1:]:
+                if b - a > gap:
+                    break
+                match = None
+                for db in strong[b]:
+                    size = max(da.long_side, db.long_side)
+                    if min(da.long_side, db.long_side) / size < 0.5:
+                        continue
+                    if math.hypot(da.cx - db.cx, da.cy - db.cy) <= size + slack * (b - a):
+                        match = db
+                        break
+                if match is None:
+                    continue
+                size = max(da.long_side, match.long_side)
+                for k in range(a + 1, b):
+                    t = (k - a) / (b - a)
+                    cx, cy = da.cx + t * (match.cx - da.cx), da.cy + t * (match.cy - da.cy)
+                    if not any(math.hypot(m.cx - cx, m.cy - cy) <= 1.5 * size for m in per_frame[k]):
+                        (big if size >= 40 else mid).add(k)
+                break
+    return {"exposed_40": len(big), "exposed_24_40": len(mid)}
+
+
 def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> dict:
     shape = tuple(cache["shape"])
     H, W = shape
@@ -119,14 +184,18 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
             _paint(face_zone, dilated_box(d), W, H)
         off.append(float((hard & ~face_zone).mean()))
 
-        # Loose zone: anything any detector scored at 0.5 or more, any size.
-        # Masked pixels outside this are on something no detector calls a face.
+        # Loose zone: anything any detector scored at 0.5 or more, any size,
+        # or a box YuNet and CenterFace both scored at 0.35 or more. Masked
+        # pixels outside this are on something no detector calls a face.
         loose_zone = face_zone.copy()
         raw = cache["frames"].get(i, {})
         for name in ("yunet", "centerface"):
             for d in raw.get(name, []):
                 if d.score >= 0.5:
                     _paint(loose_zone, dilated_box(d, 0.25), W, H)
+        for d in raw.get("yunet", []):
+            if 0.35 <= d.score < 0.5 and confirmation(d, raw, settings)[0] >= 0.35:
+                _paint(loose_zone, dilated_box(d, 0.25), W, H)
         for b in oracle["frames"].get(key, {}).get("faces", []):
             if b[4] >= 0.5:
                 _paint(loose_zone, (b[0] - 0.25 * b[2], b[1] - 0.25 * b[3],
@@ -163,6 +232,7 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
         "track_len_mean": float(np.mean([len(t) for t in tracks])) if tracks else 0.0,
         "continuity": continuity(cache, settings, per_frame, tracks),
         "frames_evaluated": len(masked),
+        **exposure(cache, settings, per_frame, tracks),
     }
 
 
@@ -179,6 +249,7 @@ def describe(r: dict) -> str:
     return (f"recall {100*(r['recall'] or 0):5.1f}%  off-face mean {100*r['off_face_mean']:.2f}% "
             f"max {100*r['off_face_max']:.2f}% (strict {100*r['off_face_strict_mean']:.2f}%, "
             f"detections {100*r['off_face_detections_mean']:.2f}%)  "
+            f"exposed 40+ {r['exposed_40']} fr, 24-40 {r['exposed_24_40']} fr  "
             f"hands {hd}  continuity {100*r['continuity']:.1f}%  masked mean {100*r['masked_mean']:.2f}% "
             f"p95 {100*r['masked_p95']:.2f}% max {100*r['masked_max']:.2f}%  "
             f"tracks {r['tracks']}  [{rb}]")

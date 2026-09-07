@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-07. This file says where the project stands, what was
+Last updated: 2026-09-08. This file says where the project stands, what was
 verified, and what a new person or session should do next. The README explains
 how to use the tool; `docs/report.md` holds the measurements.
 
@@ -23,7 +23,13 @@ person's identity and leave hands, cards, screens and everything else untouched.
 - The missed-faces pass of 2026-09-07 (section 10 of `docs/report.md`): done
   and measured. Faces at the frame edge, faces turned down, faces during a
   fast pan. Hands still 0.00 percent.
-- Tests: `tests/`, 785 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- The third pass (2026-09-08, section 11 of `docs/report.md`): faces lost
+  while the wearer hits a ball (track stitching across a smear, gap filling
+  on the smear's own boxes, blur-sized masks) and the wearer's hand kept out
+  by track-level rules (established and sure tracks only get continuation,
+  tails and backward reach). Hands 0.00 / 0.00 / 0.09 percent on the three
+  files with hand oracles.
+- Tests: `tests/`, 798 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
   rebuilt after 2026-09-07; the spec includes the third model.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
@@ -59,8 +65,8 @@ out. What was built instead:
 6. Crops are cut only for YuNet boxes at `min(conf, 0.5)` and up: a box below
    `conf` can never be confirmed, and cutting crops from 0.2 up doubled the
    confirmation time on busy footage.
-7. Worker processes on a GPU are capped at six (`faceblur.detect.GPU_WORKERS`):
-   each holds about 800 MB of graphs and ten of them made DirectML page.
+7. Worker processes on a GPU are capped at four (`faceblur.detect.GPU_WORKERS`):
+   each holds about 850 MB of graphs; six reached 7.3 GB of the 8 and DirectML paged.
 
 Measurement additions: `eval/misses.py` (unconfirmed stretches, also written to
 every audit record as `unconfirmed_runs`), synthetic "edge" and "pan" sequences
@@ -73,8 +79,8 @@ construction).
 
 `footage/` holds four Ego files (264 s total). They and every output folder are
 gitignored. Never commit them. The evaluation caches under `eval/cache/` are
-derived from them and are gitignored too. The caches are at version 2; an older
-cache is rebuilt on first use (about a minute a video with six workers).
+derived from them and are gitignored too. The caches are at version 3; an older
+cache is rebuilt on first use (about a minute a video with four workers).
 
 ## How to run
 
@@ -86,6 +92,16 @@ cache is rebuilt on first use (about a minute a video with six workers).
 ```
 
 ## Known limits and open items
+
+- The exposure proxy (`exposed_40`, `exposed_24_40` in `eval/measure.py`)
+  brackets pairs of different faces too; read it as a difference between
+  settings. A hand detector in the pipeline is the one thing that would
+  make the hand rules unnecessary; MediaPipe's palm model needs converting
+  to ONNX to run in the main environment.
+- Frames where nothing detects anything inside a smear get the interpolated
+  mask on the straight line between sightings, which can be far from the
+  smear. Those frames are smears; whether they count as exposure is a
+  judgement the harness cannot make.
 
 - Faces under about 32 px are covered about half the time; motion blurred
   faces about three quarters. A larger detector would raise this at a cost in

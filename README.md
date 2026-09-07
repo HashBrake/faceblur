@@ -71,30 +71,41 @@ Pixels are destroyed only when several independent checks agree:
    asked about a box CenterFace scored below 0.25, which is where hands and
    signs land: UltraFace itself fires on hands, so it can only ever confirm,
    never overrule.
-4. The box must be a plausible face: at most 15 percent of the frame's long
+4. Two detectors agreeing count as one being sure, for small boxes: a YuNet
+   box of 48 px or less at 0.35 that CenterFace also scores at 0.35 is a face
+   (mirror reflections, far faces). Hands are large, so they never take this
+   road.
+5. The box must be a plausible face: at most 15 percent of the frame's long
    side, and roughly square. A confirmed track may follow a face that grows
    past that, to 35 percent, as a person walks up to the camera; a box that
    large can never start a track.
-5. A tracker links detections across frames. A face must be seen at least twice,
+6. A tracker links detections across frames. A face must be seen at least twice,
    close together, before any pixel is touched. The camera's own movement
    between frames, measured by phase correlation, is taken out of the
    prediction, so a pan does not break a track, and a detection may join a
    track by centre distance when a small fast face has no overlap frame to
-   frame. Once a track is confirmed, YuNet alone may keep it going at a lower
-   threshold, forwards and backwards in time. A hand can never start a track.
-   Gaps of up to five frames are interpolated, ten while the camera moves
-   fast. The mask reaches six frames before the first sighting, twelve for a
-   face that is moving in from the edge, and two after the last, following the
-   face's motion and the camera's, so a face entering the picture is covered
-   before the detectors lock on.
-6. The mask is an ellipse fitted to the box and rotated to the eye line, with a
+   frame. Gaps of up to five frames are interpolated, ten while the camera
+   moves fast. Two tracks of one face up to 45 frames apart, where the
+   detectors lost it (a hit at table tennis smears the picture for a second),
+   are joined and the gap interpolated, following whatever YuNet still saw of
+   the smear. Every mask grows by the camera's shift while it moves fast.
+   A track becomes established after five confirmations, one of them sure
+   (CenterFace 0.5 or more); only then may YuNet alone keep it going at a
+   lower threshold, forwards and backwards in time, and only then does the
+   mask reach before the first sighting (six frames, twelve for a face moving
+   in from the edge) and after the last (four). A track below that masks its
+   confirmed frames and the gaps between them, nothing more: the wearer's
+   own hand gets confirmed two or three frames at a time, and used to be
+   masked for thirty frames around them.
+7. The mask is an ellipse fitted to the box and rotated to the eye line, with a
    soft edge. Inside it the pixels are replaced from a copy shrunk to six blocks
    across, so the face cannot come back.
 
-The thresholds were chosen by `eval/sweep.py`: the highest recall that keeps
-masking outside anything a detector calls a face under 0.5 percent of the frame
-(0.2 percent counting detector boxes alone, the rest being the tails that cover
-a face before it is fully in the picture), and hands untouched.
+The thresholds were chosen by `eval/sweep.py`: among settings that keep
+masking outside anything a detector calls a face under 0.7 percent of the frame
+(0.3 percent counting detector boxes alone, the rest being tails and gap
+fills) and hands untouched, the fewest frames with a known face of 40 px or
+more left visible, then the highest recall.
 
 Every blurred copy comes with an audit record that says how much of each frame
 was destroyed and flags any frame over 5 percent.
@@ -194,8 +205,8 @@ Measured on a 1600x1300 file, per frame:
 | CPU, this build | 350 ms | confirmation on crops around candidates |
 | GPU, this build | 110 ms | RTX 3070 through DirectML, three confirmation views and the third detector |
 
-End to end on the four sample files (264 s of video) with four workers: 394 s,
-about 1.5 seconds of processing per second of video. The busiest file (163
+End to end on the four sample files (264 s of video) with four workers: 469 s,
+about 1.8 seconds of processing per second of video. The busiest file (163
 tracks, every frame masked) runs at 2.6 to 1. The window uses the same pool.
 `docs/report.md` has the table.
 

@@ -40,6 +40,12 @@ class Settings:
     verify: bool = True
     verify_conf: float = 0.3
     verify_iou: float = 0.3
+    # A borderline plain confirmation, below verify_conf_sure, counts only if
+    # the mirror view also sees a face at mirror_agree or more. Faces are
+    # symmetric and clear this every time measured (43 of 45 borderline
+    # consensus faces on three files); the wearer's hand did not (0 of 2).
+    verify_conf_sure: float = 0.5
+    mirror_agree: float = 0.2
     # Confirmation runs on a crop around each candidate rather than on the
     # whole frame at every size. The crop is crop_scale times the box, scaled
     # so its long side is crop_size pixels. Same confirmations, a fraction of
@@ -63,10 +69,47 @@ class Settings:
     third_opinion: bool = True
     third_conf: float = 0.5
     verify_conf_low: float = 0.25
+    # Two detectors agreeing is as good as one being sure: a YuNet box from
+    # conf_agree up that CenterFace scores at verify_conf_agree or more is a
+    # face, though YuNet alone is below conf. Mirror reflections and far
+    # faces land here. Measured on three files: no hand box passes it.
+    # Only for boxes up to agree_max_px: mirror reflections and far faces are
+    # under 40 px, the wearer's hand is 90 px and more, and at 0.4 and 0.5
+    # with no size limit the rule admitted a hand box on the busiest sample.
+    # 0 for no limit.
+    conf_agree: float = 0.35
+    verify_conf_agree: float = 0.35
+    agree_max_px: int = 48
     # Once a track is confirmed, YuNet alone may keep it alive at this lower
     # threshold, if the box overlaps where the track predicts the face to be.
     # A hand can never start a track, so this costs no precision.
     conf_weak: float = 0.4
+    # An established track (established_after confirmed detections) may
+    # continue on boxes down to this: a face smeared by a fast camera move
+    # scores low, and the track already knows where it is.
+    conf_weak_long: float = 0.3
+    # Confirmed detections that make a track established: only then does it
+    # reach backwards over weak boxes, get the entry tail, the long exit
+    # tail, the lowest continuation floor and the gap filling. A face is
+    # confirmed in every frame once it is in the picture, so with hindsight
+    # five costs a face nothing; the wearer's hand is confirmed two or three
+    # frames in a row at most, and used to get thirty frames of mask before
+    # those from the backward reach alone.
+    established_after: int = 5
+    # Continuation on weak boxes starts only once a track holds this many
+    # confirmed detections, and runs at most weak_run frames past the last
+    # confirmed one. The wearer's own hand gets confirmed now and then (once
+    # in 200 frames on the table tennis file) and YuNet scores it 0.4-0.6 in
+    # every frame after; without these two limits that one confirmation
+    # became a track that masked the hand for fifty frames.
+    continue_after: int = 3
+    weak_run: int = 30
+    # A track earns continuation, stitching, gap filling and the long tails
+    # only once one of its confirmations scored this much from CenterFace.
+    # Faces get there in almost every track (391 of 401 consensus boxes on
+    # the busiest file score 0.5 or more); the wearer's hand, confirmed now
+    # and then at 0.3 to 0.4, never does.
+    track_sure_conf: float = 0.5
     # Largest plausible face, as a share of the frame's long side. The largest
     # real face in the Ego footage was 150 px of 1600. False positives ran to 800.
     # 0.15 of 1600 is 240 px.
@@ -91,8 +134,10 @@ class Settings:
     # 5 keeps a face covered over more missed frames. A longer gap still is
     # allowed while the camera moves fast (max_gap_fast).
     max_gap: int = 5
-    # Frames the mask extends past the last sighting of a track.
+    # Frames the mask extends past the last sighting of a track; an
+    # established track gets tail_long.
     tail: int = 2
+    tail_long: int = 4
     # Frames the mask extends before the first sighting. Longer than tail:
     # a face entering the picture is visible for a few frames before the
     # detectors lock on, and those frames are the ones that show a face.
@@ -117,6 +162,23 @@ class Settings:
     # A moving face gets a longer entry tail than tail_before, up to this,
     # until the extrapolated box has left the picture.
     tail_before_max: int = 12
+    # Two tracks of one face separated by up to this many frames, where the
+    # detectors lost it (a hit at table tennis smears the picture for a
+    # second), are joined and the gap interpolated. Offline hindsight: the
+    # face came back where it was expected.
+    stitch_gap: int = 45
+    # How far (source pixels per frame of gap) the second piece may sit from
+    # where the first one's motion and the camera put it. During a hit at
+    # table tennis the picture smears and the camera shift cannot be measured,
+    # so the prediction is off by the whole move; the gate widens with the gap.
+    stitch_slack: float = 8.0
+    # Boxes interpolated across a gap grow by this share of their size per
+    # frame away from the nearest sighting, most in the middle of the gap,
+    # where the face is least certain.
+    gap_grow: float = 0.04
+    # While the camera moves faster than this (source pixels per frame) every
+    # mask grows by the shift, since the face is smeared by that much.
+    blur_shift: float = 8.0
     # Tails follow the size trend of the track's end: a face that was
     # shrinking is drawn larger further back. Off: measured to add masking
     # on the worst frame and nothing to recall.
@@ -191,6 +253,29 @@ class Settings:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
             raise SettingsError(f"conf_weak must be above 0 and at most conf, got {self.conf_weak}")
+        # conf_agree above conf, or conf_weak_long above conf_weak, simply
+        # means that rule has nothing to act on; a caller lowering conf for a
+        # sweep should not have to lower these too.
+        if not 0.0 < self.conf_agree <= 1.0 or not 0.0 < self.verify_conf_agree <= 1.0:
+            raise SettingsError("conf_agree and verify_conf_agree must be in (0, 1]")
+        if self.agree_max_px < 0:
+            raise SettingsError("agree_max_px must be 0 or more")
+        if not 0.0 < self.conf_weak_long <= 1.0:
+            raise SettingsError("conf_weak_long must be in (0, 1]")
+        if not 0.0 <= self.track_sure_conf <= 1.0:
+            raise SettingsError("track_sure_conf must be between 0 and 1")
+        if self.continue_after < 1 or self.weak_run < 0:
+            raise SettingsError("continue_after must be at least 1 and weak_run 0 or more")
+        if self.stitch_slack < 0 or self.gap_grow < 0:
+            raise SettingsError("stitch_slack and gap_grow must be 0 or more")
+        if not self.verify_conf <= self.verify_conf_sure <= 1.0 or not 0 <= self.mirror_agree <= 1:
+            raise SettingsError("verify_conf_sure must be between verify_conf and 1, "
+                                "mirror_agree between 0 and 1")
+        if self.established_after < 1 or self.stitch_gap < 0 or self.blur_shift < 0:
+            raise SettingsError("established_after must be at least 1; stitch_gap and "
+                                "blur_shift 0 or more")
+        if self.tail_long < self.tail:
+            raise SettingsError("tail_long must be at least tail")
         if self.confirm_tta not in (0, 1, 2):
             raise SettingsError(f"confirm_tta must be 0, 1 or 2, got {self.confirm_tta}")
         if not 0.0 < self.third_conf <= 1.0:
@@ -240,6 +325,10 @@ class Settings:
             "engine", "conf", "conf_weak", "det_sizes", "verify", "verify_conf", "verify_iou",
             "confirm_on_crops", "crop_size", "crop_scale",
             "confirm_tta", "verify_conf_view", "third_opinion", "third_conf", "verify_conf_low",
+            "conf_agree", "verify_conf_agree", "agree_max_px", "conf_weak_long", "established_after",
+            "continue_after", "weak_run", "track_sure_conf",
+            "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
+            "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "min_track", "max_gap", "tail", "tail_before", "tail_grow", "track_iou",
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",

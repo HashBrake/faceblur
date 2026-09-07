@@ -117,7 +117,14 @@ def tracker_for(settings: Settings) -> Tracker:
                    tail_grow=settings.tail_grow, link_dist=settings.link_dist,
                    fast_shift=settings.fast_shift if settings.camera_comp else 0.0,
                    max_gap_fast=settings.max_gap_fast,
-                   tail_before_max=settings.tail_before_max, tail_trend=settings.tail_trend)
+                   tail_before_max=settings.tail_before_max, tail_trend=settings.tail_trend,
+                   conf_weak=settings.conf_weak, conf_weak_long=settings.conf_weak_long,
+                   established_after=settings.established_after, tail_long=settings.tail_long,
+                   continue_after=settings.continue_after, weak_run=settings.weak_run,
+                   sure_conf=settings.track_sure_conf,
+                   stitch_gap=settings.stitch_gap, stitch_slack=settings.stitch_slack,
+                   gap_grow=settings.gap_grow,
+                   blur_shift=settings.blur_shift if settings.camera_comp else 0.0)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

@@ -81,6 +81,7 @@ class Detection:
     landmarks: Optional[Landmarks] = None
     source: str = "yunet"      # yunet, centerface, track
     verified: bool = False
+    confidence: float = 0.0    # the confirming detector's score, when verified
 
     @property
     def long_side(self) -> float:
@@ -551,6 +552,11 @@ def confirmation(d: Detection, raw: RawCandidates, settings: Settings) -> tuple[
     clears the higher bar those views must meet, and whether the third
     detector fired on it."""
     best = _best_over(raw.get("centerface", []), d, settings.verify_iou)
+    if settings.confirm_tta >= 1 and settings.verify_conf <= best < settings.verify_conf_sure:
+        # Borderline: the mirror view has to see a face too. A hand is not
+        # symmetric the way a face is.
+        if _best_over(raw.get("centerface_flip", []), d, settings.verify_iou) < settings.mirror_agree:
+            best = 0.0
     extra = []
     if settings.confirm_tta >= 1:
         extra.append(raw.get("centerface_flip", []))
@@ -586,7 +592,18 @@ def filter_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Det
     primary = [d for d in primary if _plausible(d, shape, settings)]
 
     if settings.engine == "yunet" and settings.verify:
-        primary = [replace(d, verified=True) for d in primary if confirmed(d, raw, settings)]
+        kept = []
+        for d in primary:
+            if confirmed(d, raw, settings):
+                score, _ = confirmation(d, raw, settings)
+                kept.append(replace(d, verified=True, confidence=score))
+        primary = kept
+        # Two detectors agreeing: YuNet below conf but CenterFace sure.
+        for d in raw.get("yunet", []):
+            if settings.conf_agree <= d.score < settings.conf and _plausible(d, shape, settings)                     and (settings.agree_max_px <= 0 or d.long_side <= settings.agree_max_px):
+                score, _ = confirmation(d, raw, settings)
+                if score >= settings.verify_conf_agree:
+                    primary.append(replace(d, verified=True, confidence=score))
     return nms_detections(primary, settings.nms_detect)
 
 
@@ -598,8 +615,11 @@ def weak_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Detec
     and boxes at full threshold that the second detector did not confirm.
     """
     source = "centerface" if settings.engine == "centerface" else "yunet"
+    # Down to conf_weak_long: the tracker lets only an established track use
+    # a box below conf_weak.
+    floor = min(settings.conf_weak, settings.conf_weak_long)
     weak = [d for d in raw.get(source, [])
-            if settings.conf_weak <= d.score < settings.conf and _plausible(d, shape, settings)]
+            if floor <= d.score < settings.conf and _plausible(d, shape, settings)]
     if settings.engine == "yunet" and settings.verify:
         for d in raw.get("yunet", []):
             if d.score < settings.conf:
@@ -727,10 +747,15 @@ class DetectorBank:
         # that a sweep over conf or max_face_frac still has raw candidates to
         # work with. Nothing below conf is ever confirmed anyway.
         floor = min(s.conf, CROP_FLOOR)
+        # Small boxes get crops from conf_agree up, for the agreement rule;
+        # cutting crops for every larger box from 0.35 up doubled the
+        # detection time, and those never get confirmed anyway.
+        small_floor = min(floor, s.conf_agree) if s.agree_max_px > 0 else min(floor, s.conf_agree)
         cap = min(1.0, max(2.0 * s.max_face_frac, s.grow_face_frac)) * max(H, W)
         windows: list[tuple[int, int, int]] = []       # x0, y0, side of the plain crop
         for d in candidates:
-            if d.score < floor or d.long_side > cap or d.w < 2 or d.h < 2:
+            need = small_floor if (s.agree_max_px <= 0 or d.long_side <= s.agree_max_px) else floor
+            if d.score < need or d.long_side > cap or d.w < 2 or d.h < 2:
                 continue
             side = int(round(max(48.0, d.long_side * s.crop_scale)))
             x0 = int(round(d.cx - side / 2))

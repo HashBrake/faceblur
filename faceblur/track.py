@@ -69,6 +69,11 @@ class Track:
     id: int
     dets: dict[int, Detection] = field(default_factory=dict)  # frame -> detection
     confirmed: int = 1   # detections that passed every check, not continuations
+    last_confirmed: int = -1   # frame of the latest one; set by the tracker
+    best_conf: float = 0.0     # the strongest confirmation the track holds
+    # Boxes the detectors saw near the face inside a gap, masked as well as
+    # the interpolated box: a smeared face is wherever the evidence is.
+    extras: dict[int, list] = field(default_factory=dict)
 
     @property
     def first(self) -> int:
@@ -112,6 +117,12 @@ def _lerp(a: Detection, b: Detection, t: float) -> Detection:
     )
 
 
+def _inflate(d: Detection, px: float) -> Detection:
+    """The same box, `px` wider and taller about its centre."""
+    return Detection(d.x - px / 2, d.y - px / 2, d.w + px, d.h + px, d.score, d.landmarks,
+                     d.source, d.verified)
+
+
 def _moved(d: Detection, dx: float, dy: float, grow: float = 1.0) -> Detection:
     """The same box shifted by (dx, dy) and scaled about its centre."""
     w, h = d.w * grow, d.h * grow
@@ -129,7 +140,13 @@ class Tracker:
                  iou_thr: float = 0.3, tail_before: Optional[int] = None,
                  tail_grow: float = 0.0, link_dist: float = 0.0,
                  fast_shift: float = 0.0, max_gap_fast: Optional[int] = None,
-                 tail_before_max: Optional[int] = None, tail_trend: bool = True):
+                 tail_before_max: Optional[int] = None, tail_trend: bool = True,
+                 conf_weak: float = 0.0, conf_weak_long: float = 0.0,
+                 established_after: int = 3, tail_long: Optional[int] = None,
+                 stitch_gap: int = 0, blur_shift: float = 0.0,
+                 continue_after: Optional[int] = None, weak_run: int = 0,
+                 stitch_slack: float = 0.0, gap_grow: float = 0.0,
+                 sure_conf: float = 0.0):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
@@ -141,18 +158,39 @@ class Tracker:
         self.max_gap_fast = max_gap if max_gap_fast is None else max(max_gap, max_gap_fast)
         self.tail_before_max = max(self.tail_before, tail_before_max or 0)
         self.tail_trend = tail_trend
+        # Boxes between conf_weak_long and conf_weak continue only a track that
+        # holds established_after confirmed detections.
+        self.conf_weak = conf_weak
+        self.conf_weak_long = min(conf_weak_long, conf_weak) if conf_weak_long else conf_weak
+        self.established_after = max(1, established_after)
+        self.tail_long = tail if tail_long is None else max(tail, tail_long)
+        self.stitch_gap = max(0, stitch_gap)
+        self.stitch_slack = max(0.0, stitch_slack)
+        self.gap_grow = max(0.0, gap_grow)
+        self.blur_shift = blur_shift
+        # Continuation needs this many confirmed detections and stops weak_run
+        # frames after the last confirmed one (0: no limit).
+        self.continue_after = min_track if continue_after is None else max(1, continue_after)
+        self.weak_run = max(0, weak_run)
+        # A track is sure once a confirmation scored this much; only sure
+        # tracks continue, stitch, fill gaps and get the long tails.
+        self.sure_conf = sure_conf
         self._cum = None        # cumulative camera shift per frame, or None
+        self._mag = None        # camera shift magnitude per frame
 
     # ------------------------------------------------------------ camera
 
     def _set_shifts(self, shifts: Optional[Shifts], n: int) -> None:
         if shifts is None or not any(dx or dy for dx, dy in shifts):
             self._cum = None
+            self._mag = None
             return
         arr = np.zeros((n + 1, 2), np.float64)
         for i, (dx, dy) in enumerate(shifts[:n]):
             arr[i + 1] = arr[i] + (dx, dy)
         self._cum = arr[1:]
+        self._mag = np.hypot(*np.asarray(list(shifts[:n]) + [(0.0, 0.0)] * (n - len(shifts[:n])),
+                                        dtype=np.float64).T)
 
     def _camera(self, a: int, b: int) -> tuple[float, float]:
         """How far the picture moved between frames a and b, in pixels."""
@@ -231,17 +269,143 @@ class Tracker:
             used = self._match(active, i, list(dets), set(), weak_boxes=False)
             if weak is not None and weak[i]:
                 rest = [t for ti, t in enumerate(active)
-                        if ti not in used and t.confirmed >= self.min_track]
-                self._match(rest, i, list(weak[i]), set(), weak_boxes=True)
+                        if ti not in used and t.confirmed >= self.continue_after
+                        and self._may_continue(t, i)]
+                # Young tracks see only the stronger weak boxes; an
+                # established track may take a box down to conf_weak_long.
+                strong_weak = [d for d in weak[i] if d.score >= self.conf_weak]
+                low_weak = [d for d in weak[i] if self.conf_weak_long <= d.score < self.conf_weak]
+                taken = self._match(rest, i, strong_weak, set(), weak_boxes=True)
+                if low_weak:
+                    long_lived = [t for ti, t in enumerate(rest)
+                                  if ti not in taken and t.confirmed >= self.established_after]
+                    self._match(long_lived, i, low_weak, set(), weak_boxes=True)
             for d in dets:
                 if not any(t.dets.get(i) is d for t in active):
-                    t = Track(next_id, {i: d})
+                    t = Track(next_id, {i: d}, last_confirmed=i, best_conf=d.confidence)
                     next_id += 1
                     tracks.append(t)
                     active.append(t)
+        tracks = self._stitch(tracks)
         kept = [t for t in tracks if t.confirmed >= self.min_track]
+        self._fill_gaps(kept, per_frame, weak)
         self._extend_backwards(kept, per_frame, weak, tracks)
         return kept
+
+    def _fill_gaps(self, kept, per_frame, weak) -> None:
+        """Walk every gap inside a track over the boxes the detectors did see.
+
+        Between two sightings the face is somewhere near the straight line
+        between them, but during a pan it travels an arc and a smeared face
+        is a wider box than a sharp one. YuNet usually still fires on the
+        smear at 0.3 or so. Walking the gap from both ends, each frame takes
+        the nearest box to where the walk is, within the stitching slack, so
+        the mask follows the real path and the real size. Only an
+        established track does this, on boxes down to conf_weak_long.
+        """
+        if weak is None:
+            return
+        claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
+        for t in kept:
+            if t.confirmed < self.established_after or not self._sure(t):
+                continue
+            frames = sorted(t.dets)
+            for a, b in zip(frames, frames[1:]):
+                if b - a < 2:
+                    continue
+                da, db = t.dets[a], t.dets[b]
+                size = max(da.long_side, db.long_side)
+                # Forward from a, then backward from b, each half of the gap.
+                mid = (a + b) // 2
+                for start, stop, step, anchor in ((a, mid, 1, da), (b, mid, -1, db)):
+                    cur, cur_k = anchor, start
+                    for k in range(start + step, stop + (1 if step > 0 else 0), step):
+                        pool = [d for d in list(per_frame[k]) + list(weak[k])
+                                if (k, id(d)) not in claimed and d.score >= self.conf_weak_long]
+                        if not pool:
+                            continue
+                        # The slack accrues over every frame since the last box
+                        # the walk stood on, and the camera's move with it.
+                        cx, cy = self._camera(cur_k, k)
+                        gate = 3.0 * size + self.stitch_slack * abs(k - cur_k)
+                        best, best_d = None, gate
+                        for d in pool:
+                            # A smeared face is a box up to four times the
+                            # sharp one, but only while the camera moves fast
+                            # enough to smear it; otherwise sizes must agree.
+                            fast = self._mag is not None and k < len(self._mag)                                 and self.blur_shift > 0 and self._mag[k] >= self.blur_shift
+                            ratio = d.long_side / max(1.0, cur.long_side)
+                            if not 0.5 <= ratio <= (4.0 if fast else 1.5):
+                                continue
+                            dist = math.hypot(d.cx - (cur.cx + cx), d.cy - (cur.cy + cy))
+                            if dist < gate:
+                                # Every box near the path is masked; the
+                                # nearest one is where the walk goes on from.
+                                t.extras.setdefault(k, []).append(replace(d, source="continued"))
+                                claimed.add((k, id(d)))
+                            if dist < best_d:
+                                best, best_d = d, dist
+                        if best is None:
+                            continue
+                        cur, cur_k = best, k
+
+    def _sure(self, t: Track) -> bool:
+        return self.sure_conf <= 0 or t.best_conf >= self.sure_conf
+
+    def _may_continue(self, t: Track, frame: int) -> bool:
+        if not self._sure(t):
+            return False
+        if self.weak_run <= 0:
+            return True
+        last = t.last_confirmed if t.last_confirmed >= 0 else t.first
+        return abs(frame - last) <= self.weak_run
+
+    def _stitch(self, tracks: list[Track]) -> list[Track]:
+        """Join tracks of one face that the detectors lost for a while.
+
+        A track that ends, and another that starts up to stitch_gap frames
+        later where the first one's motion and the camera's put the face, are
+        one track. The frames between are interpolated by `render`. With
+        hindsight this is safe: the face came back where it was expected.
+        Only detections that passed every check start a track, so the later
+        piece is a face too.
+        """
+        if self.stitch_gap <= 0 or len(tracks) < 2:
+            return tracks
+        tracks = sorted(tracks, key=lambda t: t.first)
+        alive = list(tracks)
+        merged = True
+        while merged:
+            merged = False
+            alive.sort(key=lambda t: t.last)
+            for a in alive:
+                if a.confirmed < self.continue_after or not self._sure(a):
+                    continue
+                best, best_score = None, 0.0
+                for b in alive:
+                    if b is a or b.first <= a.last or b.first - a.last - 1 > self.stitch_gap:
+                        continue
+                    pred = self._predict(a, b.first)
+                    first = b.dets[b.first]
+                    size = max(pred.long_side, first.long_side)
+                    if size <= 0 or min(pred.long_side, first.long_side) / size < 0.5:
+                        continue
+                    dist = math.hypot(pred.cx - first.cx, pred.cy - first.cy)
+                    gate = size + self.stitch_slack * (b.first - a.last)
+                    if dist > gate:
+                        continue
+                    score = 1.0 - dist / gate
+                    if score > best_score:
+                        best, best_score = b, score
+                if best is not None:
+                    a.dets.update(best.dets)
+                    a.confirmed += best.confirmed
+                    a.last_confirmed = max(a.last_confirmed, best.last_confirmed)
+                    a.best_conf = max(a.best_conf, best.best_conf)
+                    alive.remove(best)
+                    merged = True
+                    break
+        return alive
 
     def _extend_backwards(self, kept, per_frame, weak, all_tracks) -> None:
         """Walk each confirmed track back in time over boxes nothing else owns.
@@ -253,11 +417,15 @@ class Tracker:
         """
         claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
         for t in sorted(kept, key=lambda t: t.first):
+            if t.confirmed < self.established_after or not self._sure(t):
+                continue             # too little behind it to reach back from
             anchor_frame = t.first
             anchor = t.dets[anchor_frame]
             frame = t.first - 1
+            floor = self.conf_weak_long
             while frame >= 0 and self._gap_ok(anchor_frame, frame):
-                pool = list(per_frame[frame]) + (list(weak[frame]) if weak is not None else [])
+                pool = list(per_frame[frame]) + (
+                    [d for d in weak[frame] if d.score >= floor] if weak is not None else [])
                 pool = [d for d in pool if (frame, id(d)) not in claimed]
                 cx, cy = self._camera(anchor_frame, frame)
                 pred = _moved(anchor, cx, cy)
@@ -287,6 +455,8 @@ class Tracker:
                 d = replace(d, source="continued")
             else:
                 tracks[ti].confirmed += 1
+                tracks[ti].last_confirmed = max(tracks[ti].last_confirmed, frame)
+                tracks[ti].best_conf = max(tracks[ti].best_conf, d.confidence)
             tracks[ti].dets[frame] = d
             used_t.add(ti)
             used_d.add(di)
@@ -308,8 +478,16 @@ class Tracker:
                 out[a].append(t.dets[a])
                 da, db = t.dets[a], t.dets[b]
                 for k in range(a + 1, b):
-                    out[k].append(_lerp(da, db, (k - a) / (b - a)))
+                    box = _lerp(da, db, (k - a) / (b - a))
+                    if self.gap_grow > 0:
+                        # Least certain in the middle of the gap.
+                        away = min(k - a, b - k)
+                        box = _moved(box, 0.0, 0.0, 1.0 + self.gap_grow * away)
+                    out[k].append(box)
             out[frames[-1]].append(t.dets[frames[-1]])
+            for k, boxes in t.extras.items():
+                if 0 <= k < n_frames:
+                    out[k].extend(boxes)
             head, foot = t.dets[frames[0]], t.dets[frames[-1]]
             # Tails follow the motion at each end of the track and grow a little
             # per frame, so a face moving into or out of the picture stays
@@ -319,13 +497,25 @@ class Tracker:
             fv = self._own_velocity(t, frames[-2:])
             head_grow = self.tail_grow + self._size_trend(t, frames[:2], backwards=True)
             foot_grow = self.tail_grow + self._size_trend(t, frames[-2:], backwards=False)
-            reach = self._entry_reach(t, frames, hv, shape)
+            reach = self._entry_reach(t, frames, hv, shape)                 if t.confirmed >= self.established_after and self._sure(t) else 0
             for k in range(1, reach + 1):
                 if frames[0] - k >= 0:
                     out[frames[0] - k].append(self._tail_box(head, frames[0], hv, -k, head_grow))
-            for k in range(1, self.tail + 1):
+            # A track that is not established gets no tail at all: its
+            # confirmed frames and the gaps between them, nothing more.
+            established = t.confirmed >= self.established_after and self._sure(t)
+            tail = (self.tail_long if established else 0) \
+                if self.established_after > self.min_track else self.tail
+            for k in range(1, tail + 1):
                 if frames[-1] + k < n_frames:
                     out[frames[-1] + k].append(self._tail_box(foot, frames[-1], fv, k, foot_grow))
+        if self.blur_shift > 0 and self._mag is not None:
+            # A fast camera move smears a face by about the shift. Every mask
+            # in such a frame grows by that much, so the smear stays covered.
+            for i in range(min(n_frames, len(self._mag))):
+                m = float(self._mag[i])
+                if m > self.blur_shift and out[i]:
+                    out[i] = [_inflate(d, m) for d in out[i]]
         return out
 
     def _size_trend(self, t: Track, pair, backwards: bool) -> float:

@@ -19,8 +19,9 @@ from faceblur.redact import ellipse_for  # noqa: E402
 from faceblur.settings import Settings  # noqa: E402
 
 # Bump when what the cache holds changes: 2 added the mirror and tight
-# confirmation views, the third detector, and the camera shift per frame.
-CACHE_VERSION = 2
+# confirmation views, the third detector, and the camera shift per frame;
+# 3 cuts confirmation crops from conf_agree (0.4) up.
+CACHE_VERSION = 3
 
 FOOTAGE = REPO / "footage"
 CACHE_DIR = REPO / "eval" / "cache"          # derived from footage, git ignores it

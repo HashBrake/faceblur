@@ -23,7 +23,10 @@ from faceblur.settings import Settings
 # off_face_mean was 0.3 percent until the entry tails grew to follow a face
 # in from the frame edge; a tail before the face is visible is off-face by
 # construction. The part from detector boxes has its own, tighter gate.
-GATES = {"off_face_mean": 0.005, "off_face_max": 0.03, "off_face_detections_mean": 0.002,
+# 2026-09-08: the total went 0.5 to 0.7 percent and the detector-box part 0.2
+# to 0.3 for the gap filling and stitching that keep a face covered through a
+# fast pan; the hand gate did not move.
+GATES = {"off_face_mean": 0.007, "off_face_max": 0.06, "off_face_detections_mean": 0.003,
          "hand_damage": 0.001}
 
 _INPUTS = None
@@ -64,38 +67,38 @@ def passes(r: dict) -> bool:
     return True
 
 
-OLD_TRACKER = {"camera_comp": False, "link_dist": 0.0, "tail_before_max": 6, "tail_grow": 0.05}
-NEW_TRACKER = {"camera_comp": True, "link_dist": 0.75, "tail_before_max": 12, "tail_grow": 0.03}
-VIEWS = ({"confirm_tta": 0}, {"confirm_tta": 2, "verify_conf_view": 0.4},
-         {"confirm_tta": 2, "verify_conf_view": 0.3})     # the last: any view counts as the plain one
-THIRD = ({"third_opinion": False}, {"third_opinion": True, "verify_conf_low": 0.25},
-         {"third_opinion": True, "verify_conf_low": 0.1})
+OLD_TRACKER = {"camera_comp": False, "link_dist": 0.0, "tail_before_max": 6, "tail_grow": 0.05,
+               "conf_weak_long": 0.4, "stitch_gap": 0, "tail_long": 2, "blur_shift": 0.0,
+               "continue_after": 2, "weak_run": 0, "gap_grow": 0.0, "track_sure_conf": 0.0}
+PUSHED = {"camera_comp": True, "link_dist": 0.75, "tail_before_max": 12, "tail_grow": 0.03,
+          "conf_weak_long": 0.4, "stitch_gap": 0, "tail_long": 2, "blur_shift": 0.0,
+          "continue_after": 2, "weak_run": 0, "gap_grow": 0.0, "track_sure_conf": 0.0}
+NEW_TRACKER = {"camera_comp": True, "link_dist": 0.75, "tail_before_max": 12, "tail_grow": 0.03,
+               "conf_weak_long": 0.3, "tail_long": 4, "continue_after": 3, "weak_run": 30}
+VIEWS = ({"confirm_tta": 0, "verify_conf_sure": 0.3},
+         {"confirm_tta": 2, "verify_conf_view": 0.4, "verify_conf_sure": 0.5})
+AGREE = ({"conf_agree": 0.6}, {"conf_agree": 0.35, "verify_conf_agree": 0.35, "agree_max_px": 48})
 
 
 def grid() -> list[dict]:
+    base = {"conf": 0.6, "max_face_frac": 0.15, "min_track": 2, "max_gap": 5, "conf_weak": 0.4,
+            "third_opinion": True, "verify_conf_low": 0.25}
     out = []
-    for conf, gap, weak, views, third, tracker in itertools.product(
-            [0.5, 0.6], [3, 5], [0.3, 0.4], VIEWS, THIRD, [OLD_TRACKER, NEW_TRACKER]):
-        out.append({"conf": conf, "max_face_frac": 0.15, "min_track": 2, "max_gap": gap,
-                    "conf_weak": weak, **views, **third, **tracker})
-    full = {"max_face_frac": 0.15, "min_track": 2, "max_gap": 5, "conf_weak": 0.4,
-            **VIEWS[1], **THIRD[1], **NEW_TRACKER}
-    # The graded rule: a strong YuNet box needs less from CenterFace.
-    for conf in (0.6, 0.7):
-        out.append({"conf": conf, **full, "verify_conf": 0.2, "verify_conf_low": 0.15})
-    # Tails that follow the size trend, and every second frame.
-    out.append({"conf": 0.6, "tail_trend": True, **full})
-    out.append({"conf": 0.6, "stride": 2, **full})
+    for views, agree, sure, stitch, grow, blur in itertools.product(
+            VIEWS, AGREE, [0.4, 0.5, 0.6], [45, 90], [0.0, 0.04], [0.0, 8.0]):
+        out.append({**base, **views, **agree, **NEW_TRACKER, "track_sure_conf": sure,
+                    "stitch_gap": stitch, "gap_grow": grow, "blur_shift": blur})
+    full = {**base, **VIEWS[1], **AGREE[1], **NEW_TRACKER, "track_sure_conf": 0.5,
+            "stitch_gap": 45, "gap_grow": 0.04, "blur_shift": 8.0}
+    # No sure rule at all, every second frame, the two earlier builds.
+    out.append({**full, "track_sure_conf": 0.0})
+    out.append({**full, "stride": 2})
+    out.append({**base, **VIEWS[1], **AGREE[0], **PUSHED})
+    out.append({**base, **VIEWS[0], **AGREE[0], **OLD_TRACKER})
     for conf in (0.5, 0.6, 0.7):
         out.append({"conf": conf, "conf_weak": conf, "max_face_frac": 0.15,
                     "min_track": 2, "max_gap": 3, "confirm_tta": 0, "third_opinion": False,
                     **OLD_TRACKER})   # no continuation, the old confirmation
-    # Reference points: the first build's behaviour, and no verification.
-    out.append({"conf": 0.25, "conf_weak": 0.25, "det_sizes": (640, 1280), "verify": False,
-                "max_face_frac": 1.0, "min_track": 1, "max_gap": 6, "tail": 6,
-                "pad": 0.30, "ellipse_w": 1.6, "ellipse_h": 1.6, "feather": 0.0})
-    out.append({"conf": 0.5, "verify": False})
-    out.append({"engine": "both", "conf": 0.5})
     return out
 
 
@@ -123,12 +126,13 @@ def main() -> int:
     # pseudo-faces are built from the confirmers' agreement and the synthetic
     # faces are sharp and frontal, so a face only the mirror view or the third
     # detector confirms shows up nowhere else. The gates have already held.
+    # The hard gate comes first: among settings inside the gates, the fewest
+    # frames with a known face of 40 px or more left visible, then the
+    # fewest of 24 to 40 px, then the score.
     if ok:
-        best = ok[0]["score"]
-        near = [r for r in ok if r["score"] >= best - 0.01]
-        near.sort(key=lambda r: (-round(r["continuity"], 3), r["unconfirmed_frames"],
-                                 r["off_face_mean"], r["masked_mean"]))
-        ok = near + [r for r in ok if r not in near]
+        ok.sort(key=lambda r: (r["exposed_40"], r["exposed_24_40"], -round(r["score"], 4),
+                               -round(r["continuity"], 3), r["unconfirmed_frames"],
+                               r["off_face_mean"], r["masked_mean"]))
     chosen = ok[0] if ok else None
 
     # Mask ellipse, on the synthetic set, at the chosen detection settings.
@@ -174,13 +178,15 @@ def write_report(video, results, chosen, ellipse_rows, synth,
              f"the part from detector boxes rather than tails at most "
              f"{pct(GATES['off_face_detections_mean'])}",
              f"- hand pixels touched: at most {pct(GATES['hand_damage'])}",
-             "- among settings inside the gates, the highest mean of consensus recall "
-             "and synthetic recall wins; within one point of the best, the setting "
-             "that keeps confirmed faces covered longest (continuity) wins, then the "
-             "one with the fewest unconfirmed frames", "",
+             "- among settings inside the gates, the fewest frames with a known face "
+             "of 40 px or more left visible wins (the hard gate), then the fewest of "
+             "24 to 40 px, then the highest mean of consensus recall and synthetic "
+             "recall, then continuity and the fewest unconfirmed frames", "",
              "## Chosen", ""]
     if chosen:
         lines += ["```", json.dumps(chosen["changes"]), "```", "",
+                  f"Exposed frames, known face 40 px and more: {chosen['exposed_40']}; "
+                  f"24 to 40 px: {chosen['exposed_24_40']}. "
                   f"Recall on pseudo-faces {pct(chosen['recall'])}, synthetic recall "
                   f"{pct(chosen['synthetic_recall'])}, continuity {pct(chosen['continuity'])}, off-face mean "
                   f"{pct(chosen['off_face_mean'])}, max {pct(chosen['off_face_max'])} "
@@ -207,12 +213,13 @@ def write_report(video, results, chosen, ellipse_rows, synth,
               "Unconfirmed runs are stretches of three frames or more where YuNet saw a box "
               "at full threshold that nothing confirmed and no mask covers; most are hands "
               "and objects, fewer is better only if the gates hold.", "",
-              "| Passes | Score | Recall | Synthetic | Edge | Pan | Continuity | Unconfirmed runs | "
+              "| Passes | Exposed 40+ | Exposed 24-40 | Score | Recall | Synthetic | Edge | Pan | Continuity | Unconfirmed runs | "
               "Off-face mean | Off-face max | Off-face detections | Strict mean | Hands | "
               "Masked mean | Masked max | Tracks | Changes |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    for r in sorted(results, key=lambda r: (-r["score"], r["off_face_mean"])):
-        lines.append(f"| {'yes' if r['passes'] else 'no'} | {pct(r['score'])} | "
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in sorted(results, key=lambda r: (r["exposed_40"], r["exposed_24_40"], -r["score"])):
+        lines.append(f"| {'yes' if r['passes'] else 'no'} | {r['exposed_40']} | {r['exposed_24_40']} | "
+                     f"{pct(r['score'])} | "
                      f"{pct(r['recall'])} | {pct(r['synthetic_recall'])} | "
                      f"{pct(r['synthetic'].get('edge'))} | {pct(r['synthetic'].get('pan'))} | "
                      f"{pct(r['continuity'])} | {r['unconfirmed_runs']} ({r['unconfirmed_frames']} fr) | "

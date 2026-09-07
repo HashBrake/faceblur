@@ -78,7 +78,7 @@ def test_entry_tail_reaches_back_until_the_face_leaves_the_picture():
     frames = [[] for _ in range(20)]
     frames[12] = [det(100)]
     frames[13] = [det(130)]
-    out, _ = Tracker(min_track=2, max_gap=2, tail=0, tail_before=2, link_dist=1.0,
+    out, _ = Tracker(established_after=2, min_track=2, max_gap=2, tail=0, tail_before=2, link_dist=1.0,
                      tail_before_max=12).run(frames, shape=(650, 800))
     covered = [i for i in range(12) if out[i]]
     assert covered == [8, 9, 10, 11]       # centre 120 crosses x=0 four frames back
@@ -89,7 +89,7 @@ def test_a_still_face_keeps_the_short_entry_tail():
     frames = [[] for _ in range(20)]
     frames[12] = [det(300)]
     frames[13] = [det(300)]
-    out, _ = Tracker(min_track=2, max_gap=2, tail=0, tail_before=2,
+    out, _ = Tracker(established_after=2, min_track=2, max_gap=2, tail=0, tail_before=2,
                      tail_before_max=12).run(frames, shape=(650, 800))
     assert [i for i in range(12) if out[i]] == [10, 11]
 
@@ -100,7 +100,7 @@ def test_a_face_that_was_shrinking_gets_a_larger_tail_before():
     frames = [[] for _ in range(10)]
     frames[5] = [det(100, w=100, h=100)]
     frames[6] = [det(100, w=90, h=90)]
-    out, _ = Tracker(min_track=2, max_gap=2, tail=0, tail_before=3, tail_grow=0.0).run(frames)
+    out, _ = Tracker(established_after=2, min_track=2, max_gap=2, tail=0, tail_before=3, tail_grow=0.0).run(frames)
     assert out[2][0].w == pytest.approx(100 * 1.3)      # 10 percent a frame, three frames back
 
 
@@ -109,7 +109,7 @@ def test_tails_follow_the_camera():
     frames[5] = [det(300)]
     frames[6] = [det(300)]
     shifts = [(0.0, 0.0)] * 7 + [(-25.0, 0.0)] * 3     # shift i: from frame i-1 to i
-    out, _ = Tracker(min_track=2, max_gap=2, tail=3, tail_before=0).run(frames, shifts=shifts)
+    out, _ = Tracker(established_after=2, min_track=2, max_gap=2, tail=3, tail_before=0).run(frames, shifts=shifts)
     assert out[9][0].cx == pytest.approx(320 - 75)
 
 

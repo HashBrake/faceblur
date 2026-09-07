@@ -269,7 +269,7 @@ def evaluate(settings: Settings, data: list, cover: float = 0.9) -> dict:
                 if ok:
                     first_covered.setdefault(j, i)
                 for k in (size_bucket(d.long_side), "blurred" if seq["blur"] else "sharp",
-                          kind, "all"):
+                          kind, "40+" if d.long_side >= 40 else "under 40", "all"):
                     hit[k][1] += 1
                     hit[k][0] += ok
                 if ok:
