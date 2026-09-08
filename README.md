@@ -25,32 +25,37 @@ Every number below comes from an automatic evaluation with no human labels. The
 method is in `eval/` and the full tables are in `docs/precision_report.md`.
 Measured on a 31 second Ego camera file, 938 frames, 1600x1300.
 
-| Measure | First build | This build |
+| Measure | First build | This build (2026-09-08) |
 |---|---|---|
-| Share of the frame destroyed, mean | 33% | 1.7% |
-| Share of the frame destroyed, worst frame | 93% | 3.8% |
-| Masked pixels where no detector sees a face, mean | 29.7% | 0.30% |
-| Hand pixels touched | 82% | 0.00% |
-| Faces the detectors agree on, covered | 100% | 99.0% |
-| Confirmed faces kept covered while still visible | | 99.6% |
+| Share of the frame destroyed, mean | 33% | 2.3% |
+| Share of the frame destroyed, worst frame | 93% | 5.8% |
+| Masked pixels where no detector sees a face, mean | 29.7% | 0.69% (0.26% from detector boxes, the rest tails and gap fills) |
+| Hand pixels touched | 82% | 0.00% (0.09% on the table tennis file) |
+| Faces the detectors agree on, covered | 100% | 99.8% |
+| Confirmed faces kept covered while still visible | | 99.5% |
 
 Recall against faces of known position, pasted into real frames of the same
-video, with the same settings:
+video, with the same settings; the set now includes faces entering at the
+frame edge and faces during a camera pan:
 
 | Faces | Covered |
 |---|---|
-| 64 px and larger, sharp | 89% |
-| 64 px and larger, motion blurred | 73% |
-| 32 to 63 px | 94% |
-| under 32 px | 46% |
+| 40 px and larger | 92% |
+| 64 px and larger, sharp | 91% |
+| motion blurred, any size | 77% |
+| 32 to 63 px | 84% |
+| under 32 px | 57% |
+| entering at the frame edge | 78%, masked 2.2 frames after half visible |
+| during a camera pan | 81% |
 
 Small and motion blurred faces carry the misses. The detectors themselves find a
 24 px face about half the time, at any threshold. On a 1600 px frame a 24 px face
 is a person far across the room.
 
 The first build reached 100 percent on the agreed faces by masking a third of
-every frame. This build gives up a few points of recall on the smallest faces to
-leave everything else intact. `docs/precision_audit.md` explains why.
+every frame. This build masks 2 percent and keeps hands untouched; the misses
+left are small and blurred faces. `docs/precision_audit.md` explains the first
+rebuild, `docs/report.md` sections 10 and 11 the two passes since.
 
 Check the blurred copies before you share them.
 
