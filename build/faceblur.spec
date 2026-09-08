@@ -13,7 +13,8 @@ import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).resolve().parent
 
-# Both detectors, and the licence that travels with CenterFace.
+# The three detectors, and the licences that travel with them. The face
+# recogniser in models/ is evaluation only and stays out of the build.
 datas = [
     (str(ROOT / "models" / "yunet.onnx"), "models"),
     (str(ROOT / "models" / "yunet_dynamic.onnx"), "models"),
@@ -21,6 +22,7 @@ datas = [
     (str(ROOT / "models" / "centerface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "ultraface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
+    (str(ROOT / "models" / "ultraface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "README.md"), "models"),
 ]
 

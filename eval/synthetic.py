@@ -18,6 +18,7 @@ Three kinds of sequence:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import multiprocessing
@@ -42,11 +43,23 @@ SIZES = [24, 32, 48, 64, 96, 128]
 BLURS = [0, 0, 7, 13]
 SEQ_LEN = 15
 KINDS = [("interior", 36), ("edge", 18), ("pan", 18)]
-VERSION = 2
+# 3 carries the stamp of the pseudo-labels the faces were cut from, so that a
+# set built on labels that have since moved is rebuilt instead of read. Same
+# reason as the raw cache's fingerprint in eval/common.py.
+VERSION = 3
 
 
 def data_path(video: Path) -> Path:
     return CACHE_DIR / f"{video.stem}.synthetic.v{VERSION}.pkl"
+
+
+def stamp_of(consensus: dict) -> str:
+    return hashlib.sha256(json.dumps(consensus, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def load(video: Path) -> list:
+    """The sequences on disk, whatever they were built from."""
+    return pickle.loads(data_path(video).read_bytes())["data"]
 
 
 def face_bank(video: Path, consensus: dict, limit: int = 24) -> list[dict]:
@@ -204,8 +217,12 @@ def generate(video: Path, consensus: dict, workers: int | None = None) -> list:
     from faceblur.detect import default_workers
     workers = workers or default_workers()
     path = data_path(video)
+    stamp = stamp_of(consensus)
     if path.exists():
-        return pickle.loads(path.read_bytes())
+        held = pickle.loads(path.read_bytes())
+        if held.get("stamp") == stamp:
+            return held["data"]
+        path.unlink()          # the pseudo-labels these were cut from have moved
     faces = face_bank(video, consensus)
     if not faces:
         raise SystemExit("no confident faces to build a bank from")
@@ -222,7 +239,7 @@ def generate(video: Path, consensus: dict, workers: int | None = None) -> list:
     with ctx.Pool(workers, initializer=_init, initargs=(str(video), faces)) as pool:
         result = list(pool.imap_unordered(_sequence, tasks))
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(pickle.dumps(result))
+    path.write_bytes(pickle.dumps({"version": VERSION, "stamp": stamp, "data": result}))
     return result
 
 

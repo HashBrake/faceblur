@@ -1,7 +1,8 @@
 # Models
 
-Three ONNX face detectors ship with this repo. Both are committed so that a build
-never downloads a model. `tests/test_models.py` checks the sha256 of each file.
+Three ONNX face detectors ship with this repo, and one face recogniser that
+only the evaluation harness uses. All four are committed so that a build never
+downloads a model. `tests/test_models.py` checks the sha256 of each file.
 
 ## yunet.onnx
 
@@ -68,3 +69,24 @@ it), and the weights the opset 9 export listed as graph inputs are moved out.
 | File | sha256 | Size |
 |---|---|---|
 | ultraface_dynamic.onnx | 043540a05268e7b6392a949ec708a707da66151a32bcb5dbb6f9e685bc393051 | 1259728 |
+
+## sface.onnx
+
+| Field | Value |
+|---|---|
+| Original name | face_recognition_sface_2021dec.onnx |
+| Source | opencv_zoo, models/face_recognition_sface |
+| URL | https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx |
+| Licence | Apache 2.0, see sface.LICENSE.txt |
+| Size | 38696353 bytes |
+| sha256 | 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79 |
+
+A MobileFaceNet trained with the SFace loss, taken on 2026-09-08. It embeds an
+aligned 112x112 face into 128 numbers; two embeddings of one person point the
+same way. `eval/reid.py` uses it to ask whether the blurred copy still
+identifies anybody, and it needs the 5 landmarks YuNet already produces, which
+is why this model rather than another: they are made to work together and both
+are Apache 2.0.
+
+**Not part of the app.** It is evaluation only, and the packaged build does not
+carry it. A tool that redacts faces has no business shipping a face recogniser.

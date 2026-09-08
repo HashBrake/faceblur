@@ -29,7 +29,14 @@ person's identity and leave hands, cards, screens and everything else untouched.
   by track-level rules (established and sure tracks only get continuation,
   tails and backward reach). Hands 0.00 / 0.00 / 0.09 percent on the three
   files with hand oracles.
-- Tests: `tests/`, 798 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- The fourth pass (2026-09-08, section 12 of `docs/report.md`): identity
+  measured directly with a face recogniser instead of by proxy
+  (`eval/reid.py`, `models/sface.onnx`, evaluation only). It found that the
+  evaluation caches were stale, that the shipped mask strength is right and
+  the next setting up would not be, and that scanning at more pixels is not
+  worth its cost. Caches and pseudo-labels now carry a fingerprint of what
+  they were built from and rebuild themselves when it moves.
+- Tests: `tests/`, 819 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
   rebuilt after 2026-09-07; the spec includes the third model.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
@@ -89,13 +96,15 @@ cache is rebuilt on first use (about a minute a video with four workers).
 .venv\Scripts\python.exe cli.py footage -o footage_blurred
 .venv\Scripts\python.exe -m pytest tests                  # tests
 .venv\Scripts\python.exe -m eval.misses VIDEO --images DIR   # where faces may still be missed
+.venv\Scripts\python.exe -m eval.reid VIDEO BLURRED         # is anybody still identifiable
 ```
 
 ## Known limits and open items
 
 - The exposure proxy (`exposed_40`, `exposed_24_40` in `eval/measure.py`)
   brackets pairs of different faces too; read it as a difference between
-  settings. A hand detector in the pipeline is the one thing that would
+  settings. Section 12.3 re-measures it on rebuilt evidence: on `004100` it
+  reads 91 frames where section 11 reported 55. A hand detector in the pipeline is the one thing that would
   make the hand rules unnecessary; MediaPipe's palm model needs converting
   to ONNX to run in the main environment.
 - Frames where nothing detects anything inside a smear get the interpolated
@@ -117,6 +126,13 @@ cache is rebuilt on first use (about a minute a video with four workers).
   detector-only gate is the one that must not move.
 - No installer, no code signing, no cloud runner. `faceblur.batch.run_video`
   takes a `submit` callable so a cloud runner can map jobs onto anything.
+- The recogniser bounds one thing only: what SFace can do at these distances.
+  It works on `003939`, where people are at conversational distance, and is
+  near useless on faces across a room. A better model, or a person who knows
+  the room, is outside what any number here covers.
+- Changing `faceblur/detect.py` at all, comments included, invalidates the raw
+  caches by design: they carry a hash of that file. A rebuild is about a
+  minute a video on four workers.
 - `gh` is not installed on this PC; git credential manager handles the push.
 
 ## Files that matter
@@ -133,4 +149,6 @@ cache is rebuilt on first use (about a minute a video with four workers).
 | `faceblur/pipeline.py` | audit record, single-process path |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/` | label-free evaluation, the sweep, the misses yardstick |
+| `eval/reid.py` | the recogniser: threshold on this footage, what the mask does, what is left in the copy |
+| `models/sface.onnx` | face recogniser, evaluation only, never in the build |
 | `docs/report.md` | quality, accuracy, speed, hardware, assumptions, done and not done |

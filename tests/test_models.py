@@ -27,6 +27,10 @@ EXPECTED = {
         "34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017",
         1270727,
     ),
+    "sface.onnx": (
+        "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+        38696353,
+    ),
     "ultraface_dynamic.onnx": (
         "043540a05268e7b6392a949ec708a707da66151a32bcb5dbb6f9e685bc393051",
         1259728,
@@ -45,3 +49,21 @@ def test_model_sha256(name):
     data = (MODELS / name).read_bytes()
     assert len(data) == expected_size
     assert hashlib.sha256(data).hexdigest() == expected_hash
+
+
+SPEC = Path(__file__).resolve().parents[1] / "build" / "faceblur.spec"
+
+
+def test_every_model_in_the_build_carries_its_licence():
+    """A model whose licence asks to travel with it has to be in the build too."""
+    spec = SPEC.read_text(encoding="utf-8")
+    for licence in sorted(MODELS.glob("*.LICENSE.txt")):
+        family = licence.name.split(".")[0]
+        shipped = [n for n in EXPECTED if n.startswith(family) and n in spec]
+        if shipped:
+            assert licence.name in spec, f"{shipped} ships without {licence.name}"
+
+
+def test_the_face_recogniser_stays_out_of_the_build():
+    """A tool that redacts faces has no business shipping a face recogniser."""
+    assert "sface" not in SPEC.read_text(encoding="utf-8")

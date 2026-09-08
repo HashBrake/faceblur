@@ -29,10 +29,11 @@ Measured on a 31 second Ego camera file, 938 frames, 1600x1300.
 |---|---|---|
 | Share of the frame destroyed, mean | 33% | 2.3% |
 | Share of the frame destroyed, worst frame | 93% | 5.8% |
-| Masked pixels where no detector sees a face, mean | 29.7% | 0.69% (0.26% from detector boxes, the rest tails and gap fills) |
+| Masked pixels where no detector sees a face, mean | 29.7% | 0.77% (0.29% from detector boxes, the rest tails and gap fills) |
 | Hand pixels touched | 82% | 0.00% (0.09% on the table tennis file) |
-| Faces the detectors agree on, covered | 100% | 99.8% |
+| Faces the detectors agree on, covered | 100% | 99.7% |
 | Confirmed faces kept covered while still visible | | 99.5% |
+| Largest 60 faces still recognised by a face recogniser after the mask | | 2 of 60 |
 
 Recall against faces of known position, pasted into real frames of the same
 video, with the same settings; the set now includes faces entering at the
@@ -40,17 +41,30 @@ frame edge and faces during a camera pan:
 
 | Faces | Covered |
 |---|---|
-| 40 px and larger | 92% |
-| 64 px and larger, sharp | 91% |
-| motion blurred, any size | 77% |
-| 32 to 63 px | 84% |
-| under 32 px | 57% |
-| entering at the frame edge | 78%, masked 2.2 frames after half visible |
-| during a camera pan | 81% |
+| 64 px and larger | 83% |
+| 32 to 63 px | 79% |
+| under 32 px | 65% |
+| sharp, any size | 86% |
+| motion blurred, any size | 65% |
+| entering at the frame edge | 81%, masked 2.6 frames after half visible |
+| during a camera pan | 86% |
 
 Small and motion blurred faces carry the misses. The detectors themselves find a
 24 px face about half the time, at any threshold. On a 1600 px frame a 24 px face
 is a person far across the room.
+
+This file is the hardest of the four: the same measurement on the other two
+files with pseudo-labels covers 88% and 86% of pasted faces against 79% here.
+
+Coverage is a proxy for the thing that matters, so this build also measures the
+thing itself: a face recogniser (SFace) embeds every face of the source and the
+same rectangle of the blurred copy. The mask defeats it on the faces it can
+recognise at all, and the shipped strength of six blocks across a face is the
+setting that does so — twelve blocks leaves ten of sixty large faces still
+recognisable. On this footage the recogniser identifies people at
+conversational distance and mostly fails on faces across a room, which bounds
+what the misses below can give away. `docs/report.md` section 12 has the
+numbers and what they do not prove.
 
 The first build reached 100 percent on the agreed faces by masking a third of
 every frame. This build masks 2 percent and keeps hands untouched; the misses
@@ -184,6 +198,7 @@ Then, for a video:
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO
 .venv\Scripts\python.exe -m eval.misses VIDEO --images SOME_FOLDER
+.venv\Scripts\python.exe -m eval.reid VIDEO BLURRED_COPY
 ```
 
 `eval.misses` lists the stretches where YuNet saw a box at full threshold that
@@ -191,6 +206,13 @@ nothing confirmed and no mask covers, with one annotated frame each. The same
 list is in every audit record as `unconfirmed_runs`. Most are hands and
 objects; a change that finds more faces makes the count fall while the gates
 hold.
+
+`eval.reid` asks the question coverage only stands in for: can a face
+recogniser still put the same name to anybody in the blurred copy. It reports
+where the recogniser's threshold sits on this footage, what the mask does to a
+face it can see, and which sightings of the finished copy still match the
+source. `docs/report.md` section 12 explains what those numbers can and cannot
+prove.
 
 The sweep writes `docs/precision_report.md` and prints the settings that pass
 the gates. No step asks a person for anything.

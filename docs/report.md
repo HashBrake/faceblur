@@ -465,3 +465,208 @@ pixels on `005035`.
 - The agreement rule with no size limit: measured to admit hands on
   `004310`; boxes over 48 px keep needing YuNet at 0.6.
 - Stitching over 90 frames: 3.6 percent of hand pixels on `005035`.
+
+## 12. Is anybody still identifiable (2026-09-08)
+
+Every number before this section asks whether a mask covered a box. None of
+them asks the question the work is actually for: after the pipeline has run,
+can a machine still tell who these people are. Coverage is a proxy for that,
+and a proxy can be right about itself and wrong about the thing it stands
+for — six blocks across a face was an assumption nobody had tested.
+
+So this pass measures identity directly, with a face recogniser
+(`models/sface.onnx`, SFace, Apache 2.0, the model opencv_zoo pairs with
+YuNet; it takes the five landmarks YuNet already produces). It embeds an
+aligned face into 128 numbers; two embeddings of one person point the same
+way, of two people they do not. `eval/reid.py` is the harness, and it is
+evaluation only: the packaged build does not carry the recogniser, and
+`tests/test_models.py` fails if it ever does. A tool that redacts faces has
+no business shipping a face recogniser.
+
+### 12.1 What a probe can decide, and what it cannot
+
+The leak test embeds a face from the source frame and the same rectangle of
+the finished copy. Same frame, same box, same alignment, so the only
+difference between the two crops is what the pipeline did. A face it masked
+scores what a stranger scores; a face it missed scores near one.
+
+The first run said 1160 of 8060 sightings on `004310` still looked like the
+source face, the worst at 0.987. The pictures said otherwise: those faces are
+plainly blurred in the copy. The aligned crop around a 16 px face is mostly
+hair, shoulders and the room behind, those pixels are identical in both
+frames whatever the mask did, and they clear any threshold on their own.
+
+Two controls now decide whether a probe means anything, both against the same
+source face:
+
+- **the floor**: the same frame masked here and now, which is what a mask
+  this pipeline applies correctly leaves behind. Where the floor alone clears
+  the threshold, nothing about that face can be read off the copy.
+- **the self match**: the best the same person reaches in any other frame of
+  the source, untouched. A face the recogniser cannot match to itself
+  anywhere else in the video is a face it cannot identify at all, and whether
+  the copy of it scores 0.2 or 0.7 says nothing about anybody's privacy.
+  Taking the best of every other sighting makes this a lenient test, since
+  the best of dozens of comparisons reaches a stranger's score by itself, and
+  that is deliberate: setting a probe aside is the unsafe direction for a
+  claim about privacy, so only the clearest cases are set aside. It removes
+  five or six percent of them.
+
+`verdict` in `eval/reid.py` applies the two, and the harness reports the set
+aside counts beside the leaks rather than hiding them. Each leak also carries
+`applied`: how much the copy changed the box against how much the mask
+applied here changes it. Near zero means no mask reached that frame; near one
+means the mask ran and identity survived it. They are different failures.
+
+### 12.2 Results on the four sample files
+
+**Can the recogniser identify anyone at all.** Two sightings of one track are
+the same person by construction; two sightings a frame apart and a box apart
+cannot be. The two distributions say where the threshold sits on this
+footage, and it is not where the publication puts it.
+
+| File | Same-person pairs | Stranger pairs | Stranger median | Threshold at 1 stranger in 100 | Same people recognised there |
+|---|---|---|---|---|---|
+| `003939` | 13245 | 1057 | +0.105 | +0.482 | 45 % |
+| `004100` | 6984 | 485 | +0.204 | +0.582 | 18 % |
+| `004310` | 31233 | 17052 | +0.243 | +0.601 | 11 % |
+| `005035` | 60943 | 9457 | +0.230 | +0.568 | 16 % |
+
+`003939` is the file with people at conversational distance, and there the
+recogniser works: strangers score 0.105, the same person 0.443, and 45
+percent of same-person pairs are recognised at a threshold one stranger pair
+in a hundred reaches. On the other three, faces are 16 to 40 px across a room
+and it recognises one same-person pair in six or fewer. That is the ceiling
+on what a mask can be asked to hide there, and it is the reason section 12.4
+does not chase smaller faces.
+
+**Does the mask hide identity.** The sixty largest faces of each file,
+embedded from the source frame and again from the same frame after `redact`
+has run on it. Same alignment, so the mask is the only difference. Counts are
+faces still matched at that file's threshold:
+
+| Mask | `003939` | `004100` | `004310` | `005035` |
+|---|---|---|---|---|
+| blur, 4 blocks | 0/60 | 0/60 | 0/60 | 0/60 |
+| blur, 6 blocks (shipped) | 0/60 | 2/60 | 2/60 | 0/60 |
+| blur, 8 blocks | 0/60 | 2/60 | 2/60 | 1/60 |
+| blur, 12 blocks | 10/60 | 1/60 | 5/60 | 5/60 |
+| pixelate, 6 blocks | 0/60 | 1/60 | 0/60 | 3/60 |
+| solid | 0/60 | 0/60 | 0/60 | 1/60 |
+
+`strength` is how many blocks lie across a face, so 12 keeps four times the
+detail of 6. On `003939`, where the recogniser can actually identify people,
+6 blocks defeat it on all sixty faces and 12 blocks leave ten recognisable.
+The default of 6 was an assumption ("6 leaves nothing to recognise" in
+`settings.py`); it is now measured, and so is the fact that the next setting
+up would have been a mistake. A wider ellipse helps too — 1.4 x 1.45 leaves
+nothing matched on any file — but the shipped 1.1 x 1.15 already does on the
+file that matters, at a third of the pixels destroyed.
+
+**What is left in the finished copies.** Every sighting of every track, in
+the source and in the blurred copy of that same frame:
+
+| File | Sightings | Crop mostly room | Not identifiable in the source | Can decide | Still matched | Worst |
+|---|---|---|---|---|---|---|
+| `003939` | 3262 | 190 | 44 | 3028 | 173 (5.7 %) | +0.797 |
+| `004100` | 1241 | 48 | 67 | 1126 | 97 (8.6 %) | +0.751 |
+| `004310` | 8110 | 576 | 482 | 7052 | 671 (9.5 %) | +0.814 |
+| `005035` | 12010 | 608 | 633 | 10769 | 232 (2.2 %) | +0.725 |
+
+An untouched face scores 0.99 against itself. Nothing in any of the four
+copies comes near that: the worst is 0.814, and every leak carries `applied`
+of 0.56 or more, which is to say the mask ran on every one of them. The row
+above sets the scale for how much of this is noise: a solid black ellipse,
+which cannot carry a face at all, still clears the threshold on one of the
+sixty largest faces of `005035`. What
+these rows report is not a face the pipeline missed. It is a blurred face
+whose crop still leans the right way, and they sit where the measurement is
+weakest — by size on `004310`, 24 of 2235 sightings of 40 px and over, 170 of
+1725 between 24 and 40, and 477 of 3092 under 24 px, in a size class where
+the recogniser is wrong about the *untouched* source seven times in eight.
+
+### 12.3 The caches this harness had been reading were stale
+
+The first leak run pointed at four frames of `004100` where an 85 px face
+sat unmasked in the copy, and the box diff against the source agreed: those
+pixels had not been touched. They had. The evaluation cache holds every
+detector's raw candidates for every frame, and it was built halfway through
+the pass of 2026-09-07, before that pass changed which boxes get a
+confirmation crop. The cache version number had been bumped in the same
+session, so nothing said the file was out of date, and every measurement
+since described a build that no longer existed.
+
+The cache now carries a fingerprint of `faceblur/detect.py` and of the
+settings that decide what it holds, and a mismatch rebuilds it
+(`eval/common.py`, `tests/test_eval_cache.py`). An edit to a comment in
+`detect.py` costs a rebuild, about a minute a video on four workers; a
+silently wrong measurement costs more.
+
+Rebuilt, and with the pseudo-labels rebuilt on top of them, the shipped
+defaults measure:
+
+| File | Recall | Off-face mean (detector boxes) | Exposed 40+ | Exposed 24-40 | Hands | Continuity |
+|---|---|---|---|---|---|---|
+| `004100` | 100.0 % | 0.18 % (0.04 %) | 91 | 55 | 0.00 % | 99.0 % |
+| `004310` | 99.7 % | 0.77 % (0.29 %) | 62 | 116 | 0.00 % | 99.5 % |
+| `005035` | 99.7 % | 0.43 % (0.13 %) | 435 | 1196 | 0.09 % | 93.5 % |
+
+The synthetic sets are cut from those same pseudo-labels, so they were
+rebuilt too (`eval/synthetic.py` now stamps a set with the labels it came
+from). On the shipped defaults they cover 78.7 percent of pasted faces on
+`004310`, 87.8 on `004100` and 86.2 on `005035`; on `004310`, 83 percent of
+faces 64 px and over, 79 of 32 to 63 px, 65 under 32 px, 86 sharp against 65
+motion blurred, 81 entering at the frame edge at 2.6 frames' delay, and 86
+during a pan.
+
+Section 11 reported 98.4 / 99.8 / 99.6 percent recall and 55 / 62 / 456
+exposed frames of 40 px and more for the same settings on the same files.
+Recall and off-face masking read better on honest evidence and the exposure
+proxy reads worse on `004100`, where it went from 55 frames to 91. The
+differences are the crop rule that moved: which boxes get a confirmation
+crop decides which faces are confirmed at the margin. The table above is the
+current build measured on its own evidence, and it replaces section 11's.
+
+### 12.4 Scanning at more pixels: measured, not taken
+
+The standing open item was that faces under 32 px are covered about half the
+time, and that a larger scan would raise it. Two ways to do that were
+measured on 60 frames of `004310` that carry a hand oracle, against the
+shipped scan (the whole frame at 1280 and at 1920):
+
+| Scan | Boxes found | under 24 px | Boxes on a hand | Time a frame |
+|---|---|---|---|---|
+| shipped | 574 | 363 | 0 | 155 ms |
+| plus a 2560 pass | 593 | 373 | 0 | 256 ms |
+| 2x2 tiles at 1440 | 603 | 373 | 1 | 316 ms |
+
+Tiling doubles the cost of detection, buys five percent more boxes, nearly
+all of them the smallest, and puts one on the wearer's hand — the failure
+the whole precision rebuild exists to prevent. The extra whole-frame pass is
+cheaper and clean on hands, and still costs 65 percent more time for 3
+percent more boxes.
+
+Neither is worth it, and section 12.2 says why more plainly than the cost
+does: at those sizes the recogniser cannot identify anybody in the untouched
+source either. The tiling code was written for this pass and is removed
+again; what remains of it is this table.
+
+### 12.5 What this does not prove
+
+- The recogniser only ever sees faces the source side detectors find. A leak
+  count of zero is not proof of anonymity; it is proof that no face this
+  pipeline can find survives its own mask. The size curve bounds what the
+  faces it cannot find could give away, and that bound is the argument, not
+  the leak count on its own.
+- SFace is one recogniser, trained on portrait photographs. A better model, a
+  model trained on this kind of camera, or a person who knows the people in
+  the room may do what it cannot. "Not identifiable by SFace at four metres"
+  is the claim; "anonymous" is not.
+- The threshold is re-read off this footage rather than taken from the
+  publication, because a wide angle camera at four metres is not a portrait
+  set. It is set where one stranger pair in a hundred clears it, which is
+  strict on the leak side and honest about the cost: at that threshold the
+  recogniser also fails to recognise most same-person pairs.
+- The mask curve and the ellipse curve run on the largest faces in each file,
+  where the recogniser works at all. They say what the mask does to a face it
+  can see, not what it does on average.

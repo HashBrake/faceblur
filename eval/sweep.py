@@ -37,7 +37,7 @@ def _init(video):
     global _INPUTS, _SYNTH
     video = Path(video)
     _INPUTS = measure.load_inputs(video)
-    _SYNTH = pickle.loads(synthetic.data_path(video).read_bytes())
+    _SYNTH = synthetic.load(video)
 
 
 def _run(changes):

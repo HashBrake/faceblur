@@ -1,6 +1,7 @@
 """Shared pieces of the evaluation harness."""
 from __future__ import annotations
 
+import hashlib
 import json
 import multiprocessing
 import pickle
@@ -22,6 +23,18 @@ from faceblur.settings import Settings  # noqa: E402
 # confirmation views, the third detector, and the camera shift per frame;
 # 3 cuts confirmation crops from conf_agree (0.4) up.
 CACHE_VERSION = 3
+
+# The version above is a hand-kept number, and on 2026-09-08 it did not save
+# the caches from going stale: they were built halfway through the pass that
+# bumped it, and the crop rule moved afterwards. Nothing said so, and the
+# harness went on measuring a build that no longer existed. So the cache also
+# carries a fingerprint of the code and settings that decide what it holds,
+# and a mismatch rebuilds it. An edit to a comment in detect.py costs a
+# rebuild, about a minute a video; a silently wrong measurement costs more.
+DETECT_SRC = REPO / "faceblur" / "detect.py"
+RAW_SETTINGS = ("engine", "det_sizes", "verify", "confirm_on_crops", "crop_size",
+                "crop_scale", "conf", "conf_agree", "agree_max_px", "max_face_frac",
+                "grow_face_frac", "nms_detect")
 
 FOOTAGE = REPO / "footage"
 CACHE_DIR = REPO / "eval" / "cache"          # derived from footage, git ignores it
@@ -109,6 +122,14 @@ def cache_path(video: Path) -> Path:
     return CACHE_DIR / f"{video.stem}.raw.pkl"
 
 
+def fingerprint(settings: Settings) -> str:
+    """What the raw cache depends on: the detection code and its settings."""
+    h = hashlib.sha256(DETECT_SRC.read_bytes())
+    for name in RAW_SETTINGS:
+        h.update(f"{name}={getattr(settings, name)!r};".encode())
+    return h.hexdigest()[:16]
+
+
 def build_cache(video: Path, settings: Settings | None = None,
                 workers: int | None = None) -> dict:
     """Raw candidates for every frame, from every backend at every size.
@@ -117,12 +138,13 @@ def build_cache(video: Path, settings: Settings | None = None,
     and detects on its share of the frames.
     """
     path = cache_path(video)
+    settings = settings or Settings(verify=True)
+    stamp = fingerprint(settings)
     if path.exists():
         cache = pickle.loads(path.read_bytes())
-        if cache.get("version") == CACHE_VERSION:
+        if cache.get("version") == CACHE_VERSION and cache.get("fingerprint") == stamp:
             return cache
-        path.unlink()          # an older layout: rebuild
-    settings = settings or Settings(verify=True)
+        path.unlink()          # an older layout, or a detector that has moved
     from faceblur.detect import default_workers
     workers = workers or default_workers()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -138,8 +160,9 @@ def build_cache(video: Path, settings: Settings | None = None,
                 _detect_share, [(str(video), k, workers) for k in range(workers)]):
             frames.update(part)
             shifts.update(part_shifts)
-    cache = {"version": CACHE_VERSION, "video": video.name, "shape": shape,
-             "det_sizes": list(settings.det_sizes), "frames": frames, "shifts": shifts}
+    cache = {"version": CACHE_VERSION, "fingerprint": stamp, "video": video.name,
+             "shape": shape, "det_sizes": list(settings.det_sizes),
+             "frames": frames, "shifts": shifts}
     path.write_bytes(pickle.dumps(cache))
     return cache
 
