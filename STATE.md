@@ -36,7 +36,15 @@ person's identity and leave hands, cards, screens and everything else untouched.
   the next setting up would not be, and that scanning at more pixels is not
   worth its cost. Caches and pseudo-labels now carry a fingerprint of what
   they were built from and rebuild themselves when it moves.
-- Tests: `tests/`, 819 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- The gate of 2026-09-08 (section 13 of `docs/report.md`): `faceblur/verify.py`
+  detects on the finished copy and reports faces sitting on pixels the run
+  never changed. `--check-output` records them in the audit record;
+  `--quarantine` moves such a copy into a `quarantine` folder instead of
+  shipping it. It is the only check in the project that can see a miss. On
+  the four sample files it finds 127 boxes over 120 frames of 7926: real
+  missed faces on the washroom files, the wearer's hand on the bat on the
+  table tennis one. With the gate on, all four would be held back.
+- Tests: `tests/`, 839 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
   rebuilt after 2026-09-07; the spec includes the third model.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
@@ -97,6 +105,7 @@ cache is rebuilt on first use (about a minute a video with four workers).
 .venv\Scripts\python.exe -m pytest tests                  # tests
 .venv\Scripts\python.exe -m eval.misses VIDEO --images DIR   # where faces may still be missed
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED         # is anybody still identifiable
+.venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # what the copy still shows
 ```
 
 ## Known limits and open items
@@ -126,6 +135,10 @@ cache is rebuilt on first use (about a minute a video with four workers).
   detector-only gate is the one that must not move.
 - No installer, no code signing, no cloud runner. `faceblur.batch.run_video`
   takes a `submit` callable so a cloud runner can map jobs onto anything.
+- The output-side check uses the same detectors as the pipeline, so it
+  reports the wearer's hand as a face too. The track-level rules that keep
+  hands out of the mask have no counterpart there, and giving it one is the
+  obvious next piece of work on it.
 - The recogniser bounds one thing only: what SFace can do at these distances.
   It works on `003939`, where people are at conversational distance, and is
   near useless on faces across a room. A better model, or a person who knows
@@ -149,6 +162,7 @@ cache is rebuilt on first use (about a minute a video with four workers).
 | `faceblur/pipeline.py` | audit record, single-process path |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/` | label-free evaluation, the sweep, the misses yardstick |
+| `faceblur/verify.py` | the check that reads the output: faces still in the copy, and the quarantine gate |
 | `eval/reid.py` | the recogniser: threshold on this footage, what the mask does, what is left in the copy |
 | `models/sface.onnx` | face recogniser, evaluation only, never in the build |
 | `docs/report.md` | quality, accuracy, speed, hardware, assumptions, done and not done |

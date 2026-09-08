@@ -5,7 +5,9 @@
              [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
-             [--no-third] [--no-camera] [--report PATH] [--no-progress] [--recursive]
+             [--no-third] [--no-camera] [--check-output] [--check-stride N]
+             [--quarantine] [--quarantine-px N]
+             [--report PATH] [--no-progress] [--recursive]
 
 INPUT is a video file or a folder of videos. OUTPUT defaults to a folder named
 <input>_blurred next to the input. The exit code is 1 when any file failed.
@@ -108,18 +110,37 @@ class Reporter:
 def describe(record: AuditRecord | dict, dst: Path) -> str:
     r = record if isinstance(record, dict) else record.to_dict()
     if r["status"] == STATUS_DONE:
+        if r.get("quarantined"):
+            dst = dst.parent / "quarantine" / dst.name
         return (f"  -> {dst}  ({r['tracks']} faces tracked, "
                 f"{r['frames_with_mask']}/{r['frames']} frames masked, "
                 f"{100 * r['masked_mean']:.2f}% of the frame on average, "
                 f"{r['frames_over_budget']} frames over budget, "
                 f"{r.get('frames_copied', 0)} frames copied untouched, "
                 f"{r['detect_seconds']}s detect, {r['encode_seconds']}s write, "
-                f"{'/'.join(sorted(set(r.get('compute', {}).values())) or ['cpu'])})")
+                f"{'/'.join(sorted(set(r.get('compute', {}).values())) or ['cpu'])})"
+                + check_line(r))
     if r["status"] == STATUS_SKIPPED:
         return f"  Already done: {dst}"
     if r["status"] == STATUS_STOPPED:
         return "  Stopped"
     return f"  Failed: {r['error']}"
+
+
+def check_line(r: dict) -> str:
+    """What the second pass over the copy found, when there was one."""
+    if not r.get("checked_frames"):
+        return ""
+    faces = r.get("residual_faces", 0)
+    if not faces:
+        return f"\n     checked {r['checked_frames']} frames of the copy: no face left in it"
+    sizes = r.get("residual_by_size", {})
+    text = (f"\n     checked {r['checked_frames']} frames of the copy: {faces} faces still "
+            f"there over {r.get('residual_frames', 0)} frames "
+            f"({sizes.get('40+ px', 0)} of 40 px and over)")
+    if r.get("quarantined"):
+        text += ", held in quarantine"
+    return text
 
 
 def run_serial(jobs, settings, reporter) -> list[dict]:
@@ -227,6 +248,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="re-encode every frame instead of copying face free stretches")
     parser.add_argument("--hwaccel", choices=["none", "cuda"], default=defaults.hwaccel,
                         help="hardware decode (default: %(default)s)")
+    parser.add_argument("--check-output", dest="check_output", action="store_true",
+                        help="detect on the finished copy as well: a face found there "
+                             "on pixels nothing changed is one this run missed. "
+                             "Costs a second detection pass")
+    parser.add_argument("--check-stride", type=int, default=defaults.check_stride,
+                        help="check every Nth frame of the copy (default: %(default)s)")
+    parser.add_argument("--quarantine", action="store_true",
+                        help="move a copy that still shows a face into a quarantine "
+                             "folder instead of shipping it. Implies --check-output")
+    parser.add_argument("--quarantine-px", type=int, default=defaults.quarantine_min_px,
+                        help="the smallest face that holds a copy back "
+                             "(default: %(default)s px)")
     parser.add_argument("--report", default=None,
                         help="write one JSON file holding every audit record here")
     parser.add_argument("--recursive", action="store_true",
@@ -267,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
             chunk_seconds=args.chunk_seconds,
             copy_clean=args.copy_clean,
             hwaccel=args.hwaccel,
+            check_output=args.check_output or args.quarantine,
+            check_stride=args.check_stride,
+            quarantine=args.quarantine,
+            quarantine_min_px=args.quarantine_px,
         )
     except SettingsError as exc:
         print(f"faceblur: {exc}", file=sys.stderr)

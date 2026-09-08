@@ -232,6 +232,19 @@ class Settings:
     nms_detect: float = 0.35
     nms_yunet: float = 0.30
 
+    # --- checking the finished copy ------------------------------------------
+    # Detect on the output as well: a face found there, on pixels nothing
+    # changed, is one this run missed, and nothing that reads the source can
+    # see it. Costs a second detection pass over the video, so it is off by
+    # default and worth turning on for anything that leaves the machine.
+    check_output: bool = False
+    check_stride: int = 1
+    # With this on, an output that still shows a face of quarantine_min_px or
+    # more is moved into a quarantine folder beside it instead of shipping.
+    # Implies check_output.
+    quarantine: bool = False
+    quarantine_min_px: int = 24
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "det_sizes", tuple(int(s) for s in self.det_sizes))
         self.validate()
@@ -249,6 +262,10 @@ class Settings:
             raise SettingsError(f"conf must be above 0 and at most 1, got {self.conf}")
         if self.chunk_seconds < 0 or self.min_copy_seconds < 0:
             raise SettingsError("chunk_seconds and min_copy_seconds must be 0 or more")
+        if self.check_stride < 1:
+            raise SettingsError(f"check_stride must be at least 1, got {self.check_stride}")
+        if self.quarantine_min_px < 0:
+            raise SettingsError("quarantine_min_px must be 0 or more")
         if self.crop_size < 64 or self.crop_scale < 1.0:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
@@ -337,6 +354,7 @@ class Settings:
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "nvenc_sessions", "hwaccel",
+            "check_output", "check_stride", "quarantine", "quarantine_min_px",
             "nms_detect", "nms_yunet")}
         d["det_sizes"] = list(self.det_sizes)
         return d

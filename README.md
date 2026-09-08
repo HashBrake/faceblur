@@ -159,6 +159,7 @@ faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
          [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
          [--hwaccel none|cuda] [--tta 0|1|2] [--no-third] [--no-camera]
+         [--check-output] [--check-stride N] [--quarantine] [--quarantine-px N]
          [--report PATH] [--recursive] [--no-progress]
 ```
 
@@ -174,12 +175,34 @@ defaults to a folder named `<input>_blurred` next to the input. The exit code is
 objects. On the Ego footage they touched 7.7 percent of hand pixels. Use them
 only when a missed face costs more than a damaged frame.
 
+`--check-output` runs the detectors over the finished copy as well. A face
+found there, on pixels the run never changed, is a face the run missed, and
+nothing that reads the source can see it. It costs a second detection pass,
+about the same again as the first: 32 seconds for a 33 second file on this
+PC. `--quarantine` turns that into a gate: a copy that still shows a face of
+24 px or more (`--quarantine-px`) is moved into a `quarantine` folder beside
+the output instead of shipping, with its audit record naming the frames. Use
+both for anything that leaves the machine.
+
+Read what it reports with one thing in mind: it uses the same detectors as
+the rest of the pipeline, and they call the wearer's own hand a face. The
+pipeline keeps hands out of the mask with rules the check does not have, so
+the check reports them. On the four sample files it finds 127 boxes over 120
+frames of 7926; on the table tennis file most of them are the hand holding
+the bat, and on the washroom files they are faces the run really did miss.
+`docs/report.md` section 13 goes through them.
+
 ## What it writes
 
 - `<name>_blurred.mp4`, the blurred copy, H.264 at crf 12 with the source audio.
 - `<name>_blurred.mp4.json`, the audit record: frames, tracks, how much of each
   frame was masked (mean, p95, max), frames over the mask budget, every setting,
-  the sha256 of each model, and the time taken.
+  the sha256 of each model, and the time taken. After `--check-output` it also
+  holds what a second pass over the copy found: frames checked, faces still
+  visible by size, and the frame stretches they sit in.
+- `quarantine\<name>_blurred.mp4` and its record, when `--quarantine` held a
+  copy back. The file is not deleted: it is the only blurred copy of that
+  video, and the record says which frames stopped it.
 
 ## Evaluate a new batch
 
@@ -199,6 +222,7 @@ Then, for a video:
 .venv\Scripts\python.exe -m eval.sweep VIDEO
 .venv\Scripts\python.exe -m eval.misses VIDEO --images SOME_FOLDER
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED_COPY
+.venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED_COPY --workers 4
 ```
 
 `eval.misses` lists the stretches where YuNet saw a box at full threshold that
@@ -206,6 +230,11 @@ nothing confirmed and no mask covers, with one annotated frame each. The same
 list is in every audit record as `unconfirmed_runs`. Most are hands and
 objects; a change that finds more faces makes the count fall while the gates
 hold.
+
+`faceblur.verify` is the same check `--check-output` runs, on copies that are
+already written. It needs no second environment, no labels and no oracle: it
+detects on the copy and reports the boxes nothing was done to. Its exit code
+is 1 when it finds any.
 
 `eval.reid` asks the question coverage only stands in for: can a face
 recogniser still put the same name to anybody in the blurred copy. It reports

@@ -78,6 +78,7 @@ START_HELP = "Choose videos and an output folder to start."
 STATUS_WAITING = "Waiting"
 STATUS_DETECTING = "Detecting"
 STATUS_WRITING = "Writing"
+STATUS_CHECKING = "Checking"
 STATUS_DONE = "Done"
 STATUS_FAILED = "Failed"
 STATUS_STOPPED = "Stopped"
@@ -136,6 +137,7 @@ STATUS_MARK = {
     STATUS_WAITING: "·",    # middle dot
     STATUS_DETECTING: "▶",  # right pointing triangle
     STATUS_WRITING: "▶",
+    STATUS_CHECKING: "▶",
     STATUS_DONE: "✓",       # check mark
     STATUS_FAILED: "✕",     # multiplication x
     STATUS_STOPPED: "■",    # black square

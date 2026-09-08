@@ -74,6 +74,17 @@ class AuditRecord:
     # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
     unconfirmed_runs: list = field(default_factory=list)
     unconfirmed_frames: int = 0
+    # What the finished copy still shows, from a second detection pass over the
+    # output; empty unless the run was asked for it. See faceblur/verify.py.
+    checked_frames: int = 0
+    residual_faces: int = 0
+    residual_frames: int = 0
+    residual_by_size: dict = field(default_factory=dict)
+    residual_runs: list = field(default_factory=list)
+    residual_list: list = field(default_factory=list)
+    flat_boxes: int = 0
+    quarantined: bool = False
+    check_seconds: float = 0.0
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0

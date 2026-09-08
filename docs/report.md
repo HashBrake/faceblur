@@ -670,3 +670,121 @@ again; what remains of it is this table.
 - The mask curve and the ellipse curve run on the largest faces in each file,
   where the recogniser works at all. They say what the mask does to a face it
   can see, not what it does on average.
+
+## 13. What the copy still shows (2026-09-08)
+
+Everything above reads the source. The detectors report what they found, the
+tracker what it kept, the audit how much was destroyed, and the whole
+evaluation harness compares all of it against the source as well. None of it
+can see a face that every part of it missed: a miss is invisible to the thing
+that missed it, and coverage measured that way is a statement about what the
+pipeline noticed, not about what it left behind.
+
+`faceblur/verify.py` reads the output instead. It detects on the finished
+copy, and for every box asks whether anything happened there. It needs no
+labels, no pseudo-labels, no recogniser, no second environment and nobody's
+time, and it is the only check in the project that can find a face nothing
+else in it can.
+
+### 13.1 The rule
+
+A detector fires on a blurred face too, so a box in the copy proves nothing by
+itself. Three numbers separate the cases, all inside the box:
+
+- what the copy differs from the source by,
+- what a mask applied here and now would differ by,
+- what the encoder moved on its own, measured per frame as the median
+  difference over the whole frame. Every pixel of the copy differs from the
+  source a little, because the file is re-encoded.
+
+The last one is subtracted from the other two. It matters more than it sounds:
+on the first real find — a 40 px face reflected in a washroom mirror on
+`004100`, plainly visible in the copy — a mask would have moved the box by
+14.6 and the encoder had moved it by 3.6, so the raw ratio read 0.25, a hair
+from being waved through as "the detector is firing on our own blur". With the
+encoder's own noise off both sides it reads 0.05, which is what it is.
+
+A box a mask would barely change even so — a flat wall, a dark corner — is
+counted as undecidable rather than called either way.
+
+### 13.2 Why it finds anything at all
+
+It runs the same detectors that produced the copy, so it is not an independent
+witness. Two things make it find misses anyway:
+
+- **It is stricter than the pipeline.** One confirmed detection is enough to
+  flag a frame. The pipeline needs a track: several confirmations, the
+  agreement rules, a length. Everything that keeps hands out of the mask also
+  lets a real face through when it is seen briefly, and the copy shows it.
+- **The pixels are not the same pixels.** The copy is re-encoded, so a face at
+  the confirmation margin can resolve differently in it. The mirror face at
+  frame 660 of `004100` is detected in the copy and not in the source.
+
+What it cannot do is find a face all three detectors miss in the copy as well.
+It closes the gap between "confirmed as a track" and "detected at all"; it
+does not close the gap below detection. Section 12's size curve is what bounds
+that one.
+
+### 13.3 Holding a copy back
+
+`--quarantine` turns the check into a gate: a copy that still shows a face of
+`quarantine_min_px` or more (24 by default) is moved into a `quarantine`
+folder beside the output instead of shipping, and its audit record names the
+frames. The file is not deleted — it is the only blurred copy of that video,
+and whoever picks it up decides whether to cut those frames, run it again with
+other settings, or look at them. For a training set, losing a video or a few
+frames of one costs data volume; shipping a face costs something else.
+
+### 13.4 What it found on the sample footage
+
+The four sample files, blurred with the shipped defaults, checked frame by
+frame:
+
+| File | Frames | Boxes still visible | Frames they sit in | 40+ px | 24-40 px | under 24 px | Stretches |
+|---|---|---|---|---|---|---|---|
+| `003939` | 2033 | 8 | 7 | 6 | 2 | 0 | 5 |
+| `004100` | 984 | 8 | 8 | 6 | 1 | 1 | 7 |
+| `004310` | 938 | 17 | 16 | 8 | 3 | 6 | 14 |
+| `005035` | 3971 | 94 | 89 | 52 | 21 | 21 | 58 |
+
+That is 127 boxes over 120 frames of 7926, or one frame in 66. Every one of
+them was checked by eye on the difference map for the two files looked at in
+detail, and the finds are of three kinds.
+
+**Faces the run missed.** On `004100`: a 98 px face at the left edge of frame
+642, a 104 px face at frame 812, a 43 px face at frames 398 and 399, and a
+40 px face reflected in a washroom mirror at frame 660. Nothing was masked at
+any of them. These are the reason the check exists — no measurement that
+reads the source finds them, because the pipeline needs a track before it
+masks and these were seen too briefly to make one. The mirror face at 660 is
+sharper still: the copy's detectors find it and the source's do not, because
+re-encoding moved it over the confirmation line.
+
+**The wearer's own hand.** On `005035`, the table tennis file, the biggest
+finds are the hand holding the bat: 144 px at frame 1382, 118 at 1630, 99 at
+1379, 91 at 770. The detectors call a hand a face on this footage — section
+10 measured YuNet scoring the wearer's hand on a mop at 0.74 to 0.82 — and
+the pipeline keeps them out of the mask with track-level rules that this
+check does not have. So it reports them, and on that file most of its finds
+are hands rather than faces. The check inherits the detectors' weakness; it
+does not correct it.
+
+**Faces on other surfaces.** A person on a television at frame 2487 of
+`005035`. Untouched, correctly reported, and a judgement call as to whether
+anyone would want it masked.
+
+The borderline band is real and worth stating: a verified miss on `004100`
+reads 0.19 and a masked face on `005035` reads 0.30, so a rule at 0.3 keeps
+every miss it has been shown and admits the occasional masked face along with
+them. It errs towards reporting, which is the safe direction for a gate, and
+the ratio is in the record so a borderline case can be looked at.
+
+Checking `004100`, 984 frames, costs 32 s on four workers of an RTX 3070
+against the 37 s its detection pass took: the same work again, near enough,
+since both are one detection per frame and the check decodes two files
+instead of one.
+
+With `--quarantine` on and the default of 24 px, all four sample files would
+be held back. That is the honest state of this pipeline, not a fault of the
+gate: every one of these files still shows something face-shaped that nothing
+masked, and until this pass there was no way to know it.

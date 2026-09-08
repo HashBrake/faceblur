@@ -84,3 +84,23 @@ def messi() -> Path:
 @pytest.fixture(scope="session")
 def lena() -> Path:
     return DATA / "lena.jpg"
+
+
+@pytest.fixture(scope="session")
+def video_with_face(tmp_path_factory, lena) -> Path:
+    """One second of a still face, 10 fps. The detectors find it every frame.
+
+    The face is scaled to about an eighth of the frame and padded into the
+    middle, because a face over max_face_frac of the picture is dropped as a
+    poster or a screen and nothing would be masked at all.
+    """
+    out = tmp_path_factory.mktemp("clips") / "face.mp4"
+    if out.exists():
+        return out
+    result = run_ffmpeg(["-y", "-loglevel", "error", "-loop", "1", "-i", str(lena),
+                         "-t", "1", "-r", "10", "-c:v", "libx264", "-preset", "ultrafast",
+                         "-crf", "12", "-pix_fmt", "yuv420p",
+                         "-vf", "scale=160:-2,pad=640:640:240:240:gray", str(out)])
+    if result.returncode != 0:
+        raise RuntimeError(f"could not build the face clip: {result.stderr[-500:]}")
+    return out

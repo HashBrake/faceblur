@@ -753,11 +753,14 @@ class MainWindow(QMainWindow):
         if index >= len(self.rows):
             return
         row = self.rows[index]
-        word = S.STATUS_DETECTING if stage == "detecting" else S.STATUS_WRITING
-        row.set_status(word)
-        # The two passes each walk the whole video, so each is half the row.
-        share = 0.0 if stage == "detecting" else 0.5
-        fraction = share + (0.5 * done / total if total else 0.0)
+        words = {"detecting": S.STATUS_DETECTING, "writing": S.STATUS_WRITING,
+                 "checking": S.STATUS_CHECKING}
+        row.set_status(words.get(stage, S.STATUS_WRITING))
+        # Each pass walks the whole video, so each is its own part of the row.
+        # Checking the copy is a third pass, and only some runs make it.
+        shares = {"detecting": (0.0, 0.5), "writing": (0.5, 0.5), "checking": (0.0, 1.0)}
+        share, span = shares.get(stage, (0.5, 0.5))
+        fraction = share + (span * done / total if total else 0.0)
         row.set_fraction(fraction)
 
     def _on_one_finished(self, index: int, record: dict) -> None:

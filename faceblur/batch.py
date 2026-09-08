@@ -33,6 +33,7 @@ from .redact import redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
+from .verify import check
 from .video import VideoError, VideoInfo, part_path, probe
 
 Submit = Callable[[Callable, list, int], list]
@@ -354,12 +355,56 @@ def run_video(src: Path, dst: Path, settings: Settings,
     record.frames_over_budget = len(over)
     record.flagged_frames = over[:200]
     record.encode_seconds = round(time.time() - t1, 2)
-    record.wall_seconds = round(time.time() - started, 2)
     record.status = STATUS_DONE
+
+    # ---- 6. check the copy, and hold it back if it still shows a face
+    if settings.check_output or settings.quarantine:
+        t2 = time.time()
+        report("checking", 0, n)
+        try:
+            found = check(src, dst, settings, settings.check_stride, submit, workers, chunk)
+        except VideoError as exc:
+            record.error = str(exc)
+            record.wall_seconds = round(time.time() - started, 2)
+            return record
+        record.checked_frames = found["frames_checked"]
+        record.residual_faces = found["residual_faces"]
+        record.residual_frames = found["residual_frames"]
+        record.residual_by_size = found["residual_by_size"]
+        record.residual_runs = found["residual_runs"]
+        record.residual_list = found["residual_list"]
+        record.flat_boxes = found["flat_boxes"]
+        record.check_seconds = round(time.time() - t2, 2)
+        report("checking", n, n)
+        big = [row for row in found["residual_list"]
+               if row["px"] >= settings.quarantine_min_px]
+        if settings.quarantine and big:
+            dst = quarantine_output(dst)
+            record.output = dst.name
+            record.quarantined = True
+
+    record.wall_seconds = round(time.time() - started, 2)
     if write_sidecar:
         import json
         sidecar_path(dst).write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
     return record
+
+
+def quarantine_output(dst: Path) -> Path:
+    """Move a copy that still shows a face out of the delivery folder.
+
+    It is not deleted: it is the only blurred copy of that video, and the
+    audit record beside it says which frames stopped it. Whoever picks it up
+    decides whether to cut those frames, run it again with other settings, or
+    look at it.
+    """
+    held = dst.parent / "quarantine"
+    held.mkdir(parents=True, exist_ok=True)
+    target = held / dst.name
+    target.unlink(missing_ok=True)
+    shutil.move(str(dst), str(target))
+    sidecar_path(dst).unlink(missing_ok=True)
+    return target
 
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
