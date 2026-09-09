@@ -1,9 +1,17 @@
 # FaceBlur report
 
 What was built, how well it works, how fast it runs, on what, and what was
-left out on purpose. Every number here was produced by the code in this
-repository with no human labels and no human judgement in the loop. Dated
-2026-09-05.
+left out on purpose. Started 2026-09-05; each later pass adds a section rather
+than rewriting an earlier one, so a number and the day it was measured stay
+together.
+
+Every number here was produced by the code in this repository with no human
+labels and no human judgement in the loop, with one exception, section 14.1:
+deciding whether a rule that sets a flagged box aside is safe needs to know
+what those boxes actually are, and nothing in this repository knows. Those 108
+boxes were labelled by eye, once, and the section says so and reports the six
+it could not call. Nothing in the pipeline or in the rest of the evaluation
+depends on a label.
 
 ## 1. The task
 
@@ -235,15 +243,19 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
   chosen to keep training data intact.
 - The window runs videos one after another; a queue of many short videos
   would go faster with videos in parallel. Not needed for the sample sizes.
+- The output-side check holds all four sample files back, correctly: they
+  still show faces. Sections 13 and 14.
 
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 741 tests
+.venv\Scripts\python.exe -m pytest tests                      # 874 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO                  # writes docs/precision_report.md
+.venv\Scripts\python.exe -m eval.reid VIDEO BLURRED           # section 12
+.venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # sections 13 and 14
 ```
 
 ## 10. Missed faces, second pass (2026-09-07)
@@ -765,9 +777,14 @@ finds are the hand holding the bat: 144 px at frame 1382, 118 at 1630, 99 at
 1379, 91 at 770. The detectors call a hand a face on this footage — section
 10 measured YuNet scoring the wearer's hand on a mop at 0.74 to 0.82 — and
 the pipeline keeps them out of the mask with track-level rules that this
-check does not have. So it reports them, and on that file most of its finds
-are hands rather than faces. The check inherits the detectors' weakness; it
-does not correct it.
+check does not have. So it reports them. The check inherits the detectors'
+weakness; it does not correct it.
+
+> The sentence that stood here said that on that file most of its finds are
+> hands rather than faces. That was true of the finds named above, which are
+> the largest ones, and section 14.1 shows it is not true of the finds: on
+> `005035` there are 34 faces to 16 hands. It was written from the top of the
+> list rather than from the list.
 
 **Faces on other surfaces.** A person on a television at frame 2487 of
 `005035`. Untouched, correctly reported, and a judgement call as to whether
@@ -788,3 +805,200 @@ With `--quarantine` on and the default of 24 px, all four sample files would
 be held back. That is the honest state of this pipeline, not a fault of the
 gate: every one of these files still shows something face-shaped that nothing
 masked, and until this pass there was no way to know it.
+
+## 14. Telling a hand from a face in the output-side check (2026-09-09)
+
+Section 13 left one thing open: the check that reads the finished copy runs
+the same face detectors that produced it, and they call the wearer's own hand
+a face. The pipeline keeps hands out of the mask with track-level rules — a
+hand is confirmed two or three frames at a time and never earns a sure track
+— and a check that reads one frame at a time has no counterpart to them. It
+was called the obvious next piece of work, and the thing standing between
+`--quarantine` and being usable unattended.
+
+Half of that turned out to be right.
+
+### 14.1 What the check was actually finding
+
+Before building anything, every one of the 108 boxes the check reports on the
+four sample files was looked at, one at a time, on a crop of the source around
+it. That is one person's eye on 108 pictures, several of them motion blurred
+and none of them large, so six could not be called at all and are reported
+apart from the rest. It is the only ground truth this question has, and
+nothing below means anything without it.
+
+| File | Boxes | A face | The wearer's hand | Neither | Could not say |
+|---|---|---|---|---|---|
+| `003939` | 8 | 6 | 2 | 0 | 0 |
+| `004100` | 8 | 7 | 0 | 1 | 0 |
+| `004310` | 17 | 5 | 2 | 6 | 4 |
+| `005035` | 75 | 34 | 16 | 23 | 2 |
+| **all** | **108** | **52** | **20** | **30** | **6** |
+
+At 40 px and over, where identity is at stake at all, it is 30 faces, 16
+hands, 7 neither and 3 unsayable.
+
+Section 13.4 said that on the table tennis file most of the check's finds are
+the hand holding the bat. That was true of the finds it named, which were the
+largest ones, and it is not true of the finds: on `005035` there are 34 faces
+against 16 hands, and over the four files the check is finding real faces
+about two and a half times as often as it is finding hands. The rest, "neither",
+is a television, a picture on a wall, a flat wall, and motion smears.
+
+So the hand rule is worth having, and it is **not** what stands between the
+gate and unattended use. What stands there is that these four copies still
+show around fifty faces that nothing masked. No rule about hands moves that.
+
+### 14.2 The rule
+
+`faceblur/hands.py`. Two models, both MediaPipe's, both Apache 2.0, converted
+from the tflite in its wheel once and offline by `models/make_hands.py`; the
+conversion agrees with the tflite to 1.5e-4 on every raw output. MediaPipe
+itself runs only in `.venv-eval`, and this has to run in the main environment,
+which has onnxruntime and nothing else. Neither model is loaded unless
+`--check-output` or `--quarantine` is on, and then only for a box the check
+has already flagged, so the pipeline's own cost is untouched.
+
+**A fixed window, not a multiple of the box.** The first attempt cropped a
+multiple of the flagged box, the way the face confirmation cuts its crops, and
+it was unstable in a way that is easy to miss: the same face read 0.00 hand at
+one multiple and 1.00 at the next. What the palm detector makes of a crop
+depends on how large a hand is inside it, and a multiple of the box holds that
+constant only when the box is the hand. A fixed pixel window downscaled to the
+model's own 192 puts a hand at the size the model was trained for whatever
+size the box around it happens to be. Two windows, 384 and 512 px: one 512
+window sets aside 12 of the 20 hands, both together 13, a third at 768 adds
+none.
+
+**A second model, because the first is loose.** Of the 138 boxes the palm
+detector put on the crops taken around those 108 finds, the landmark model
+rejects 97, and two crops in five carry one it rejects. That matters more than
+the raw rate, because the region a palm box hands on is 2.6 times its own
+size: an invented hand covers whatever is near it. On `004100` frame 450 the
+palm detector put a box on a man's shoulder and its region covered the real
+missed face beside it. So every palm box is warped to 224x224 and put to
+MediaPipe's hand-landmark model, which returns how sure it is that the
+rectangle holds a hand, and only a confirmed one counts. The score needs no
+sigmoid, whatever MediaPipe's graph does with it downstream: this model
+already returns a probability, and a sigmoid would compress black (0.007) and
+a hand (0.89) into 0.50 and 0.71 and leave nothing to threshold.
+
+That second model is the whole difference, and the clearest way to see it is
+to run the same 1050 combinations of window set, palm floor, region and
+coverage with it and without it:
+
+|  | combinations that lose no face | best of those | how many reach it |
+|---|---|---|---|
+| palm detector alone | 256 of 1050 | 11 of 20 hands | 4 |
+| with the confirmation at 0.7 | **1050 of 1050** | **13 of 20 hands** | 24 |
+
+Without the confirmation there is a rule that reaches 11 hands and loses no
+face, and it is a needle: from it, growing the region from the palm box to
+twice the palm box loses seven faces, and tightening the coverage from 0.3 to
+0.7 drops it from 11 hands to 1. With the confirmation nothing in that grid
+loses a face at all, and the geometry stops mattering — which is what makes
+this safe to put behind a gate rather than merely good on this footage.
+
+**Where the settings sit.** Hands set aside of 20, then faces lost of 52, over
+the palm detector's floor and the landmark model's confirmation, with the two
+windows that ship, the region MediaPipe itself uses and a coverage of half the
+box. The shipped setting is the bold row at palm 0.4:
+
+| confirmation | palm 0.3 | palm 0.4 | palm 0.5 | palm 0.6 | palm 0.7 |
+|---|---|---|---|---|---|
+| 0.50 | 14, **2** | 14, **2** | 13, **2** | 12, **2** | 11, **2** |
+| 0.60 | 14, **1** | 14, **1** | 13, **1** | 12, **1** | 11, **1** |
+| 0.65 | 14, 0 | 14, 0 | 13, 0 | 12, 0 | 11, 0 |
+| **0.70** | 13, 0 | 13, 0 | 12, 0 | 11, 0 | 10, 0 |
+| 0.75 | 11, 0 | 11, 0 | 11, 0 | 10, 0 | 9, 0 |
+| 0.80 | 10, 0 | 10, 0 | 10, 0 | 9, 0 | 8, 0 |
+
+The confirmation is the setting that decides, and 0.7 is one step inside where
+it stops losing faces. Around the shipped setting — the two windows, palm
+floor 0.4, MediaPipe's own region, coverage half the box — every single step
+holds: palm floor 0.3 gives 13 hands and no face, 0.7 gives 10; region 1.6
+gives 12, 2.0 gives 13; coverage 0.3 and 0.7 both give 13. Nothing on that
+plateau costs a face.
+
+### 14.3 What it does
+
+Run over the four sample files, with the shipped defaults:
+
+| File | Boxes | Reported as faces | Set aside as hands | Held back? |
+|---|---|---|---|---|
+| `003939` | 8 | 7 | 1 | yes |
+| `004100` | 8 | 8 | 0 | yes |
+| `004310` | 17 | 15 | 2 | yes |
+| `005035` | 75 | 64 | 11 | yes |
+| **all** | **108** | **94** | **14** | |
+
+Against the labels: **13 of the 20 hands set aside, 0 of the 52 faces, 0 of
+the 30 that are neither, and 1 of the 6 that could not be called.** The seven
+hands it leaves are reported as faces, as before.
+
+A hand stays in `residual_list`, marked with the coverage that decided it. A
+rule that quietly dropped what it disagreed with would be worth nothing to an
+auditor. It is left out of `residual_faces`, out of `residual_by_size`, out of
+`residual_runs`, and out of what the gate reads.
+
+**No file is released by this.** All four are still held back, and correctly:
+every one of them still shows faces nothing masked. What the rule buys is a
+record that says which finds are hands, and a gate that will not hold a copy
+back for a hand alone.
+
+### 14.4 Cost
+
+Nothing, within the noise of the measurement, which was the one genuine
+surprise of this pass.
+
+`005035`, 3971 frames, 75 flagged boxes, four workers on an RTX 3070, the
+whole check timed end to end in one process so the three runs are comparable:
+
+| | Seconds | Faces reported | Hands set aside |
+|---|---|---|---|
+| hand rule off | 341 | 75 | — |
+| hand models on the GPU | **338** | 64 | 11 |
+| hand models on the CPU | 385 | 64 | 11 |
+
+On `004100`, 984 frames and 8 flagged boxes, there is nothing to see either:
+34 to 36 seconds whichever way round, repeated.
+
+Two models, two windows each and a landmark pass per palm box sounds like a
+lot until the arithmetic: the rule runs on the boxes the check has already
+flagged, which is 75 frames of 3971 on the worst file and 8 of 984 on the
+next. Both models are small — 192x192 and 224x224 — beside a 1600x1300
+detection pass.
+
+The expectation going in was the opposite, and the setting `hand_device` is
+what is left of it. Each worker already holds about 850 MB of face-detector
+graphs, four of them share an 8 GB card, and section 10.4 records six workers
+reaching 7.3 GB and DirectML paging; two more models per worker looked like it
+would tip that over. It does not: on the GPU the rule is free, and moving it
+to the CPU to save the memory costs 13 percent instead. `hand_device` stays,
+defaulting to `auto` with the rest, for a machine where the card is smaller.
+
+Both devices set aside the same 11 hands and report the same 64 faces. A gate
+whose answer depended on which device it ran on would not be one.
+
+### 14.5 What it does not do
+
+- **Seven hands still read as faces**, one on `003939` and six on `005035`.
+  They are the ones where neither window shows the palm detector enough of a
+  hand to get a confirmed box over the flagged one — a fist gripping a bat,
+  side on, in motion. One more is available at a confirmation of 0.65 rather
+  than 0.7, at no measured cost in faces, and it was not taken: 0.65 is the
+  last value before the cliff, and one step is the margin this rule is worth
+  spending on a fourteenth hand.
+- **The 30 finds that are neither a face nor a hand are untouched.** A person
+  on a television, a picture on a wall, a flat wall, a motion smear. They hold
+  copies back exactly as before. A screen detector would be a project of its
+  own and is not obviously wanted: masking a television is a policy question,
+  not a detection one.
+- **The labelling is one pass by one pair of eyes** over 108 crops, 9 to 187
+  px, several motion blurred. Six could not be called and are counted apart;
+  the rule flagged one of those six. A second person would not agree with
+  every call, and the numbers above should be read with that in them.
+- **The rule reads the source frame, not the copy.** Nothing masks a hand, so
+  it looks the same in both, and the source is the sharper of the two. If a
+  future change ever masked hands on purpose, this would have to change with
+  it.

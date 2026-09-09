@@ -78,6 +78,12 @@ class AuditRecord:
     # output; empty unless the run was asked for it. See faceblur/verify.py.
     checked_frames: int = 0
     residual_faces: int = 0
+    # Boxes the check found that MediaPipe's hand models say are the wearer's
+    # own hand. They are in residual_list, marked, and in no other count.
+    residual_hands: int = 0
+    # The largest face still visible, over every row, not just the 200 the
+    # record carries. This is what the quarantine gate reads.
+    residual_max_px: int = 0
     residual_frames: int = 0
     residual_by_size: dict = field(default_factory=dict)
     residual_runs: list = field(default_factory=list)

@@ -160,7 +160,7 @@ faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
          [--hwaccel none|cuda] [--tta 0|1|2] [--no-third] [--no-camera]
          [--check-output] [--check-stride N] [--quarantine] [--quarantine-px N]
-         [--report PATH] [--recursive] [--no-progress]
+         [--no-hand-rule] [--report PATH] [--recursive] [--no-progress]
 ```
 
 ```
@@ -184,13 +184,20 @@ PC. `--quarantine` turns that into a gate: a copy that still shows a face of
 the output instead of shipping, with its audit record naming the frames. Use
 both for anything that leaves the machine.
 
-Read what it reports with one thing in mind: it uses the same detectors as
-the rest of the pipeline, and they call the wearer's own hand a face. The
-pipeline keeps hands out of the mask with rules the check does not have, so
-the check reports them. On the four sample files it finds 127 boxes over 120
-frames of 7926; on the table tennis file most of them are the hand holding
-the bat, and on the washroom files they are faces the run really did miss.
-`docs/report.md` section 13 goes through them.
+The check uses the same detectors as the rest of the pipeline, and they call
+the wearer's own hand a face. So before it reports anything it asks
+MediaPipe's hand models, which ship with the build, whether the box is a hand;
+one that is stays in the record with the coverage that decided it and does not
+hold the copy back. `--no-hand-rule` turns that off. On the four sample files
+the rule sets aside 13 of the 20 hands and none of the 52 faces.
+
+Read what is left with the size in mind. The check finds 108 boxes over 7926
+frames of the sample footage, and every one of them was looked at by eye: 52
+are faces the run really did miss, 20 are the wearer's hand, 30 are neither —
+a television, a picture on a wall, a motion smear — and 6 could not be called.
+`docs/report.md` sections 13 and 14 go through them. Faces outnumber hands two
+and a half to one, so a copy the gate holds back is usually being held back
+for the right reason.
 
 ## What it writes
 
@@ -199,7 +206,8 @@ the bat, and on the washroom files they are faces the run really did miss.
   frame was masked (mean, p95, max), frames over the mask budget, every setting,
   the sha256 of each model, and the time taken. After `--check-output` it also
   holds what a second pass over the copy found: frames checked, faces still
-  visible by size, and the frame stretches they sit in.
+  visible by size, the frame stretches they sit in, and how many of the boxes
+  it found were the wearer's hand.
 - `quarantine\<name>_blurred.mp4` and its record, when `--quarantine` held a
   copy back. The file is not deleted: it is the only blurred copy of that
   video, and the record says which frames stopped it.
@@ -233,8 +241,9 @@ hold.
 
 `faceblur.verify` is the same check `--check-output` runs, on copies that are
 already written. It needs no second environment, no labels and no oracle: it
-detects on the copy and reports the boxes nothing was done to. Its exit code
-is 1 when it finds any.
+detects on the copy and reports the boxes nothing was done to, having first
+asked the hand models which of them are the wearer's own hand. Its exit code
+is 1 when any face is left.
 
 `eval.reid` asks the question coverage only stands in for: can a face
 recogniser still put the same name to anybody in the blurred copy. It reports

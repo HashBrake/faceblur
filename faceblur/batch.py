@@ -91,6 +91,26 @@ def _bank(settings: Settings) -> DetectorBank:
     return bank
 
 
+_HAND_RULES: dict = {}
+
+
+def _hand_rule(settings: Settings):
+    """The worker's cached hand models, built the first time the check asks.
+
+    Kept apart from `_bank` because most runs never build it: the models load
+    only when the output-side check is on and the hand rule with it.
+    """
+    from .hands import HandRule
+
+    key = (settings.hand_device, settings.hand_windows, settings.hand_conf)
+    rule = _HAND_RULES.get(key)
+    if rule is None:
+        rule = HandRule(settings, threads=_THREADS)
+        _HAND_RULES.clear()
+        _HAND_RULES[key] = rule
+    return rule
+
+
 def detect_job(job: dict) -> dict:
     """Detect on frames start to end. Returns per frame strong and weak lists."""
     src, info, times = Path(job["src"]), job["info"], job["times"]
@@ -369,6 +389,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
             return record
         record.checked_frames = found["frames_checked"]
         record.residual_faces = found["residual_faces"]
+        record.residual_hands = found["residual_hands"]
+        record.residual_max_px = found["residual_max_px"]
+        record.model_sha256 = {**record.model_sha256, **found["hand_models"]}
+        record.compute = {**record.compute, **found["hand_compute"]}
         record.residual_frames = found["residual_frames"]
         record.residual_by_size = found["residual_by_size"]
         record.residual_runs = found["residual_runs"]
@@ -376,9 +400,12 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.flat_boxes = found["flat_boxes"]
         record.check_seconds = round(time.time() - t2, 2)
         report("checking", n, n)
-        big = [row for row in found["residual_list"]
-               if row["px"] >= settings.quarantine_min_px]
-        if settings.quarantine and big:
+        # Hands do not hold a copy back. They are in the record either way.
+        # `residual_faces` has to be asked as well as the size: a threshold of
+        # zero would otherwise hold back a copy that showed nothing at all.
+        held_back = (found["residual_faces"]
+                     and found["residual_max_px"] >= settings.quarantine_min_px)
+        if settings.quarantine and held_back:
             dst = quarantine_output(dst)
             record.output = dst.name
             record.quarantined = True

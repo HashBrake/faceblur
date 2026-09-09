@@ -35,6 +35,14 @@ EXPECTED = {
         "043540a05268e7b6392a949ec708a707da66151a32bcb5dbb6f9e685bc393051",
         1259728,
     ),
+    "palm_detection.onnx": (
+        "03440370cb546a4fdcff45524300a5a8293afc84cfaf44c0b112d209386ffa30",
+        4605970,
+    ),
+    "hand_landmark.onnx": (
+        "00e6f22f25156220974589e012562ccce84b3d4b043690ac6085e8701261a9df",
+        10914627,
+    ),
 }
 
 
@@ -67,3 +75,11 @@ def test_every_model_in_the_build_carries_its_licence():
 def test_the_face_recogniser_stays_out_of_the_build():
     """A tool that redacts faces has no business shipping a face recogniser."""
     assert "sface" not in SPEC.read_text(encoding="utf-8")
+
+
+def test_the_hand_models_are_in_the_build():
+    """The gate needs them: without the hand rule it holds back every copy that
+    shows the wearer's own hand."""
+    spec = SPEC.read_text(encoding="utf-8")
+    for name in ("palm_detection.onnx", "hand_landmark.onnx"):
+        assert name in spec, f"{name} is not in the build"

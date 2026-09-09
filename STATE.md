@@ -1,7 +1,8 @@
 # STATE — handover notes
 
-Last updated: 2026-09-09. This file says where the project stands, what was
-verified, and what a new person or session should do next. The README explains
+Last updated: 2026-09-09, second pass that day. This file says where the
+project stands, what was verified, and what a new person or session should do
+next. The README explains
 how to use the tool; `docs/report.md` holds the measurements, one section per
 pass, and is the place to look before changing anything measured.
 
@@ -32,12 +33,18 @@ person's identity and leave hands, cards, screens and everything else untouched.
   longer existed.
 - Pass five, 2026-09-08 to 09, section 13: `faceblur/verify.py`, the check
   that reads the output instead of the source, and the `--quarantine` gate.
-- Tests: `tests/`, 839 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- Pass six, 2026-09-09, section 14: the hand rule (`faceblur/hands.py`), and
+  the eye pass over all 108 boxes the check reports that says what they
+  actually are. It corrects section 13.4: the check finds real faces two and
+  a half times as often as hands, so the hand rule was not what stood between
+  the gate and unattended use.
+- Tests: `tests/`, 874 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Everything is committed and pushed: `HashBrake/faceblur`, `main` at 55687c5.
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
-  rebuilt since 2026-09-07. The spec ships three detectors and their licences
-  and deliberately does not ship the recogniser; `tests/test_models.py` fails
-  if either changes.
+  rebuilt since 2026-09-07, and it now has two more models to carry, so it
+  needs rebuilding before it is handed to anyone. The spec ships three face
+  detectors, the two hand models and their licences, and deliberately does not
+  ship the recogniser; `tests/test_models.py` fails if any of that changes.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
   so it always runs the current code.
 
@@ -162,11 +169,51 @@ a 40 px face in a washroom mirror that the source-side detectors do not find
 at all. It costs about the same as the detection pass (32 s against 37 s on a
 984 frame file, four workers).
 
-**With the gate on, all four sample files would be held back.** Some of that
-is real misses and some is the check inheriting what the detectors get wrong:
-it has no counterpart to the track-level rules that keep hands out of the
-mask, so on the table tennis file most of its finds are the wearer's hand on
-the bat. Section 13.4 goes through them one by one.
+**With the gate on, all four sample files would be held back**, and after the
+2026-09-09 pass it is clear that this is mostly for the right reason. All 108
+boxes the check reports were looked at by eye: 52 are faces the run really did
+miss, 20 are the wearer's hand, 30 are neither (a television, a picture on a
+wall, a flat wall, a motion smear) and 6 could not be called. Sections 13.4
+and 14.1 go through them.
+
+## What changed on 2026-09-09 (the hand rule, and what the check really finds)
+
+`faceblur/hands.py` gives the output-side check the thing it was missing: a
+way to tell the wearer's hand from a face, which the pipeline does with
+track-level rules that a one-frame check cannot use. Two MediaPipe models,
+Apache 2.0, converted from its wheel by `models/make_hands.py` and committed:
+the palm detector proposes, the hand-landmark model confirms. A flagged box a
+confirmed hand covers stays in the record marked with the coverage, and is
+left out of every count the gate reads. It sets aside 13 of the 20 hands and
+none of the 52 faces, and it costs nothing measurable: 338 s against 341 s
+with it off, on the busiest sample file. `--no-hand-rule` turns it off.
+
+Two things a next person should take from that pass, in order:
+
+1. **The check is mostly finding real faces, not hands.** Section 13.4 named
+   the largest finds, which were hands, and left the impression that the file
+   was full of them. It is not: 52 faces to 20 hands over the four files, 34
+   to 16 on the table tennis file alone. The hand rule was called the thing
+   standing between the gate and unattended use. It is not. What stands there
+   is that these copies still show around fifty faces nothing masked, and the
+   only way past that is to miss fewer of them.
+2. **Two models, because one is loose.** The palm detector on its own put 138
+   boxes on the crops around those 108 finds and the landmark model rejects 97
+   of them; two crops in five carry one it rejects. Since a palm box implies a
+   region 2.6 times its size, an invented one covers whatever face is beside
+   it — which is exactly what happened on `004100` frame 450. Over 1050
+   combinations of window set, palm floor, region and coverage, the palm
+   detector alone loses no face in 256 of them and the best of those reaches
+   11 of 20 hands, with only 4 combinations there; with the confirmation, all
+   1050 lose no face and 24 of them reach 13. The point is not the two extra
+   hands, it is that the geometry stops mattering.
+
+The settings sit on a plateau, on purpose. `hand_presence` is the one that
+decides; at 0.7 the rule loses no face across a palm floor of 0.3 to 0.7, a
+coverage of 0.3 to 0.7 and a region of 1.6 to 2.6 times the palm box, and
+sets aside 12 or 13 hands over almost all of that. Section 14.2 has the
+table, and says what the same rule looks like without the second model: a
+needle, where growing the region one step loses seven faces.
 
 ## Sample footage and outputs
 
@@ -187,6 +234,7 @@ workers, and happens on its own when the fingerprint no longer matches.
 .venv\Scripts\python.exe -m eval.misses VIDEO --images DIR      # where faces may still be missed
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED             # is anybody still identifiable
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # what the copy still shows
+.venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --no-hand-rule  # ... counting hands as faces
 .venv\Scripts\python.exe -m eval.sweep VIDEO                    # choose settings, write the report
 ```
 
@@ -196,14 +244,26 @@ main environment.
 
 ## Known limits and open items
 
-- **The output-side check has no hand rule.** It uses the same detectors as
-  the pipeline, which call the wearer's hand a face, and the track-level rules
-  that keep hands out of the mask have no counterpart there. Giving it one is
-  the obvious next piece of work, and it is what stands between the gate and
-  being usable unattended on the table tennis footage.
-- **A hand detector in the pipeline** is the one thing that would make the
-  hand rules unnecessary altogether. MediaPipe's palm model needs converting
-  to ONNX to run in the main environment.
+- **The gate still holds all four sample files, and should.** They show
+  faces. Missing fewer of them is the work that would change that, and section
+  12.4 already says the cheap ways of doing it (a bigger scan, tiling) were
+  measured and rejected. What has not been tried is running the check's own
+  detectors over the copy at a second scale, or letting a find in the copy
+  send the pipeline back to that stretch of the source with the thresholds
+  lowered, which is a targeted second chance rather than a blanket one.
+- **Seven of the twenty hands still read as faces**, six on the table tennis
+  file: a fist gripping a bat, side on, in motion, where neither window shows
+  the palm detector enough hand. Reaching further costs faces, which is the
+  wrong trade for a gate.
+- **The 30 finds that are neither a face nor a hand are untouched** — a
+  television, a picture on a wall, a flat wall, a motion smear. They hold
+  copies back exactly as before. Masking a screen is a policy question before
+  it is a detection one.
+- **The hand models are now in the pipeline's environment**, which makes the
+  older idea of using them to replace the tracker's hand rules cheap to try.
+  It would mean re-tuning and re-measuring everything the track-level rules
+  touch, so it was deliberately left alone: every number in this file and in
+  `docs/report.md` was measured with those rules in place.
 - The exposure proxy (`exposed_40`, `exposed_24_40` in `eval/measure.py`)
   brackets pairs of different faces too; read it as a difference between
   settings, not as a count of exposed faces.
@@ -269,6 +329,7 @@ Asked on 2026-09-09, assessed, not built. The short version:
 | `faceblur/batch.py` | the phased runner (`run_video`), `unconfirmed_runs`, quarantine |
 | `faceblur/pipeline.py` | audit record, single-process path |
 | `faceblur/verify.py` | the check that reads the output, and the gate |
+| `faceblur/hands.py` | palm detector and landmark model: is this box a hand |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/` | label-free evaluation, the sweep, the misses yardstick |
 | `eval/common.py` | the raw cache and its fingerprint |

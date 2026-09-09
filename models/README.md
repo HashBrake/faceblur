@@ -90,3 +90,36 @@ are Apache 2.0.
 
 **Not part of the app.** It is evaluation only, and the packaged build does not
 carry it. A tool that redacts faces has no business shipping a face recogniser.
+
+## palm_detection.onnx and hand_landmark.onnx
+
+| Field | Value |
+|---|---|
+| Original names | palm_detection_full.tflite, hand_landmark_full.tflite |
+| Source | the mediapipe package, version 0.10.21, `mediapipe/modules/` |
+| URL | https://pypi.org/project/mediapipe/0.10.21/ |
+| Licence | Apache 2.0, see palm_detection.LICENSE.txt and hand_landmark.LICENSE.txt |
+
+| File | sha256 | Size |
+|---|---|---|
+| palm_detection.onnx | 03440370cb546a4fdcff45524300a5a8293afc84cfaf44c0b112d209386ffa30 | 4605970 |
+| hand_landmark.onnx | 00e6f22f25156220974589e012562ccce84b3d4b043690ac6085e8701261a9df | 10914627 |
+
+Taken on 2026-09-09 and converted by `models/make_hands.py`, which needs
+TensorFlow and tf2onnx in a throwaway environment and is run once, offline.
+The conversion is faithful: on random input the ONNX and the tflite agree to
+1.5e-4 on every raw output.
+
+They are what lets the output-side check tell the wearer's own hand from a
+face the run missed. MediaPipe itself only runs in `.venv-eval`; the check
+runs in the main environment, which has onnxruntime and nothing else, so the
+models are converted rather than imported. The pipeline does not use them:
+they load only when `--check-output` or `--quarantine` is on.
+
+`palm_detection.onnx` takes one 192x192 RGB image in [0, 1], NHWC, and returns
+`boxes` [1, 2016, 18] and `scores` [1, 2016, 1] against MediaPipe's own anchor
+layout, which `faceblur/hands.py` reproduces. `hand_landmark.onnx` takes one
+224x224 crop of the rectangle a palm box implies and returns `landmarks`,
+`presence`, `handedness` and `world`; only `presence` is used, and it is
+already a probability — a sigmoid over it would compress black (0.007) and a
+hand (0.89) into 0.50 and 0.71 and leave nothing to threshold.

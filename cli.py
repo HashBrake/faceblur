@@ -6,7 +6,7 @@
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
              [--no-third] [--no-camera] [--check-output] [--check-stride N]
-             [--quarantine] [--quarantine-px N]
+             [--quarantine] [--quarantine-px N] [--no-hand-rule]
              [--report PATH] [--no-progress] [--recursive]
 
 INPUT is a video file or a folder of videos. OUTPUT defaults to a folder named
@@ -132,12 +132,15 @@ def check_line(r: dict) -> str:
     if not r.get("checked_frames"):
         return ""
     faces = r.get("residual_faces", 0)
+    hands = r.get("residual_hands", 0)
+    aside = f", {hands} boxes set aside as the wearer's hands" if hands else ""
     if not faces:
-        return f"\n     checked {r['checked_frames']} frames of the copy: no face left in it"
+        return (f"\n     checked {r['checked_frames']} frames of the copy: "
+                f"no face left in it{aside}")
     sizes = r.get("residual_by_size", {})
     text = (f"\n     checked {r['checked_frames']} frames of the copy: {faces} faces still "
             f"there over {r.get('residual_frames', 0)} frames "
-            f"({sizes.get('40+ px', 0)} of 40 px and over)")
+            f"({sizes.get('40+ px', 0)} of 40 px and over){aside}")
     if r.get("quarantined"):
         text += ", held in quarantine"
     return text
@@ -260,6 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quarantine-px", type=int, default=defaults.quarantine_min_px,
                         help="the smallest face that holds a copy back "
                              "(default: %(default)s px)")
+    parser.add_argument("--no-hand-rule", dest="hand_rule", action="store_false",
+                        help="let the check report the wearer's hands as missed faces. "
+                             "By default MediaPipe's hand models are asked about every "
+                             "box it flags, and a hand is recorded as one and does not "
+                             "hold a copy back")
     parser.add_argument("--report", default=None,
                         help="write one JSON file holding every audit record here")
     parser.add_argument("--recursive", action="store_true",
@@ -304,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             check_stride=args.check_stride,
             quarantine=args.quarantine,
             quarantine_min_px=args.quarantine_px,
+            hand_rule=args.hand_rule,
         )
     except SettingsError as exc:
         print(f"faceblur: {exc}", file=sys.stderr)

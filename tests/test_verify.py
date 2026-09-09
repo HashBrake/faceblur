@@ -19,7 +19,7 @@ from faceblur.detect import Detection
 from faceblur.pipeline import STATUS_DONE, sidecar_path
 from faceblur.settings import Settings
 from faceblur.verify import (FLAT_DIFF, MISSED_APPLIED, box_diff, check, classify,
-                             describe, frame_noise, runs_of, summarise)
+                             describe, frame_noise, not_hands, runs_of, summarise)
 
 LM = ((10.0, 10.0), (30.0, 10.0), (20.0, 20.0), (12.0, 30.0), (28.0, 30.0))
 FAST = dict(device="cpu", copy_clean=False, chunk_seconds=0, encode_seconds=0)
@@ -79,6 +79,18 @@ def test_a_box_off_the_edge_of_the_frame_does_not_raise():
     assert box_diff(a, a.copy(), det(-80, -80, 20)) == 0.0
 
 
+def test_the_gate_reads_every_row_not_the_two_hundred_the_record_carries():
+    """`residual_list` is truncated for the record. A file with more finds
+    than that would otherwise be judged on the first 200 of them, and the one
+    that mattered could be number 300."""
+    found = [{"frame": i, "px": 10, "x": 1, "y": 1, "score": 0.9, "applied": 0.0}
+             for i in range(400)]
+    found.append({"frame": 500, "px": 120, "x": 1, "y": 1, "score": 0.9, "applied": 0.0})
+    out = summarise([{"start": 0, "end": 600, "checked": 600, "flat": 0, "found": found}])
+    assert len(out["residual_list"]) == 200
+    assert out["residual_max_px"] == 120
+
+
 def test_frames_become_stretches():
     assert runs_of([3, 4, 5, 40, 41]) == [[3, 5], [40, 41]]
     assert runs_of([3, 6, 20], gap=5) == [[3, 6], [20, 20]]
@@ -94,7 +106,29 @@ def test_the_summary_counts_by_size():
     assert out["residual_by_size"] == {"40+ px": 1, "24-40 px": 1, "under 24 px": 1}
     assert out["residual_runs"] == [[2, 2], [9, 9]]
     assert out["flat_boxes"] == 2
+    assert out["residual_hands"] == 0
+    assert out["residual_max_px"] == 50
     assert "3 faces still in the copy" in describe(out)
+
+
+def test_a_hand_stays_in_the_record_and_out_of_every_count():
+    """A rule that quietly dropped what it disagreed with would be worth
+    nothing to an auditor, so the row stays, marked with the coverage that
+    decided it. Nothing a decision hangs on counts it."""
+    found = [{"frame": 2, "px": 50, "x": 1, "y": 1, "score": 0.9, "applied": 0.0},
+             {"frame": 4, "px": 90, "x": 9, "y": 9, "score": 0.9, "applied": 0.1,
+              "hand": 0.94}]
+    out = summarise([{"start": 0, "end": 10, "checked": 10, "flat": 0,
+                      "hands": 1, "found": found}])
+    assert out["residual_faces"] == 1
+    assert out["residual_hands"] == 1
+    assert out["residual_frames"] == 1
+    assert out["residual_by_size"] == {"40+ px": 1, "24-40 px": 0, "under 24 px": 0}
+    assert out["residual_runs"] == [[2, 2]]
+    assert out["residual_max_px"] == 50                 # not the 90 px hand
+    assert len(out["residual_list"]) == 2               # the hand is still there
+    assert "1 more set aside as the wearer's hands" in describe(out)
+    assert [row["frame"] for row in not_hands(found)] == [2]
 
 
 # ------------------------------------------------------------ on real video
@@ -135,6 +169,62 @@ def test_a_run_that_checks_itself_says_so_in_the_audit_record(tmp_path, video_wi
     assert record.checked_frames > 0
     assert record.residual_faces == 0
     assert record.check_seconds >= 0.0
+
+
+def test_a_copy_that_only_shows_hands_is_not_held_back(tmp_path, video_with_face,
+                                                      monkeypatch):
+    """The gate reads the faces, not the hands. With every flagged box called
+    a hand, the copy ships and the record still names them."""
+    import faceblur.batch as batch
+
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _NothingFound())
+
+    class _AllHands:
+        model_hashes = {"palm": "stub"}
+        compute = {"palm": "stub"}
+
+        def hand_cover(self, frame, det):
+            return 1.0
+
+    monkeypatch.setattr(batch, "_hand_rule", lambda settings: _AllHands())
+    out = tmp_path / "shipped.mp4"
+    record = run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert record.residual_faces == 0
+    assert record.residual_hands > 0
+    assert record.quarantined is False
+    assert out.is_file()
+    assert any("hand" in row for row in record.residual_list)
+
+
+def test_the_hand_rule_can_be_turned_off(tmp_path, video_with_face, monkeypatch):
+    """Without it the check reports the same boxes as missed faces, which is
+    what it did before it could tell them apart."""
+    import faceblur.batch as batch
+
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _NothingFound())
+    called = []
+    monkeypatch.setattr(batch, "_hand_rule", lambda settings: called.append(1))
+    out = tmp_path / "no_rule.mp4"
+    record = run_video(video_with_face, out, Settings(quarantine=True, hand_rule=False, **FAST),
+                       serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert called == []
+    assert record.residual_faces > 0
+    assert record.residual_hands == 0
+    assert record.quarantined is True
+
+
+def test_a_clean_copy_ships_even_with_the_gate_wide_open(tmp_path, video_with_face):
+    """`--quarantine-px 0` means every face holds a copy back, not that a copy
+    with no face in it does."""
+    out = tmp_path / "clean.mp4"
+    record = run_video(video_with_face, out,
+                       Settings(quarantine=True, quarantine_min_px=0, **FAST), serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert record.residual_faces == 0
+    assert record.quarantined is False
+    assert out.is_file()
 
 
 def test_a_copy_that_still_shows_a_face_is_moved_to_quarantine(tmp_path, video_with_face,

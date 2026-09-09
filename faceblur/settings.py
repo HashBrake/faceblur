@@ -244,9 +244,44 @@ class Settings:
     # Implies check_output.
     quarantine: bool = False
     quarantine_min_px: int = 24
+    # The check runs the same face detectors that produced the copy, and they
+    # call the wearer's hand a face. The pipeline keeps hands out of the mask
+    # with track-level rules; a check that reads one frame at a time cannot,
+    # so it asks MediaPipe's hand models instead. A flagged box that a
+    # confirmed hand covers is recorded as a hand and does not hold the copy
+    # back. See faceblur/hands.py and section 14 of docs/report.md.
+    hand_rule: bool = True
+    # Windows, in pixels, centred on the flagged box, each downscaled to the
+    # palm model's own 192. Fixed pixels rather than a multiple of the box:
+    # what the palm detector makes of a crop depends on how large a hand is
+    # inside it, and a multiple of the box held nothing constant. 512 alone
+    # sets aside 12 of 20 hands, 384 and 512 together 13, a third at 768 none.
+    hand_windows: tuple[int, ...] = (384, 512)
+    # The palm detector's own floor. The rule reads the same from 0.3 to 0.5
+    # once the landmark model has confirmed, so this is not where the decision
+    # is made and it sits in the middle of the flat part.
+    hand_conf: float = 0.4
+    # How sure the landmark model has to be that the palm detector's rectangle
+    # holds a hand. This is the setting that decides. At 0.6 the rule loses a
+    # real face on the sample footage and at 0.65 it stops; 0.7 is one step
+    # inside, and from there down to a palm floor of 0.3 and out to any
+    # coverage between 0.3 and 0.7 it loses none.
+    hand_presence: float = 0.7
+    # Share of the flagged box a confirmed hand has to cover. Flat from 0.3 to
+    # 0.7 on the sample footage: by the time the hands are confirmed, a box
+    # they touch at all is one they mostly cover.
+    hand_cover: float = 0.5
+    # Where the two hand models run. Kept apart from `device` because the
+    # worry was that they would not fit: four workers already hold about
+    # 850 MB of face-detector graphs each on an 8 GB card. Measured, they cost
+    # nothing there — 338 s against 341 s with the rule off on the busiest
+    # sample file — and 13 percent on the CPU, so the worry was wrong and the
+    # setting is only here for a machine where it is not. Section 14.4.
+    hand_device: str = "auto"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "det_sizes", tuple(int(s) for s in self.det_sizes))
+        object.__setattr__(self, "hand_windows", tuple(int(w) for w in self.hand_windows))
         self.validate()
 
     def validate(self) -> None:
@@ -266,6 +301,19 @@ class Settings:
             raise SettingsError(f"check_stride must be at least 1, got {self.check_stride}")
         if self.quarantine_min_px < 0:
             raise SettingsError("quarantine_min_px must be 0 or more")
+        if not self.hand_windows or any(w < 64 for w in self.hand_windows):
+            raise SettingsError("hand_windows must hold at least one window of 64 px or more")
+        if not 0.0 < self.hand_conf <= 1.0:
+            raise SettingsError(f"hand_conf must be above 0 and at most 1, got {self.hand_conf}")
+        if not 0.0 < self.hand_presence <= 1.0:
+            raise SettingsError(
+                f"hand_presence must be above 0 and at most 1, got {self.hand_presence}")
+        if not 0.0 < self.hand_cover <= 1.0:
+            raise SettingsError(
+                f"hand_cover must be above 0 and at most 1, got {self.hand_cover}")
+        if self.hand_device not in DEVICES:
+            raise SettingsError(
+                f"hand_device must be one of {DEVICES}, got {self.hand_device!r}")
         if self.crop_size < 64 or self.crop_scale < 1.0:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
@@ -355,8 +403,13 @@ class Settings:
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "nvenc_sessions", "hwaccel",
             "check_output", "check_stride", "quarantine", "quarantine_min_px",
+            "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
+            "hand_device",
             "nms_detect", "nms_yunet")}
+        # Tuples so that a record read back from JSON compares equal to the
+        # one that wrote it.
         d["det_sizes"] = list(self.det_sizes)
+        d["hand_windows"] = list(self.hand_windows)
         return d
 
 

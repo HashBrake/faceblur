@@ -13,16 +13,22 @@ import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).resolve().parent
 
-# The three detectors, and the licences that travel with them. The face
-# recogniser in models/ is evaluation only and stays out of the build.
+# The three face detectors and the two hand models, with the licences that
+# travel with them. The hand models are what lets the output-side check tell
+# the wearer's own hand from a face it missed. The face recogniser in models/
+# is evaluation only and stays out of the build.
 datas = [
     (str(ROOT / "models" / "yunet.onnx"), "models"),
     (str(ROOT / "models" / "yunet_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.onnx"), "models"),
     (str(ROOT / "models" / "centerface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "ultraface_dynamic.onnx"), "models"),
+    (str(ROOT / "models" / "palm_detection.onnx"), "models"),
+    (str(ROOT / "models" / "hand_landmark.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "ultraface.LICENSE.txt"), "models"),
+    (str(ROOT / "models" / "palm_detection.LICENSE.txt"), "models"),
+    (str(ROOT / "models" / "hand_landmark.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "README.md"), "models"),
 ]
 
@@ -41,9 +47,11 @@ hiddenimports = [
     "onnx.shape_inference",
     "faceblur.batch",
     "faceblur.segments",
+    "faceblur.verify",
     # Started in a worker process by name, so the analysis cannot see them.
     "ui.worker",
     "faceblur.detect",
+    "faceblur.hands",
     "faceblur.pipeline",
     "faceblur.redact",
     "faceblur.track",

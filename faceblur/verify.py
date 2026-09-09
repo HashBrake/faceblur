@@ -21,7 +21,16 @@ Some boxes cannot answer: on a flat wall or a dark corner a mask changes
 almost nothing, so neither does the ratio. Those are counted and reported
 separately rather than being called either way.
 
+One question is asked of everything that survives: is it a hand? The same
+detectors that produced the copy call the wearer's hand a face, and the
+track-level rules that keep hands out of the mask have no counterpart in a
+check that reads one frame at a time. `faceblur/hands.py` answers it with
+MediaPipe's palm detector and its landmark model. A box a confirmed hand
+covers stays in the record, marked with the coverage that decided it, and is
+left out of every count a decision hangs on.
+
     .venv\\Scripts\\python.exe -m faceblur.verify SOURCE OUTPUT [--stride N]
+                                                  [--workers N] [--no-hand-rule]
 """
 from __future__ import annotations
 
@@ -144,14 +153,15 @@ def runs_of(frames: list[int], gap: int = 5) -> list[list[int]]:
 
 def residual_job(job: dict) -> dict:
     """Detect on the copy's frames start to end and say what was never masked."""
-    from .batch import _bank             # the worker's cached detector bank
+    from .batch import _bank, _hand_rule    # the worker's cached models
 
     src, out = Path(job["src"]), Path(job["out"])
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     stride = max(1, job.get("stride", 1))
     bank = _bank(settings)
-    found, flat, checked = [], 0, 0
+    rule = _hand_rule(settings) if settings.hand_rule else None
+    found, hands, flat, checked = [], 0, 0, 0
     source_frames = decode_range(src, job["times"], start, end, job["info"], settings.hwaccel)
     copy_frames = decode_range(out, job["out_times"], start, end, job["out_info"],
                                settings.hwaccel)
@@ -169,12 +179,23 @@ def residual_job(job: dict) -> dict:
                 flat += 1
             elif call == "missed":
                 over = max(0.0, would - noise)
-                found.append({"frame": i, "px": round(det.long_side),
-                              "x": round(det.cx), "y": round(det.cy),
-                              "score": round(det.score, 3),
-                              "applied": round(max(0.0, changed - noise) / over, 3)
-                              if over else None})
-    return {"start": start, "end": end, "checked": checked, "flat": flat, "found": found}
+                row = {"frame": i, "px": round(det.long_side),
+                       "x": round(det.cx), "y": round(det.cy),
+                       "score": round(det.score, 3),
+                       "applied": round(max(0.0, changed - noise) / over, 3) if over else None}
+                if rule is not None:
+                    # The hand rule reads the source, not the copy. Nothing
+                    # masked a hand, so it looks the same in both, and the
+                    # source is the sharper of the two.
+                    cover = rule.hand_cover(before, det)
+                    if cover >= settings.hand_cover:
+                        row["hand"] = round(cover, 3)
+                        hands += 1
+                found.append(row)
+    return {"start": start, "end": end, "checked": checked, "flat": flat,
+            "hands": hands, "found": found,
+            "hand_models": {} if rule is None else rule.model_hashes,
+            "hand_compute": {} if rule is None else rule.compute}
 
 
 def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
@@ -191,22 +212,45 @@ def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
             for a, b in [(k, k + chunk) for k in range(0, n, max(1, chunk))]]
 
 
+def not_hands(rows: list[dict]) -> list[dict]:
+    """The rows that decide anything: what is left once the hands are out."""
+    return [row for row in rows if "hand" not in row]
+
+
 def summarise(results: list[dict]) -> dict:
-    """The audit record's view: how many faces the copy still shows, and where."""
+    """The audit record's view: how many faces the copy still shows, and where.
+
+    Hands stay in `residual_list`, each marked with the coverage that decided
+    it, because a rule that quietly dropped what it disagreed with would be
+    worth nothing to an auditor. Every count a decision hangs on leaves them
+    out.
+    """
     found = [row for r in results for row in r["found"]]
     found.sort(key=lambda row: (row["frame"], -row["px"]))
+    faces = not_hands(found)
     checked = sum(r["checked"] for r in results)
     by_size = {"40+ px": 0, "24-40 px": 0, "under 24 px": 0}
-    for row in found:
+    for row in faces:
         key = ("40+ px" if row["px"] >= 40 else
                "24-40 px" if row["px"] >= 24 else "under 24 px")
         by_size[key] += 1
+    models, compute = {}, {}
+    for r in results:
+        models.update(r.get("hand_models") or {})
+        compute.update(r.get("hand_compute") or {})
     return {"frames_checked": checked,
+            "hand_models": models,
+            "hand_compute": compute,
             "flat_boxes": sum(r["flat"] for r in results),
-            "residual_faces": len(found),
-            "residual_frames": len(({row["frame"] for row in found})),
+            "residual_faces": len(faces),
+            "residual_hands": sum(r.get("hands", 0) for r in results),
+            "residual_frames": len({row["frame"] for row in faces}),
             "residual_by_size": by_size,
-            "residual_runs": runs_of([row["frame"] for row in found]),
+            # The largest face left, over every row rather than the 200 the
+            # record carries. The gate reads this: a file with more than 200
+            # finds would otherwise be judged on the first 200 of them.
+            "residual_max_px": max((row["px"] for row in faces), default=0),
+            "residual_runs": runs_of([row["frame"] for row in faces]),
             "residual_list": found[:200]}
 
 
@@ -223,11 +267,12 @@ def check(src: Path, out: Path, settings: Optional[Settings] = None, stride: int
 
 def describe(report: dict) -> str:
     by_size = report["residual_by_size"]
+    hands = report.get("residual_hands", 0)
     return (f"{report['residual_faces']} faces still in the copy on untouched pixels "
             f"({by_size['40+ px']} at 40 px and over, {by_size['24-40 px']} at 24 to 40, "
             f"{by_size['under 24 px']} under 24), over {report['residual_frames']} frames "
             f"of {report['frames_checked']} checked; {report['flat_boxes']} boxes too flat "
-            f"to say")
+            f"to say" + (f"; {hands} more set aside as the wearer's hands" if hands else ""))
 
 
 def main() -> int:
@@ -236,11 +281,15 @@ def main() -> int:
     ap.add_argument("output", help="the blurred copy of it")
     ap.add_argument("--stride", type=int, default=1, help="check every Nth frame")
     ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--no-hand-rule", dest="hand_rule", action="store_false",
+                    help="report the wearer's hands as missed faces, the way this check "
+                         "did before it could tell them apart")
     ap.add_argument("--json", default=None, help="write the full report here")
     args = ap.parse_args()
+    settings = Settings(hand_rule=args.hand_rule)
     workers = max(1, args.workers)
     if workers == 1:
-        report = check(Path(args.source), Path(args.output), Settings(), args.stride)
+        report = check(Path(args.source), Path(args.output), settings, args.stride)
     else:
         import multiprocessing
 
@@ -248,12 +297,13 @@ def main() -> int:
 
         ctx = multiprocessing.get_context("spawn")
         with ctx.Pool(workers, initializer=init_pool_worker, initargs=(workers,)) as pool:
-            report = check(Path(args.source), Path(args.output), Settings(), args.stride,
+            report = check(Path(args.source), Path(args.output), settings, args.stride,
                            submit=PoolSubmit(pool), workers=workers)
     print(describe(report))
     for row in report["residual_list"][:20]:
+        mark = f"  hand {row['hand']}" if "hand" in row else ""
         print(f"  frame {row['frame']:6d}  {row['px']:4d} px at ({row['x']},{row['y']})  "
-              f"score {row['score']:.2f}  applied {row['applied']}")
+              f"score {row['score']:.2f}  applied {row['applied']}{mark}")
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1), encoding="utf-8")
     return 1 if report["residual_faces"] else 0
