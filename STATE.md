@@ -39,7 +39,7 @@ person's identity and leave hands, cards, screens and everything else untouched.
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
 - Tests: `tests/`, 874 passing (`.venv\Scripts\python.exe -m pytest tests`).
-- Everything is committed and pushed: `HashBrake/faceblur`, `main` at 55687c5.
+- Everything is committed and pushed: `HashBrake/faceblur`, `main` at e2663c0.
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
   rebuilt since 2026-09-07, and it now has two more models to carry, so it
   needs rebuilding before it is handed to anyone. The spec ships three face
