@@ -91,8 +91,25 @@ class AuditRecord:
     residual_frames: int = 0
     residual_by_size: dict = field(default_factory=dict)
     residual_runs: list = field(default_factory=list)
+    # Screens the check found in the copy on pixels nothing changed. Zero
+    # unless the run was asked to mask screens: a copy nobody asked to have
+    # screens masked in is not missing one. `residual_screen_runs` holds only
+    # the finds that clear screen_gate_min_px, grouped the way the pipeline
+    # groups them, because the gate reads how long a screen was there and a
+    # run of one frame is what a table looks like.
+    residual_screens: int = 0
+    residual_screen_frames: int = 0
+    residual_screen_max_px: int = 0
+    residual_screen_runs: list = field(default_factory=list)
     residual_list: list = field(default_factory=list)
+    # Boxes a mask would barely move, so the ratio decides nothing: a flat
+    # wall, a dark corner. flat_boxes is every kind together and flat_by_kind
+    # splits it.
     flat_boxes: int = 0
+    flat_by_kind: dict = field(default_factory=dict)
+    # Which kinds held this copy back, in listing order. Empty means it
+    # shipped. See faceblur.verify.held_for.
+    held_back_for: list = field(default_factory=list)
     quarantined: bool = False
     check_seconds: float = 0.0
     settings: dict = field(default_factory=dict)

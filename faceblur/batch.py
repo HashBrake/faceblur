@@ -33,7 +33,7 @@ from .redact import redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
-from .verify import check
+from .verify import check, held_for
 from .video import VideoError, VideoInfo, part_path, probe
 
 Submit = Callable[[Callable, list, int], list]
@@ -446,13 +446,18 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.residual_runs = found["residual_runs"]
         record.residual_list = found["residual_list"]
         record.flat_boxes = found["flat_boxes"]
+        record.flat_by_kind = found["flat_by_kind"]
+        record.residual_screens = found["residual_screens"]
+        record.residual_screen_frames = found["residual_screen_frames"]
+        record.residual_screen_max_px = found["residual_screen_max_px"]
+        record.residual_screen_runs = found["residual_screen_runs"]
         record.check_seconds = round(time.time() - t2, 2)
         report("checking", n, n)
         # Hands do not hold a copy back. They are in the record either way.
-        # `residual_faces` has to be asked as well as the size: a threshold of
-        # zero would otherwise hold back a copy that showed nothing at all.
-        held_back = (found["residual_faces"]
-                     and found["residual_max_px"] >= settings.quarantine_min_px)
+        # Which kinds do is `verify.held_for`, so that the gate and the report
+        # of it cannot drift apart.
+        held_back = held_for(found, settings)
+        record.held_back_for = list(held_back)
         if settings.quarantine and held_back:
             dst = quarantine_output(dst)
             record.output = dst.name

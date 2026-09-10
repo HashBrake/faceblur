@@ -1188,3 +1188,159 @@ What is left, and is not going to be fixed by tuning:
   scoreboard is destroyed as thoroughly as one showing a spreadsheet of
   names. That is the scope decision of 2026-09-10, taken so that nothing has
   to judge what is on the glass, and the cost is over masking.
+
+## 16. Screens in the output side check (2026-09-10)
+
+Section 15 built the screen class and left one of the four conditions a kind
+has to meet before it may be called ready unmet: nothing checked whether a
+screen the run missed was still in the finished copy. Every screen number in
+section 15 reads the source and inherits the pipeline's own blindness, exactly
+as every face number did before section 13.
+
+This section closes that. `faceblur/verify.py` now reads the copy for whatever
+the run was asked to mask.
+
+### 16.1 What the check finds, and what holds a copy back
+
+**The rule is the face rule, asked of a different shape.** `applied` takes its
+region from `redact.region_for`, so the control masks a screen's quad where it
+masked a face's ellipse, and the comparison happens inside it. Nothing else in
+that function was ever face specific. A masked screen still reads as a screen
+to YOLOX, because a pixelated rectangle is a flat rectangle, and that is what
+the ratio is for: near one the mask ran, near zero nothing reached it.
+
+**One rule is new: how long was it there.** A face needs none, because one
+frame of a face is a face. A screen does, because the detector calls a table a
+laptop for one frame and then stops (section 15.2). So screen finds are
+grouped into runs by `screens.runs_in`, the same grouping and the same
+settings the pipeline uses on the source side, and a run has to last
+`screen_gate_min_run` checked frames before it decides anything. The length is
+counted in checked frames, so at `check_stride` 2 a run of three spans six
+source frames.
+
+**Hands are not asked about a screen.** Nothing mistakes a hand for a
+television, and a hand in front of a monitor does not stop it being a monitor.
+
+Run over the four sample files and the copies of them work package R1 wrote
+with `--mask face,screen`:
+
+| File | Frames checked | Faces left | Screen boxes left | Frames they sit in | Largest | Runs over the floor | Runs of 3 or more | Held back for |
+|---|---|---|---|---|---|---|---|---|
+| `003939` | 2033 | 7 | 11 | 11 | 525 px | 7 | 1 | face, screen |
+| `004100` | 984 | 9 | 14 | 14 | 252 px | 5 | 3 | face, screen |
+| `004310` | 938 | 16 | 10 | 10 | 314 px | 7 | 0 | face |
+| `005035` | 3971 | 67 | 129 | 127 | 640 px | 85 | 7 | face, screen |
+
+All four are held back for faces, as section 13.4 said they would be. **Three
+of the four would be held back for a screen alone**: `003939`, `004100` and
+`005035`. `004310` would not, and it is the file with the fewest screens in
+it.
+
+**Persistence is what makes this gate usable, and the size floor is not.**
+Without the run rule, every one of the four would be held back for a screen:
+the runs over the floor column is never zero. With it, three are. On `005035`
+the rule does most of its work: 56 of the 85 runs last a single checked frame
+and only 7 reach three.
+
+The floor did nothing at all. `screen_gate_min_px` is 48 and the smallest
+screen find on any of the four files is 95 px, so not one find was set aside
+by it. That is not the floor working, it is the floor never being tested: a
+COCO detector at a confidence of 0.5 does not fire on small glass, so there
+are no small screen finds on this footage to set aside. A venue with a phone
+on a table across a room would exercise it and there is none here. Read the
+48 as untested rather than as measured.
+
+**Cost, and what it does to the face numbers.** The same check run twice on
+each copy, once with screens in it and once without:
+
+| File | Faces only | With screens | Faces reported, both ways |
+|---|---|---|---|
+| `003939` | 68.6 s | 71.2 s | 7 |
+| `004100` | 33.4 s | 34.4 s | 9 |
+| `004310` | 53.4 s | 54.4 s | 16 |
+| `005035` | 146.3 s | 154.9 s | 67 |
+
+Two to six percent, not the second detection pass the extra model suggests:
+YOLOX-tiny runs at 416 by 416 against the face bank's 1280 and 1920, and both
+files are already decoded. The face count is identical either way on every
+file, so nothing in section 13 or section 14 moves.
+
+Those face counts are close to but not the same as section 14.3's 7, 8, 15 and
+64. These are different copies. Section 14.3 read `footage_blurred_v8`, made
+with faces alone; this reads the R1 copies, made with faces and screens, so
+the pixels a face detector sees in them are not the same pixels. The check
+itself is unchanged, which is what the identical face counts with and without
+the screen pass show.
+
+**Does the gate catch what the pipeline knowingly throws away?** This is the
+question worth asking of a gate, and it can be asked without labels. The
+pipeline masks nothing it has not seen `screen_min_run` times, and section
+15.4 records that costing one real screen of 54. Every screen dropped that way
+is by definition still in the copy, so the check should be reporting it.
+Re-detecting screens on the four sources, grouping them the shipped way, and
+matching each dropped run against the runs the check found on the copy:
+
+| File | Source runs | Masked | Dropped by persistence | Dropped runs the check reports |
+|---|---|---|---|---|
+| `003939` | 12 | 4 | 8 | 5 |
+| `004100` | 10 | 5 | 5 | 5 |
+| `004310` | 5 | 1 | 4 | 4 |
+| `005035` | 147 | 49 | 98 | 68 |
+| **all** | **174** | **59** | **115** | **82** |
+
+**The check reports 71 percent of what the pipeline's own persistence rule set
+aside**, and it does so with no knowledge of what that rule did. The 33 it
+does not report are runs the copy's re-encoded pixels no longer show a screen
+at, which is the same effect that lets the check find faces the source side
+misses, running the other way.
+
+**The two frame monitor of section 15.4 is caught.** Across the four files
+there is exactly one dropped two frame sighting of a monitor at about five
+percent of the frame: `003939`, frames 611 and 612, 358 px, 4.81 percent. The
+check finds it on the copy as a run of four checked frames from 606 to 612,
+which is over `screen_gate_min_run`, so it holds that copy back. The one real
+screen section 15.4 says the pipeline loses is the one the gate stops.
+
+Section 15.4 gives that monitor as 5.2 percent of the frame and this
+measurement gives 4.81 percent for the largest box of the run. Nothing here
+explains the difference and it is not worth another pass to chase: it is the
+only candidate on any of the four files by a wide margin, the next nearest two
+frame sightings being 2.55 and 7.31 percent.
+
+**A rule that was suspected and is not happening.** `runs_in` groups by label,
+so one object the detector calls a television and then a laptop would split
+into two short runs and be dropped by persistence for the wrong reason. Over
+the 115 dropped runs there is exactly one pair of different labels overlapping
+in time, so on this footage that is not what is costing screens. It is worth
+knowing before anybody tunes `screen_min_run` again.
+
+**A number that is not what it looks like.** `screen_max_area` is 0.12 and two
+of the dropped runs measure 13.12 and 12.43 percent of the frame. The cap is
+checked on the detector's own box and `screen_pad` grows it by six percent
+afterwards, so a box at the cap is masked at up to about 13.4 percent of the
+frame. The setting bounds what may be called a screen, not what is destroyed.
+
+### 16.2 Screen recall against an independent witness
+
+Not measured. It needs an oracle, which work package E1 of
+`FACEBLUR_BUILD_PLAN_V2.md` builds, and this heading is held for it so that
+the number lands beside the precision it belongs with. Until then the honest
+statement about screens is the one section 15.4 makes: precision against one
+person's eye over 85 runs, and no recall figure at all.
+
+### 16.3 What this does not do
+
+- **It reports what YOLOX calls a screen.** The check inherits the detector's
+  weakness exactly as the face side inherits its detectors': a table that
+  reads as a laptop for three checked frames on the copy will hold a copy
+  back. There is no oracle for screens on this footage, so there is no way
+  here to say how many of the 82 are real. Work package E1 is what would.
+- **There is no recall.** A screen no detector ever finds is not in any of
+  these numbers, on either side of the file.
+- **The size floor is untested**, as above.
+- **The window cannot run this at all.** `--check-output` and `--quarantine`
+  are command line only; `ui/app.py` never sets either, so no run started from
+  the window is checked or held back. That predates this pass and is not
+  changed by it.
+- **The by eye labels of section 15.2 are not used here and are not
+  re-scored.** Nothing in this section rests on a label.

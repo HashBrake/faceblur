@@ -132,21 +132,37 @@ def describe(record: AuditRecord | dict, dst: Path) -> str:
 
 
 def check_line(r: dict) -> str:
-    """What the second pass over the copy found, when there was one."""
+    """What the second pass over the copy found, when there was one.
+
+    It names the kind that held a copy back, because "held in quarantine" on
+    its own leaves the reader to guess whether the gate found a face or a
+    television, and those call for different things being done next.
+    """
     if not r.get("checked_frames"):
         return ""
     faces = r.get("residual_faces", 0)
     hands = r.get("residual_hands", 0)
     aside = f", {hands} boxes set aside as the wearer's hands" if hands else ""
-    if not faces:
-        return (f"\n     checked {r['checked_frames']} frames of the copy: "
-                f"no face left in it{aside}")
     sizes = r.get("residual_by_size", {})
-    text = (f"\n     checked {r['checked_frames']} frames of the copy: {faces} faces still "
-            f"there over {r.get('residual_frames', 0)} frames "
-            f"({sizes.get('40+ px', 0)} of 40 px and over){aside}")
+    if faces:
+        text = (f"\n     checked {r['checked_frames']} frames of the copy: {faces} faces "
+                f"still there over {r.get('residual_frames', 0)} frames "
+                f"({sizes.get('40+ px', 0)} of 40 px and over){aside}")
+    else:
+        text = (f"\n     checked {r['checked_frames']} frames of the copy: "
+                f"no face left in it{aside}")
+    screens = r.get("residual_screens", 0)
+    if "screen" in (r.get("settings") or {}).get("mask", ()):
+        runs = r.get("residual_screen_runs") or []
+        text += (f"\n     {screens} screen boxes still visible over "
+                 f"{r.get('residual_screen_frames', 0)} frames, in {len(runs)} runs over "
+                 f"the size floor" if screens else
+                 "\n     no screen left visible in it")
+    held = r.get("held_back_for") or []
     if r.get("quarantined"):
-        text += ", held in quarantine"
+        text += f"\n     held in quarantine for: {', '.join(held) or 'unknown'}"
+    elif held:
+        text += f"\n     would be held back for: {', '.join(held)}"
     return text
 
 

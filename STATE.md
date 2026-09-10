@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-10, after work package R1. This file says where the
+Last updated: 2026-09-10, after work packages R1 and S1. This file says where the
 project stands, what was verified, and what a new person or session should do
 next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
@@ -93,8 +93,8 @@ written and one commit.
 | Package | What | State |
 |---|---|---|
 | R1 | Housekeeping: documents and the packaged app say what the code does | Done 2026-09-10, report section 9.1 |
-| S1 | Screens in the output side check and the gate | Next |
-| 4.3 | Per kind mask accounting | Not started |
+| S1 | Screens in the output side check and the gate | Done 2026-09-10, report section 16.1 |
+| 4.3 | Per kind mask accounting | Next |
 | E1 | Object oracle for evaluation | Not started |
 | F0 | Faces printed on cards | Not started |
 | F1 | Second chance for missed faces | Not started |
@@ -144,6 +144,84 @@ source build agree.
 What a next person should not assume from this package: nothing here measured
 anything new about faces or screens. R1 moved documents and the build to where
 the code already was.
+
+### S1, done 2026-09-10
+
+The output side check reads the copy for screens as well as faces, which is
+the second of the four conditions a kind has to meet before it may be called
+ready. Screens had one, three and four already.
+
+What changed in the code:
+
+- `verify.applied` takes its region from `redact.region_for` instead of
+  calling `ellipse_for`, so it asks a screen's quad the same question it asks
+  a face's ellipse. Nothing else in it was ever face specific.
+- `verify.residual_job` runs the screen detector on the copy, and runs each
+  detector only for the kinds the run was asked to mask. A copy nobody asked
+  to have screens masked in is not reported as missing one.
+- Screen finds that clear `screen_gate_min_px` are grouped by
+  `screens.runs_in`, the same grouping and settings the pipeline uses on the
+  source side, and only a run of `screen_gate_min_run` checked frames holds a
+  copy back. Faces need no such rule.
+- `verify.held_for` is the one place the gate is decided. `batch.run_video`
+  calls it, the record keeps the answer in `held_back_for`, and `cli.check_line`
+  prints which kind stopped a copy.
+- `verify.KINDS_CHECKED` names the kinds the check covers, and a test in
+  `tests/test_classes.py` fails if a kind is marked ready and is not in it. The
+  condition is enforced by a test rather than by memory.
+- The record keeps 200 rows of each kind rather than 200 in total. On the
+  table tennis file the check finds 67 faces and 129 screens, and a shared cap
+  would have let screens crowd faces out of the record an auditor reads.
+- New settings `screen_gate_min_px` (48) and `screen_gate_min_run` (3), and
+  new record fields `residual_screens`, `residual_screen_frames`,
+  `residual_screen_max_px`, `residual_screen_runs`, `flat_by_kind` and
+  `held_back_for`. 1016 tests pass.
+
+The numbers, on the four sample files and the copies R1 wrote with
+`--mask face,screen`. Report section 16.1 has the tables.
+
+- Screen boxes still visible: 11, 14, 10 and 129. **Three of the four files
+  would be held back for a screen alone**, `004310` being the exception.
+- **Persistence is what makes the gate usable.** Without the run rule all four
+  would be held back for a screen. On `005035`, 56 of 85 runs last a single
+  checked frame and 7 reach three.
+- **The size floor did nothing.** The smallest screen find anywhere is 95 px
+  against a floor of 48, so not one find was set aside by it. It is untested,
+  not measured: a COCO detector at 0.5 does not fire on small glass and this
+  footage has no small screen finds to try it on.
+- **Cost is 2 to 6 percent** on top of the face check, and the face counts are
+  identical with the screen pass and without it, so nothing in sections 13 and
+  14 moves.
+- **The gate catches 71 percent of what the pipeline's own persistence rule
+  throws away**: 115 source runs dropped for being too short, 82 of them
+  reported by the check. Including the one real screen section 15.4 says the
+  pipeline loses, a two frame monitor on `003939`, which the check sees as a
+  four frame run and holds the copy back for.
+
+What a next person should not assume:
+
+- **These face counts are not section 14.3's.** 7, 9, 16 and 67 here against
+  7, 8, 15 and 64 there. Different copies: section 14.3 read
+  `footage_blurred_v8`, made with faces alone, and this read the R1 copies,
+  made with faces and screens. The check did not change, which is what the
+  identical face counts with and without the screen pass show.
+- **`screen_max_area` does not bound what is destroyed.** The cap is checked
+  on the detector's own box and `screen_pad` grows it by six percent
+  afterwards, so a box at the 12 percent cap is masked at up to about 13.4
+  percent of the frame.
+- **The 174 source runs measured here are not the 85 of section 15.2.** That
+  audit counted the same kind of thing a different way and its number is not
+  reproduced here. Nothing in section 16 rests on it.
+- **A screen the check reports may be a table.** There is no oracle for
+  screens, so nothing says how many of the 82 are real. Work package E1 is
+  what would, and report section 16.2 is held empty for it.
+- **The window cannot run the check or the gate at all.** `ui/app.py` never
+  sets `check_output` or `quarantine`, so no run started from the window is
+  checked or held back. That predates S1 and S1 did not change it. The build
+  plan asked for `ui/strings.py` to say which kind held a copy back; there is
+  nothing in the window for that string to attach to, so the naming went into
+  `cli.check_line` and the record instead. Giving the window a gate is a piece
+  of work nobody has scheduled.
 
 ## The numbers, and what to say about them
 
@@ -392,9 +470,10 @@ What a next person should not assume about screens:
   necessary and what sets its value. A room with a large monitor close to the
   camera and no large flat furniture would want a looser one, and there is no
   footage here to set it on.
-- **The output-side check does not cover screens.** `verify.py` reads the
-  copy for faces only. A screen the run missed is not reported and does not
-  hold a copy back.
+- **The output-side check covers screens as of work package S1**, so this
+  caveat is closed. `verify.py` reads the copy for whatever the run was asked
+  to mask, and a screen that was there for three checked frames holds the copy
+  back. See the S1 note below for what that costs and what it catches.
 
 ## Sample footage and outputs
 

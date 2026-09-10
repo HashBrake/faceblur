@@ -18,8 +18,11 @@ from faceblur.batch import run_video, serial_submit
 from faceblur.detect import Detection
 from faceblur.pipeline import STATUS_DONE, sidecar_path
 from faceblur.settings import Settings
-from faceblur.verify import (FLAT_DIFF, MISSED_APPLIED, box_diff, check, classify,
-                             describe, frame_noise, not_hands, runs_of, summarise)
+from faceblur.redact import redact
+from faceblur.verify import (FLAT_DIFF, KINDS_CHECKED, MISSED_APPLIED, applied, box_diff,
+                             check, classify, describe, frame_noise, held_for,
+                             kinds_checked, not_hands, of_kind, runs_of, screen_runs,
+                             summarise)
 
 LM = ((10.0, 10.0), (30.0, 10.0), (20.0, 20.0), (12.0, 30.0), (28.0, 30.0))
 FAST = dict(device="cpu", copy_clean=False, chunk_seconds=0, encode_seconds=0)
@@ -252,3 +255,215 @@ class _NothingFound:
 
     def run(self, strong, weak, shifts, shape):
         return [[] for _ in strong], []
+
+
+# ------------------------------------------------------- screens in the gate
+#
+# A screen the run missed is the same question as a face the run missed, asked
+# of a different shape, with one rule of its own: how long was it there. The
+# screen detector calls a table a laptop for one frame and stops, and no real
+# screen behaves that way (docs/report.md section 15.2), so a gate without
+# persistence would hold every copy back for a table.
+
+SCREENS = dict(mask=("face", "screen"))
+
+
+def screen_det(x=80.0, y=60.0, w=200.0, h=120.0, score=0.8, label="tv"):
+    return Detection(x, y, w, h, score, None, label, True, score, "screen")
+
+
+def screen_rows(frames, px=200, x=180, y=120, w=200, h=120, label="tv"):
+    """Rows shaped the way `residual_job` writes them, one per frame."""
+    return [{"kind": "screen", "frame": i, "px": px, "x": x, "y": y,
+             "w": w, "h": h, "label": label, "score": 0.8, "applied": 0.0}
+            for i in frames]
+
+
+def screen_report(frames, settings=None, **box):
+    rows = screen_rows(frames, **box)
+    return summarise([{"start": 0, "end": 100, "checked": 100, "flat": 0,
+                       "flat_by_kind": {"face": 0, "screen": 0}, "found": rows}],
+                     settings or Settings(**SCREENS))
+
+
+def test_a_masked_screen_reads_as_masked_and_an_untouched_one_as_missed():
+    """The whole check, asked of a quad instead of an ellipse. `applied` takes
+    its region from `redact.region_for`, so the control masks the shape this
+    kind actually gets and the comparison happens inside it."""
+    rng = np.random.default_rng(7)
+    before = rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)
+    settings = Settings(**SCREENS)
+    det = screen_det()
+    after, _ = redact(before, [det], settings)
+    changed, would = applied(before, after, det, settings)
+    assert classify(changed, would) == "masked"
+    assert classify(*applied(before, before, det, settings)) == "missed"
+
+
+def test_a_screen_seen_in_one_frame_does_not_hold_a_copy_back():
+    """14 of the 29 false screen runs on the sample footage last a single
+    frame and not one real screen does. A gate without this holds back every
+    copy that has a table in it."""
+    settings = Settings(**SCREENS)
+    out = screen_report([4], settings)
+    assert out["residual_screens"] == 1
+    assert [run["hits"] for run in out["residual_screen_runs"]] == [1]
+    assert held_for(out, settings) == ()
+
+
+def test_three_frames_of_the_same_screen_do():
+    settings = Settings(**SCREENS)
+    out = screen_report([4, 5, 6], settings)
+    assert out["residual_screens"] == 3
+    assert out["residual_screen_frames"] == 3
+    assert out["residual_screen_runs"] == [
+        {"label": "tv", "first": 4, "last": 6, "hits": 3, "px": 200,
+         "x": 180, "y": 120, "w": 200, "h": 120}]
+    assert held_for(out, settings) == ("screen",)
+
+
+def test_two_flickers_on_different_things_are_not_one_screen():
+    """Runs are grouped by where the box is, not by the frame number. A table
+    that flickers at the left and a mirror that flickers at the right in the
+    next frame are two runs of one, not one run of two."""
+    settings = Settings(**SCREENS)
+    rows = (screen_rows([4], x=100, y=100) + screen_rows([5], x=1200, y=900))
+    out = summarise([{"start": 0, "end": 100, "checked": 100, "flat": 0, "found": rows}],
+                    settings)
+    assert [run["hits"] for run in out["residual_screen_runs"]] == [1, 1]
+    assert held_for(out, settings) == ()
+
+
+def test_a_screen_under_the_size_floor_is_recorded_and_holds_nothing_back():
+    """A 24 px screen shows nothing a person could read, so it is reported and
+    it decides nothing. It stays in the record, as a hand does."""
+    settings = Settings(**SCREENS)
+    out = screen_report([4, 5, 6, 7], settings, px=30, w=30, h=20)
+    assert out["residual_screens"] == 4
+    assert out["residual_screen_max_px"] == 30
+    assert out["residual_screen_runs"] == []
+    assert held_for(out, settings) == ()
+    assert len(out["residual_list"]) == 4
+
+
+def test_a_run_that_reaches_the_floor_only_at_its_widest_still_counts():
+    """The floor is asked of each find, and the run is what is left. A screen
+    the camera walks towards crosses the floor part way through."""
+    settings = Settings(**SCREENS)
+    rows = (screen_rows([4], px=30, w=30, h=20) + screen_rows([5, 6, 7]))
+    out = summarise([{"start": 0, "end": 100, "checked": 100, "flat": 0, "found": rows}],
+                    settings)
+    assert out["residual_screens"] == 4
+    assert [run["hits"] for run in out["residual_screen_runs"]] == [3]
+    assert held_for(out, settings) == ("screen",)
+
+
+def test_a_run_of_screens_holds_nothing_back_when_screens_were_not_asked_for():
+    """A copy nobody asked to have screens masked in is not missing one."""
+    faces_only = Settings()
+    out = screen_report([4, 5, 6], faces_only)
+    assert out["residual_screens"] == 3
+    assert held_for(out, faces_only) == ()
+
+
+def test_the_check_looks_only_for_what_the_run_was_asked_to_mask():
+    assert kinds_checked(Settings()) == ("face",)
+    assert kinds_checked(Settings(**SCREENS)) == ("face", "screen")
+    assert kinds_checked(Settings(mask=("screen",))) == ("screen",)
+
+
+def test_a_face_and_a_screen_can_hold_the_same_copy_back():
+    settings = Settings(**SCREENS)
+    rows = (screen_rows([4, 5, 6])
+            + [{"kind": "face", "frame": 9, "px": 60, "x": 5, "y": 5,
+                "score": 0.9, "applied": 0.0}])
+    out = summarise([{"start": 0, "end": 100, "checked": 100, "flat": 0, "found": rows}],
+                    settings)
+    assert out["residual_faces"] == 1 and out["residual_screens"] == 3
+    assert held_for(out, settings) == ("face", "screen")
+
+
+def test_the_record_keeps_two_hundred_rows_of_each_kind_not_two_hundred_in_all():
+    """On the table tennis file the check finds 67 faces and 129 screens. A
+    shared cap would let a file with hundreds of screen finds push the faces
+    out of the record an auditor reads, which is the one thing in it that
+    nobody can afford to miss."""
+    faces = [{"kind": "face", "frame": i, "px": 50, "x": 1, "y": 1, "score": 0.9,
+              "applied": 0.0} for i in range(400)]
+    out = summarise([{"start": 0, "end": 900, "checked": 900, "flat": 0,
+                      "found": faces + screen_rows(range(400, 800))}],
+                    Settings(**SCREENS))
+    kept = out["residual_list"]
+    assert len(of_kind(kept, "face")) == 200
+    assert len(of_kind(kept, "screen")) == 200
+    assert out["residual_faces"] == 400, "the counts are over every row"
+    assert out["residual_screens"] == 400
+
+
+def test_a_row_written_before_kinds_existed_is_read_as_a_face():
+    """An audit record from before 2026-09-10 has no kind on its rows, and
+    everything in one is a face, because a face is all this check looked for."""
+    old = [{"frame": 2, "px": 50, "x": 1, "y": 1, "score": 0.9, "applied": 0.0}]
+    assert of_kind(old, "face") == old
+    assert of_kind(old, "screen") == []
+    out = summarise([{"start": 0, "end": 10, "checked": 10, "flat": 0, "found": old}])
+    assert out["residual_faces"] == 1 and out["residual_screens"] == 0
+
+
+def test_flat_boxes_are_counted_by_kind_and_as_one_number():
+    out = summarise([{"start": 0, "end": 10, "checked": 10, "flat": 5,
+                      "flat_by_kind": {"face": 3, "screen": 2}, "found": []},
+                     {"start": 10, "end": 20, "checked": 10, "flat": 1,
+                      "flat_by_kind": {"face": 1, "screen": 0}, "found": []}])
+    assert out["flat_boxes"] == 6
+    assert out["flat_by_kind"] == {"face": 4, "screen": 2}
+
+
+def test_the_grouping_survives_a_row_with_no_box_on_it():
+    """A row from an older record carries no width or height. Grouping falls
+    back to the long side rather than raising, so an old record still reads."""
+    rows = [{"kind": "screen", "frame": i, "px": 90, "x": 100, "y": 100,
+             "score": 0.8, "applied": 0.0} for i in (1, 2, 3)]
+    runs = screen_runs(rows, Settings(**SCREENS))
+    assert [run["hits"] for run in runs] == [3]
+
+
+def test_the_summary_says_what_it_looked_for():
+    settings = Settings(**SCREENS)
+    out = screen_report([4, 5, 6], settings)
+    text = describe(out, settings)
+    assert "3 screen boxes still visible" in text
+    assert "no face" in text or "0 faces" in text
+    assert "screen" not in describe(out, Settings())
+
+
+def test_every_ready_kind_is_covered_by_this_check():
+    """Condition 2 of "ready" in the build plan: a kind whose masks nothing
+    checks is a promise nobody has tested. This is here as well as in
+    test_classes so that a reader of either file sees it."""
+    from faceblur.classes import available
+
+    for kind in available():
+        assert kind.name in KINDS_CHECKED, f"{kind.name} is ready and nothing checks it"
+
+
+# ------------------------------------------------------ screens on real video
+
+def test_a_run_with_screens_on_writes_the_screen_fields_and_they_round_trip(
+        tmp_path, video_with_face):
+    """The record has to read back: an auditor gets the JSON, not the run."""
+    import json
+
+    out = tmp_path / "screened.mp4"
+    record = run_video(video_with_face, out,
+                       Settings(check_output=True, mask=("face", "screen"), **FAST),
+                       serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert record.checked_frames > 0
+    read_back = json.loads(json.dumps(record.to_dict()))
+    for field in ("residual_screens", "residual_screen_frames", "residual_screen_max_px"):
+        assert isinstance(read_back[field], int)
+    assert isinstance(read_back["residual_screen_runs"], list)
+    assert isinstance(read_back["held_back_for"], list)
+    assert read_back["flat_by_kind"].get("screen") is not None
+    assert all(row.get("kind") in ("face", "screen") for row in read_back["residual_list"])

@@ -180,9 +180,11 @@ Four things to know before you switch screens on:
   size cap necessary and what sets its value. A room with a large monitor close
   to the camera and no large flat furniture would want a looser cap, and there
   is no footage here to set one on.
-- **The output side check does not cover screens yet.** `--check-output` and
-  `--quarantine` read the copy for faces. A screen the run missed is not
-  reported and does not hold a copy back.
+- **A screen the check reports may be a table.** `--check-output` now reads the
+  copy for screens as well as faces, and it inherits the detector's weakness
+  the way it inherits the face detectors': it reports what YOLOX calls a
+  screen. The gate asks for persistence before it acts on one, and the record
+  names every find either way.
 
 The screen mask destroys 0.01 to 0.34 percent of the average frame on the
 sample files, and at most 12 percent of one, which is a large monitor properly
@@ -251,6 +253,17 @@ PC. `--quarantine` turns that into a gate: a copy that still shows a face of
 the output instead of shipping, with its audit record naming the frames. Use
 both for anything that leaves the machine.
 
+The check looks for what the run was asked to mask. With `--mask face,screen`
+it reads the copy for screens too, at about 2 to 6 percent on top of the face
+check, and the record says how many are left and where. A screen holds a copy
+back only when it was **there**: the finds are grouped into runs the way the
+pipeline groups them, and a run has to last `screen_gate_min_run` checked
+frames and clear `screen_gate_min_px` on its long side. One frame of a table
+that looked like a laptop holds nothing back, and without that rule every
+copy would be held. A face needs no such rule, because one frame of a face is
+a face. The record's `held_back_for` names the kinds that stopped a copy, and
+the command line prints them.
+
 The check uses the same detectors as the rest of the pipeline, and they call
 the wearer's own hand a face. So before it reports anything it asks
 MediaPipe's hand models, which ship with the build, whether the box is a hand;
@@ -275,8 +288,10 @@ for the right reason.
   `screens`, the detections the model made, and `screen_frames`, the frames a
   screen mask reached after the persistence rule. After `--check-output` it
   holds what a second pass over the copy found: frames checked, faces still
-  visible by size, the frame stretches they sit in, and how many of the boxes
-  it found were the wearer's hand.
+  visible by size, the frame stretches they sit in, how many of the boxes it
+  found were the wearer's hand, the screens still visible and the runs they
+  form, and `held_back_for`, the kinds that stopped the copy shipping. It
+  keeps up to 200 rows of each kind, and every count in it is over every row.
 - `quarantine\<name>_blurred.mp4` and its record, when `--quarantine` held a
   copy back. The file is not deleted: it is the only blurred copy of that
   video, and the record says which frames stopped it.
@@ -311,8 +326,10 @@ hold.
 `faceblur.verify` is the same check `--check-output` runs, on copies that are
 already written. It needs no second environment, no labels and no oracle: it
 detects on the copy and reports the boxes nothing was done to, having first
-asked the hand models which of them are the wearer's own hand. Its exit code
-is 1 when any face is left.
+asked the hand models which of them are the wearer's own hand. `--mask
+face,screen` tells it what the run was asked to mask, so that a copy nobody
+asked to have screens masked in is not reported as missing one. Its exit code
+is 1 when anything is left.
 
 `eval.reid` asks the question coverage only stands in for: can a face
 recogniser still put the same name to anybody in the blurred copy. It reports

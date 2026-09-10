@@ -45,6 +45,24 @@ def test_which_kinds_this_build_can_actually_do():
     assert not TEXT.ready
 
 
+def test_every_ready_kind_is_checked_in_the_finished_copy():
+    """The second of the four conditions a kind has to meet before it may be
+    called ready: a miss of that kind, found in the copy, has to be counted
+    and able to hold the copy back. Without this the switch says the tool
+    masks a thing and nothing anywhere tests whether it did.
+
+    This test fails on purpose when a kind is marked ready before its coverage
+    in `faceblur/verify.py` lands. Make the check cover it; do not add the
+    name here to make the test pass.
+    """
+    from faceblur.verify import KINDS_CHECKED
+
+    for kind in classes.available():
+        assert kind.name in KINDS_CHECKED, (
+            f"{kind.name} is marked ready and faceblur/verify.py does not look "
+            f"for it in the finished copy")
+
+
 def test_a_face_is_hidden_by_an_ellipse_and_the_others_by_their_own_corners():
     assert FACE.shape == ELLIPSE
     assert TEXT.shape == POLYGON and SCREEN.shape == POLYGON

@@ -75,6 +75,19 @@ class Settings:
     # of zero still joins them into a run.
     screen_tail: int = 6
     screen_gap: int = 12
+    # The smallest screen the output-side check will hold a copy back for, as
+    # the box's long side. 48 rather than the 24 px faces use, because the
+    # thing being hidden is what is on the glass rather than who the glass
+    # belongs to, and a 24 px screen shows nothing anybody could read. First
+    # guess; section 16.1 measures what it lets through.
+    screen_gate_min_px: int = 48
+    # Checked frames a screen has to be found in on the copy before it holds
+    # that copy back. The same rule as screen_min_run and for the same reason:
+    # 14 of the 29 false runs on the sample footage last a single frame and no
+    # real screen does, so a gate without it would hold every copy back for a
+    # table that looked like a laptop once. The length counts *checked*
+    # frames, so at check_stride 2 a run of 3 spans six source frames.
+    screen_gate_min_run: int = 3
 
     # --- detection -----------------------------------------------------------
     # yunet: YuNet finds faces, CenterFace confirms them (see verify).
@@ -409,6 +422,12 @@ class Settings:
                 f"screen_min_run must be at least 1, got {self.screen_min_run}")
         if self.screen_tail < 0 or self.screen_gap < 0:
             raise SettingsError("screen_tail and screen_gap must be 0 or more")
+        if self.screen_gate_min_px < 0:
+            raise SettingsError(
+                f"screen_gate_min_px must be 0 or more, got {self.screen_gate_min_px}")
+        if self.screen_gate_min_run < 1:
+            raise SettingsError(
+                f"screen_gate_min_run must be at least 1, got {self.screen_gate_min_run}")
         if self.crop_size < 64 or self.crop_scale < 1.0:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
@@ -503,6 +522,7 @@ class Settings:
             "hand_device",
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",
             "screen_max_area", "screen_min_run", "screen_tail", "screen_gap",
+            "screen_gate_min_px", "screen_gate_min_run",
             "nms_detect", "nms_yunet")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.
