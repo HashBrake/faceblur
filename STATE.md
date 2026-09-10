@@ -67,9 +67,18 @@ evidence (see "the caches were stale" below). Output folder `footage_blurred_v8`
 | Masked pixels where no detector sees a face | — | 0.18 % | 0.77 % | 0.43 % |
 | Hand pixels touched | — | 0.00 % | 0.00 % | 0.09 % |
 | Confirmed faces kept covered while visible | — | 99.0 % | 99.5 % | 93.5 % |
-| Face-shaped boxes still in the copy, untouched | 8 | 8 | 17 | 94 |
+| Faces the copy still shows, on untouched pixels | 7 | 8 | 15 | 64 |
+| ... and hands the rule set aside, not counted above | 1 | 0 | 2 | 11 |
 
 (`003939` has no MediaPipe oracle, so it has no consensus or hand numbers.)
+
+The last two rows were re-measured on 2026-09-09 with the hand rule on.
+Section 13.4 reports 94 boxes on `005035` where two runs of the current code
+report 75; the other three files reproduce exactly. Nothing was found to
+explain it and the 2026-09-08 run cannot be repeated, so the section keeps its
+number, this table carries the one the code now gives, and a third party
+should trust the second. Whatever it was, it does not change the finding:
+that file still shows dozens of faces.
 
 If someone asks how good it is in one percentage, there isn't one, and the
 honest answer is three numbers: **99.7 to 100 percent** of the faces the
