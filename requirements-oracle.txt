@@ -1,0 +1,35 @@
+# The object oracle, evaluation only. Nothing here ever ships.
+#
+# A third environment, not `.venv-eval`, on purpose. MediaPipe pins numpy
+# below 2 and every face number in docs/report.md was measured through it;
+# torch and transformers want a newer numpy, and loosening MediaPipe's pin to
+# save 3 GB of disk would put the whole face side's evidence at risk for
+# nothing. The build plan says to make a third environment rather than loosen
+# a pin, and this is it.
+#
+#     py -3.12 -m venv .venv-oracle
+#     .venv-oracle\Scripts\python.exe -m pip install ^
+#         --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+#     .venv-oracle\Scripts\python.exe -m pip install -r requirements-oracle.txt
+#
+# torch comes first and from its own index, because the default index serves
+# the CUDA build and this needs neither a GPU nor two more gigabytes.
+#
+# The model is pinned to one revision in eval/oracle_owl.py:
+#   google/owlv2-base-patch16-ensemble, Apache 2.0
+#   revision cfd3195ba4ea9592eec887ded089f4c08eff231d
+#   model.safetensors, 619918824 bytes,
+#   sha256 e1e130b9e404cf91a75ad45644c1da9d7fa5284085eecc864266a6923efb99e7
+# The weights are cached under eval/cache/hf, which git ignores, and are never
+# downloaded at pipeline run time. Set HF_HUB_OFFLINE=1 to prove it.
+
+transformers==4.49.0
+numpy==2.1.3
+scipy==1.15.2
+pillow==11.1.0
+opencv-python-headless==4.11.0.86
+
+# Pulled in by transformers and pinned so the environment rebuilds the same.
+huggingface_hub==0.36.2
+safetensors==0.8.0
+tokenizers==0.21.4

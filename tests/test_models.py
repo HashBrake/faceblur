@@ -91,6 +91,31 @@ def test_the_face_recogniser_stays_out_of_the_build():
     assert "sface" not in spec_datas()
 
 
+def test_the_evaluation_only_models_stay_out_of_the_build():
+    """The oracle and everything it needs are evaluation only.
+
+    OWLv2 is 1.4 GB and torch is larger still, they live in `.venv-oracle`
+    which the packaged app knows nothing about, and neither has ever produced
+    a mask. A build that carried them would be shipping a general purpose
+    object detector to hide faces with.
+    """
+    spec = spec_datas().lower()
+    for name in ("owl", "torch", "transformers", "mediapipe", "sface"):
+        assert name not in spec, f"{name} is evaluation only and the build carries it"
+
+
+def test_the_oracle_never_runs_in_the_pipeline():
+    """Nothing the packaged app imports may reach the oracle, and the oracle
+    may not reach for the network when something does import it."""
+    import pathlib
+
+    package = pathlib.Path(__file__).resolve().parents[1] / "faceblur"
+    for module in sorted(package.glob("*.py")):
+        text = module.read_text(encoding="utf-8")
+        for name in ("oracle_owl", "transformers", "torch", "huggingface"):
+            assert name not in text, f"faceblur/{module.name} reaches for {name}"
+
+
 def test_the_screen_model_is_in_the_build():
     """A checkbox for screens with no model behind it in the packaged app
     would mask nothing and say nothing."""

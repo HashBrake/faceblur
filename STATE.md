@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-10, after work packages R1, S1 and 4.3. This file says where the
+Last updated: 2026-09-10, after work packages R1, S1, 4.3 and E1. This file says where the
 project stands, what was verified, and what a new person or session should do
 next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
@@ -95,10 +95,11 @@ written and one commit.
 | R1 | Housekeeping: documents and the packaged app say what the code does | Done 2026-09-10, report section 9.1 |
 | S1 | Screens in the output side check and the gate | Done 2026-09-10, report section 16.1 |
 | 4.3 | Per kind mask accounting | Done 2026-09-10, report section 16.3 |
-| E1 | Object oracle for evaluation | Next |
-| F0 | Faces printed on cards | Not started |
-| F1 | Second chance for missed faces | Not started |
-| T1 to T4 | Personal text | Not started |
+| E1 | Object oracle for evaluation | Done 2026-09-10, report section 16.2 |
+| F0 | Faces printed on cards | **Blocked: no cards in the footage.** See E1 below |
+| F1 | Second chance for missed faces | Next |
+| T1, T3, T4 | Personal text | Not started. Worth more than expected, see E1 |
+| T2 | Card and slab veto | **Blocked: no cards in the footage** |
 | M1 | Metadata line in the record | Not started |
 
 ### Decisions taken by default
@@ -261,6 +262,86 @@ What a next person should not assume:
 - **The shares are of the frame, not of each other.** Kinds may overlap, so
   they can sum to more than the union. A face on a television is counted in
   both columns.
+
+### E1, done 2026-09-10
+
+Screens got a witness that is not the thing being measured, which is what
+section 15.4 said they lacked. `eval/oracle_owl.py` runs OWLv2, an open
+vocabulary detector, in a third environment; `eval/screens.py` scores the
+shipped screen class against it. The oracle never ships, never runs in the
+pipeline, and is pinned to one model revision.
+
+**Read section 16.2 before touching anything about screens.** The short
+version, and none of it is what the build plan expected:
+
+- **Recall of the shipped screen class is 0 to 23 percent** of the sightings
+  the oracle sees. That is the first recall figure screens have ever had.
+- **It is not the two rules section 15.3 tuned.** The size cap loses nothing
+  the oracle calls a screen, and `screen_min_run` loses 9 sightings on one
+  file and none on the other three. What loses the rest is that YOLOX-tiny at
+  `screen_conf` 0.5 never reports them.
+- **Whether a lower floor would help depends on the venue.** Where the oracle
+  sees a screen and the pipeline reported nothing, YOLOX scores something at
+  91 percent of those places on the table tennis file, almost all of it under
+  0.5, and nothing at all at 53 to 60 percent of them on the washroom and the
+  canteen. `screen_conf` was **not** changed: section 15.1 measured what a
+  lower floor costs and the standing rule is not to loosen a precision setting
+  to chase recall. This is a number for whoever decides, not a change.
+- **Both numbers are bounds.** The washroom has no screens in it and the
+  oracle still finds 17 there at a floor of 0.3, so some of what this counts
+  as a missed screen is a mirror. A screen neither model finds is in nobody's
+  column.
+
+### The four sample files contain no cards, and that reorders the plan
+
+The oracle was asked about `a trading card`, `a graded card slab` and `a
+binder page of trading cards` over 1587 frames spread across all four files.
+It reports **zero at any score of 0.2 or above**, against 3213 televisions on
+one file. The four files are a washroom being cleaned, a corridor being
+mopped, a canteen and a table tennis hall, and the wearer appears to be a
+facilities worker.
+
+Nothing in the repository was wrong about this; nothing had said it plainly.
+It is consistent with the mop in section 10, the washroom mirror in 13.4 and
+the table tennis table in 15.2.
+
+What it changes:
+
+- **F0 and T2 are blocked, not deferred.** F0 measures how often a printed
+  face on a card is masked and T2 tunes a veto on card text. Neither has an
+  observation to make on this footage. Building them anyway would produce two
+  zeros and a false sense that the question had been answered.
+- **The next package is F1**, the second chance for missed faces, which is
+  also the one the build plan says is worth more than a third kind because it
+  decides whether the tool can run unattended.
+- **Text is worth more than expected.** The canteen has signage and packaging
+  and a person in the washroom file wears a shirt with text on it, which is
+  exactly the case the build plan's section 7 item 25 names.
+- **The owner's decision D1** (leave a printed face on a card alone) cannot be
+  informed by measurement here. Build the setting, default it as the plan
+  says, and say the number does not exist.
+
+### The by eye labels behind sections 14.1 and 15.2 were never committed
+
+Found while trying to do what E1 asked and re-score the 85 screen runs against
+the oracle. Only the counts survive, in the report. The 108 face boxes of
+section 14.1 are the same. So the 91 percent precision of section 15.2 and the
+56 to 68 percent the oracle gives cannot be reconciled by anybody, now or
+later, and neither audit can be checked or extended.
+
+Both sections are honest that they are one person's eye. The fix is for the
+next by eye audit, if there is one: write the labels to a file beside the
+report. Nothing in the pipeline depends on them, which is why this is a
+handover note and not a defect.
+
+### Disk
+
+The machine is at 97 percent full, 15 GB free. `.venv-oracle` is 3 GB of that
+and the oracle weights another 0.6 GB under `eval/cache/hf`. The
+`footage_blurred*` folders are about 6.6 GB and this file has said since
+2026-09-08 that the older ones can go; none were deleted by this session,
+because that is the owner's call and they are the only blurred copies of that
+footage that exist.
 
 ## The numbers, and what to say about them
 

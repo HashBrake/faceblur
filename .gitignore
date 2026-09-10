@@ -38,3 +38,4 @@ eval/cache/
 *_err.log
 *_report.json
 sweep_*.log
+.venv-oracle/

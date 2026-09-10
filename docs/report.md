@@ -1322,11 +1322,143 @@ frame. The setting bounds what may be called a screen, not what is destroyed.
 
 ### 16.2 Screen recall against an independent witness
 
-Not measured. It needs an oracle, which work package E1 of
-`FACEBLUR_BUILD_PLAN_V2.md` builds, and this heading is held for it so that
-the number lands beside the precision it belongs with. Until then the honest
-statement about screens is the one section 15.4 makes: precision against one
-person's eye over 85 runs, and no recall figure at all.
+Section 15.4 had to say screens have no recall figure at all: one detector,
+nobody to check it, and a screen it never finds counted nowhere. This is the
+witness, and the number is not good.
+
+**The oracle.** OWLv2, open vocabulary, Apache 2.0, pinned to one revision,
+run on the CPU in a third environment at 4.2 s a frame, stride 5 over the four
+sample files: 1587 frames, about two hours. It takes phrases rather than a
+fixed class list, so one model answers for televisions, monitors, phones,
+cards, slabs, badges, documents, handwriting and signs, which is what work
+packages F0, T1 and T2 were going to need as well. `eval/oracle_owl.py` holds
+the phrases and the revision; `models/README.md` holds the hash.
+
+Three checks before it was used for anything, because a witness nobody has
+questioned is not a witness:
+
+- **Its coordinates are right.** OWLv2's processor pads a frame to square, and
+  a post-processor that unpads wrongly returns boxes that look plausible and
+  sit in the wrong place. On frame 309 of `005035` the oracle puts a
+  television at xyxy [213, 233, 349, 339] and the shipped YOLOX puts one at
+  [203, 227, 358, 349]. Two families agreeing within ten pixels is the check.
+- **It does not share the failure that made the size cap necessary.** A COCO
+  detector calls any large flat rectangle a television and the blue table
+  tennis table reads as a laptop at 0.88 over a third of the frame (section
+  15.2). Across all four files at a score of 0.2 the oracle puts exactly one
+  box over 12 percent of the frame. It does not call the table anything.
+- **It rejects the false positives section 15.4 admits to.** On the washroom
+  file the shipped rule masks 10 boxes and the oracle calls none of them a
+  screen. Those are the 2.4 percent patch of washroom wall that section 15.4
+  reports as wrong.
+
+**Recall and precision**, counted per sighting on the frames the oracle
+looked at, over screens covering 0.4 percent of the frame or more, with the
+oracle's own overlapping proposals suppressed first at an IoU of 0.5 and a
+match counted at an IoU of 0.3:
+
+| File | Oracle screens | Recall at oracle floor 0.3 | Precision |
+|---|---|---|---|
+| `003939` washroom | 17 | 0 % | 0 % |
+| `004100` corridor | 43 | 2 % | 3 % |
+| `004310` canteen | 105 | 0 % | 0 % |
+| `005035` table tennis | 491 | 23 % | 61 % |
+
+`eval/screens.py` prints the same table at six oracle thresholds, because the
+answer moves with that choice and a single number would hide it. On `005035`
+recall runs from 9 percent at a floor of 0.1 to 25 percent at 0.4, and
+precision the other way, from 68 percent down to 56.
+
+**What is causing it is not the two rules section 15.3 tuned.** For every
+oracle screen the shipped rule does not mask, the same code was asked which
+step lost it:
+
+| File | Oracle screens | Masked | Never seen by the detector | Thrown out by the size cap | Dropped by persistence |
+|---|---|---|---|---|---|
+| `003939` | 17 | 0 | 17 | 0 | 0 |
+| `004100` | 43 | 1 | 42 | 0 | 0 |
+| `004310` | 105 | 0 | 105 | 0 | 0 |
+| `005035` | 491 | 113 | 369 | 0 | 9 |
+
+The size cap costs nothing at all and `screen_min_run` costs nine sightings on
+one file and none on the other three. Section 15.3 chose both carefully and
+neither is what is holding the class back. What is holding it back is that
+YOLOX-tiny at `screen_conf` 0.5 does not report most of what the oracle calls
+a screen.
+
+**Whether a threshold would fix that depends on the venue.** At each place the
+oracle sees a screen and the shipped detector reported nothing, YOLOX was
+asked what it scored there with no floor at all:
+
+| File | 0.50 and over | 0.25 to 0.50 | 0.01 to 0.25 | Nothing at all |
+|---|---|---|---|---|
+| `003939` | 0 % | 12 % | 35 % | 53 % |
+| `004100` | 0 % | 5 % | 70 % | 26 % |
+| `004310` | 0 % | 0 % | 40 % | 60 % |
+| `005035` | 15 % | 18 % | 58 % | 9 % |
+
+On the table tennis hall the detector sees something at 91 percent of them,
+almost all of it under the shipped floor, so `screen_conf` is the lever there
+and the trade against the table is measurable. On the canteen and the washroom
+it sees nothing at all at 53 to 60 percent of them, and no threshold reaches
+those.
+
+**Read both numbers as bounds, in both directions.** The washroom has no
+screens in it. The oracle finds 17 there at a floor of 0.3 and 3 at 0.4, and
+they are almost certainly mirrors and bright tiles, so part of what this
+section counts as a missed screen is not one and the recall figure is
+pessimistic. Equally, a screen neither model finds is in neither column. The
+oracle is one model's opinion at a threshold somebody chose, exactly the
+caveat section 12.5 gives the recogniser, and where the two disagree neither
+is right by definition.
+
+**Nothing can adjudicate between the oracle and the eye.** Precision against
+the oracle is 56 to 68 percent on the one file with enough data and section
+15.2 gives 91 percent against one person's eye over 85 runs. Those two cannot
+be reconciled, because **the 85 labels were never committed**. Only the counts
+survive, in section 15.2. The same is true of the 108 boxes of section 14.1.
+Both audits are honest about being one person's eye, and neither can be
+re-scored against anything, now or later. A future by eye audit should write
+its labels to a file beside the report.
+
+### 16.2.1 There are no cards in this footage
+
+The oracle was built with `a trading card`, `a graded card slab` and `a binder
+page of trading cards` among its phrases, because work packages F0 and T2 are
+about cards and needed regions to work from. Over 1587 frames spread across
+all four sample files it reports:
+
+| Score floor | Card prompt hits | Television hits, for scale |
+|---|---|---|
+| 0.10 | 137 | 3213 on `005035` alone |
+| 0.15 | 11 | |
+| 0.20 | 0 | |
+| 0.30 | 0 | |
+
+Zero at any score a reader would act on. The four sample files are a washroom
+being cleaned, a corridor being mopped, a canteen and a table tennis hall, and
+the wearer appears to be a facilities worker. Everything already in this
+report is consistent with that once it is pointed at: the wearer's hand on a
+mop in section 10, the face in a washroom mirror in section 13.4, the blue
+table tennis table in section 15.2.
+
+This is not a fault in anything. It is a fact about the sample footage that no
+document said plainly, and it decides what the remaining work is worth:
+
+- **F0, faces printed on cards, has nothing to measure.** Decision D1 asks
+  whether to leave a printed face on a card alone. On this footage the
+  question is unobservable either way.
+- **T2, the card and slab veto, has nothing to tune.** Its design in the build
+  plan is a decision tree driven by how much card text sits above the size
+  floor, and here there is no card text at all.
+- **The screen and text work is unaffected**, and text is worth more than
+  expected: the canteen has signage and packaging, and a person in the
+  washroom file wears a shirt with text on it, which is the case section 7
+  item 25 of the build plan names as personal text on clothing.
+
+Section 11 of `FACEBLUR_BUILD_PLAN_V2.md` asks the owner whether the footage
+holds sports cards with real faces or only game cards. The measured answer is
+neither.
 
 ### 16.3 What each kind destroys, measured apart
 
@@ -1393,8 +1525,9 @@ to face the question rather than move every gate quietly.
   reads as a laptop for three checked frames on the copy will hold a copy
   back. There is no oracle for screens on this footage, so there is no way
   here to say how many of the 82 are real. Work package E1 is what would.
-- **There is no recall.** A screen no detector ever finds is not in any of
-  these numbers, on either side of the file.
+- **There is a recall number now, and it is a bound.** Section 16.2 has it. A
+  screen neither the shipped detector nor the oracle finds is still in nobody's
+  column.
 - **The size floor is untested**, as above.
 - **The window cannot run this at all.** `--check-output` and `--quarantine`
   are command line only; `ui/app.py` never sets either, so no run started from

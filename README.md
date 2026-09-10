@@ -169,10 +169,13 @@ that monitor.
 
 Four things to know before you switch screens on:
 
-- **There is no recall number.** There is no independent witness for screens on
-  this footage, so unlike faces there is precision against one person's eye
-  over 85 detection runs and nothing else. A screen no detector ever finds is
-  not counted anywhere.
+- **Recall is low, and it is the detector rather than the rules.** Measured
+  against an independent witness (OWLv2, evaluation only), the screen class
+  masks 0 to 23 percent of the screens that witness sees. The size cap costs
+  none of that and the persistence rule costs 2 percent: what limits it is
+  that YOLOX-tiny at a confidence of 0.5 does not report most of them. Both
+  numbers are one model's opinion against another's, so read them as bounds.
+  `docs/report.md` section 16.2 has the tables.
 - **9 percent of what it masks is not a screen.** The survivors are small
   patches: 2.4 percent of a frame of washroom wall for 10 frames, 0.4 percent
   for 27. They are cheap in pixels and they are still wrong.
@@ -302,12 +305,22 @@ for the right reason.
 ## Evaluate a new batch
 
 The harness needs a second environment for MediaPipe, which supplies the third
-face detector and the hand regions:
+face detector and the hand regions, and a third for the object oracle, which
+is what gives screens a recall number:
 
 ```
 py -3.12 -m venv .venv-eval
 .venv-eval\Scripts\python.exe -m pip install -r requirements-eval.txt
+
+py -3.12 -m venv .venv-oracle
+.venv-oracle\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+.venv-oracle\Scripts\python.exe -m pip install -r requirements-oracle.txt
 ```
+
+Three environments rather than two because MediaPipe pins numpy below 2 and
+torch wants a newer one, and every face number in the report was measured
+through MediaPipe. Loosening that pin to save disk would put the face side's
+evidence at risk for nothing.
 
 Then, for a video:
 
@@ -318,7 +331,15 @@ Then, for a video:
 .venv\Scripts\python.exe -m eval.misses VIDEO --images SOME_FOLDER
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED_COPY
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED_COPY --workers 4
+.venv-oracle\Scripts\python.exe eval\oracle_owl.py VIDEO --stride 5
+.venv\Scripts\python.exe -m eval.screens VIDEO
 ```
+
+`eval.oracle_owl` runs an open vocabulary detector (OWLv2, Apache 2.0) that
+knows nothing about this pipeline, and writes what it sees as boxes. It is
+slow, about 4 seconds a frame on the processor, and it never ships and never
+runs in the pipeline. `eval.screens` scores the shipped screen class against
+it, which is the only recall number screens have.
 
 `eval.misses` lists the stretches where YuNet saw a box at full threshold that
 nothing confirmed and no mask covers, with one annotated frame each. The same

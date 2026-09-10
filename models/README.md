@@ -91,6 +91,50 @@ are Apache 2.0.
 **Not part of the app.** It is evaluation only, and the packaged build does not
 carry it. A tool that redacts faces has no business shipping a face recogniser.
 
+## Evaluation only: the object oracle, OWLv2
+
+Not a file in this folder. It is downloaded once into a gitignored cache and
+is named here because it is a model this project's numbers depend on, and a
+reader checking what was used deserves to find it in one place with the rest.
+
+| Field | Value |
+|---|---|
+| Model | google/owlv2-base-patch16-ensemble |
+| Revision | cfd3195ba4ea9592eec887ded089f4c08eff231d |
+| URL | https://huggingface.co/google/owlv2-base-patch16-ensemble |
+| Licence | Apache 2.0 |
+| Weights | model.safetensors, 619918824 bytes |
+| sha256 | e1e130b9e404cf91a75ad45644c1da9d7fa5284085eecc864266a6923efb99e7 |
+| Input | 960x960 RGB, padded to square at the bottom right by its own processor |
+| Runs in | `.venv-oracle` only, on the CPU, at about 4.2 s a frame |
+
+An open vocabulary detector: it takes phrases rather than a fixed class list,
+so one model answers for televisions, monitors, phones, cards, slabs, badges,
+documents, handwriting and signs. `eval/oracle_owl.py` holds the phrases and
+the pinned revision; `eval/screens.py` scores the shipped screen class against
+it.
+
+It plays the part for objects that MediaPipe plays for faces: a witness from a
+different family that never touches an output, so that a thing the shipped
+detector misses is still counted by something. Section 15.4 of
+`docs/report.md` had to say screens have no recall figure at all for exactly
+that reason.
+
+**Never in the pipeline, never in the build.** It lives in a third
+environment, its weights sit under `eval/cache/hf` which git ignores, and it
+is pinned to one revision so a rerun measures the same thing.
+`tests/test_models.py` fails if `owl`, `torch`, `transformers` or `mediapipe`
+appears in `build/faceblur.spec`, or if any module under `faceblur/` reaches
+for the oracle or for torch.
+
+**The coordinates were checked, not trusted.** OWLv2's processor pads a frame
+to square before it looks at it, and a post-processor that unpads wrongly
+returns boxes that are plausible and in the wrong place. On frame 309 of
+`005035` the oracle puts a television at xyxy [213, 233, 349, 339] and the
+shipped YOLOX puts one at [203, 227, 358, 349]. Two models from different
+families agreeing to within ten pixels on the same object is the check that
+the boxes mean what they say.
+
 ## palm_detection.onnx and hand_landmark.onnx
 
 | Field | Value |
