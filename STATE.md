@@ -2,17 +2,21 @@
 
 Last updated: 2026-09-09, second pass that day. This file says where the
 project stands, what was verified, and what a new person or session should do
-next. The README explains
-how to use the tool; `docs/report.md` holds the measurements, one section per
-pass, and is the place to look before changing anything measured.
+next. The README explains how to use the tool; `docs/report.md` holds the
+measurements, one section per pass, and is the place to look before changing
+anything measured.
 
 ## What this is
 
 FaceBlur: video in, video with faces blurred out. Windows desktop window plus a
-command line. No labels, no human step anywhere in the pipeline or in its
-evaluation. Built for Ego camera footage (1600x1300, ~30 fps, h264, no audio)
-of card collectors, where the goal is: destroy the minimum region that hides a
-person's identity and leave hands, cards, screens and everything else untouched.
+command line. No labels and no human step anywhere in the pipeline, and none
+in any measurement that gets re-run — with one exception, recorded in section
+14.1: deciding whether the hand rule was safe meant knowing what 108 boxes
+actually were, and they were labelled by eye, once. Nothing the pipeline does
+depends on a label. Built for Ego camera footage (1600x1300, ~30 fps, h264,
+no audio) of card collectors, where the goal is: destroy the minimum region
+that hides a person's identity and leave hands, cards, screens and everything
+else untouched.
 
 ## Where things stand
 
@@ -39,7 +43,9 @@ person's identity and leave hands, cards, screens and everything else untouched.
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
 - Tests: `tests/`, 874 passing (`.venv\Scripts\python.exe -m pytest tests`).
-- Everything is committed and pushed: `HashBrake/faceblur`, `main` at e2663c0.
+- Everything is committed and pushed to `HashBrake/faceblur`, `main`, and the
+  working tree is clean. The last change of substance is e2663c0, the hand
+  rule; commits after it are these notes catching up.
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
   rebuilt since 2026-09-07, and it now has two more models to carry, so it
   needs rebuilding before it is handed to anyone. The spec ships three face
