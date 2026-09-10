@@ -249,7 +249,7 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 874 tests
+.venv\Scripts\python.exe -m pytest tests                      # 956 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10

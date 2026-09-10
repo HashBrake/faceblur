@@ -314,6 +314,7 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(self._build_input(), 3)
         outer.addWidget(self._build_output())
+        outer.addWidget(self._build_mask())
         outer.addWidget(self._build_advanced())
         outer.addLayout(self._build_start())
         outer.addWidget(self._build_progress(), 4)
@@ -385,6 +386,47 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         layout.addWidget(help_label(S.OUTPUT_HELP))
         return box
+
+    def _build_mask(self) -> QWidget:
+        """One checkbox per kind of sensitive thing.
+
+        Every kind this build knows about is listed, including the ones it
+        cannot do yet. Those are switched off and disabled, and their help
+        text says so: a person deciding whether to trust the output needs to
+        know that text and screens are not covered, and a list that grows
+        later would hide that today.
+        """
+        from faceblur.classes import FACE, SCREEN, TEXT
+
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(GRID // 2)
+        heading = QLabel(S.MASK_LABEL)
+        heading.setAccessibleName(S.ACC_MASK_GROUP)
+        layout.addWidget(heading)
+
+        self.mask_checks: dict[str, QCheckBox] = {}
+        for kind, label, help_text in ((FACE, S.MASK_FACES, S.MASK_FACES_HELP),
+                                       (TEXT, S.MASK_TEXT, S.MASK_TEXT_HELP),
+                                       (SCREEN, S.MASK_SCREEN, S.MASK_SCREEN_HELP)):
+            check = QCheckBox(label)
+            check.setMinimumHeight(CONTROL_HEIGHT - 4)
+            check.setEnabled(kind.ready)
+            check.setChecked(kind.ready and kind is FACE)
+            check.toggled.connect(self._update_start_enabled)
+            self.mask_checks[kind.name] = check
+            layout.addWidget(check)
+            layout.addWidget(help_label(help_text))
+
+        self.mask_help = help_label(S.MASK_HELP)
+        layout.addWidget(self.mask_help)
+        return box
+
+    def _mask(self) -> tuple[str, ...]:
+        """The kinds the user asked for, in the order classes.py lists them."""
+        return tuple(name for name, check in self.mask_checks.items()
+                     if check.isEnabled() and check.isChecked())
 
     def _build_advanced(self) -> QWidget:
         box = QWidget()
@@ -575,6 +617,12 @@ class MainWindow(QMainWindow):
         mode = self.settings_store.value("mode", "blur")
         {"blur": self.mode_blur, "pixelate": self.mode_pixelate,
          "solid": self.mode_solid}.get(mode, self.mode_blur).setChecked(True)
+        for name, check in self.mask_checks.items():
+            from faceblur.classes import kind as kind_of
+            if not kind_of(name).ready:
+                continue
+            check.setChecked(self.settings_store.value(
+                f"mask_{name}", name == "face", type=bool))
         self.stride_spin.setValue(self.settings_store.value("stride", 1, type=int))
         self.workers_spin.setValue(self.settings_store.value(
             "workers", max(1, multiprocessing.cpu_count() // 2), type=int))
@@ -587,6 +635,8 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("advanced_open", self.advanced_toggle.isChecked())
         self.settings_store.setValue("engine", self._engine())
         self.settings_store.setValue("mode", self._mode())
+        for name, check in self.mask_checks.items():
+            self.settings_store.setValue(f"mask_{name}", check.isChecked())
         self.settings_store.setValue("stride", self.stride_spin.value())
         self.settings_store.setValue("workers", self.workers_spin.value())
         self.settings_store.setValue("replace", self.replace_check.isChecked())
@@ -663,9 +713,13 @@ class MainWindow(QMainWindow):
         self._update_start_enabled()
 
     def _update_start_enabled(self) -> None:
-        ready = bool(self.inputs) and self.output_dir is not None
+        wanted = bool(self._mask())
+        ready = bool(self.inputs) and self.output_dir is not None and wanted
         self.start_button.setEnabled(ready or self._running())
         self.start_help.setVisible(not ready and not self._running())
+        # Only nag about the switches once the rest of the form is filled in.
+        self.mask_help.setVisible(
+            not wanted and bool(self.inputs) and self.output_dir is not None)
 
     def _reset_rows(self) -> None:
         while self.rows_grid.count():
@@ -702,6 +756,7 @@ class MainWindow(QMainWindow):
             return
 
         settings = Settings(
+            mask=self._mask(),
             engine=self._engine(),
             stride=self.stride_spin.value(),
             mode=self._mode(),
@@ -731,6 +786,9 @@ class MainWindow(QMainWindow):
                        self.mode_solid, self.stride_spin, self.workers_spin,
                        self.replace_check):
             widget.setEnabled(enabled)
+        for name, check in self.mask_checks.items():
+            from faceblur.classes import kind as kind_of
+            check.setEnabled(enabled and kind_of(name).ready)
         self.drop_zone.setAcceptDrops(enabled)
 
     def _ask_to_stop(self) -> None:

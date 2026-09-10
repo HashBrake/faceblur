@@ -153,7 +153,8 @@ deletes unfinished files.
 ## Use the command line
 
 ```
-faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
+faceblur INPUT [-o OUTPUT] [--mask face,text,screen]
+         [--engine yunet|centerface|both] [--conf F]
          [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
          [--min-track N] [--max-gap N] [--tail N] [--pad F]
          [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
@@ -170,6 +171,12 @@ faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
 INPUT is a video or a folder. A folder run reads every video in it. OUTPUT
 defaults to a folder named `<input>_blurred` next to the input. The exit code is
 1 when any video failed.
+
+`--mask` chooses what to hide. Faces are the default and the only kind this
+build can do; `text` and `screen` are named in the interface and refused with
+a message that says so, because a switch that masks nothing is worse than no
+switch. The window shows the same three as checkboxes, with the two that are
+not built switched off and labelled.
 
 `--no-verify` and `--engine both` find more faces and also blur hands and
 objects. On the Ego footage they touched 7.7 percent of hand pixels. Use them

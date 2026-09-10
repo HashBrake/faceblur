@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Command line front end over faceblur.pipeline.
 
-    faceblur INPUT [-o OUTPUT] [--engine yunet|centerface|both] [--conf F]
+    faceblur INPUT [-o OUTPUT] [--mask face,text,screen]
+             [--engine yunet|centerface|both] [--conf F]
              [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
@@ -31,6 +32,9 @@ from faceblur.pipeline import (
     output_path,
     process_video,
 )
+from faceblur.classes import KINDS, UnknownKind
+from faceblur.classes import available as available_kinds
+from faceblur.classes import parse as parse_mask
 from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_sizes
 
 # Worker processes run the phases of one video at a time: detection in frame
@@ -263,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quarantine-px", type=int, default=defaults.quarantine_min_px,
                         help="the smallest face that holds a copy back "
                              "(default: %(default)s px)")
+    parser.add_argument("--mask", default=",".join(defaults.mask),
+                        help="what to hide, comma separated (default: %(default)s). "
+                             + "; ".join(f"{k.name}: {k.summary}" for k in available_kinds())
+                             + _not_yet_help())
     parser.add_argument("--no-hand-rule", dest="hand_rule", action="store_false",
                         help="let the check report the wearer's hands as missed faces. "
                              "By default MediaPipe's hand models are asked about every "
@@ -277,6 +285,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _not_yet_help() -> str:
+    """Name the kinds this build knows about but cannot do yet, so that
+    --help does not read as though they were already an option."""
+    waiting = [k.name for k in KINDS if not k.ready]
+    if not waiting:
+        return ""
+    return f". Not in this build yet: {', '.join(waiting)}"
+
+
 def default_workers() -> int:
     from faceblur.detect import default_workers as _default
     return _default()
@@ -287,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings(
+            mask=parse_mask(args.mask),
             engine=args.engine,
             conf=args.conf,
             # Continuation can never be looser than the main threshold.
@@ -314,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             quarantine_min_px=args.quarantine_px,
             hand_rule=args.hand_rule,
         )
-    except SettingsError as exc:
+    except (SettingsError, UnknownKind) as exc:
         print(f"faceblur: {exc}", file=sys.stderr)
         return 2
 

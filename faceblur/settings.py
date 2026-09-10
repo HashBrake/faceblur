@@ -26,6 +26,13 @@ class SettingsError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
+    # --- what to mask --------------------------------------------------------
+    # Which kinds of sensitive thing to hide, from faceblur/classes.py. Each
+    # one is a switch of its own: masking faces does not mask text. A kind
+    # with no detector behind it cannot be named here, because a switch that
+    # masks nothing is worse than no switch.
+    mask: tuple[str, ...] = ("face",)
+
     # --- detection -----------------------------------------------------------
     # yunet: YuNet finds faces, CenterFace confirms them (see verify).
     # both: union of the two, no confirmation. centerface: CenterFace alone.
@@ -279,12 +286,30 @@ class Settings:
     # setting is only here for a machine where it is not. Section 14.4.
     hand_device: str = "auto"
 
+    def wants(self, kind: str) -> bool:
+        """Is this kind of thing to be masked on this run."""
+        return kind in self.mask
+
     def __post_init__(self) -> None:
+        object.__setattr__(self, "mask", tuple(self.mask))
         object.__setattr__(self, "det_sizes", tuple(int(s) for s in self.det_sizes))
         object.__setattr__(self, "hand_windows", tuple(int(w) for w in self.hand_windows))
         self.validate()
 
     def validate(self) -> None:
+        from .classes import BY_NAME, KINDS
+        if not self.mask:
+            raise SettingsError(
+                "mask must name at least one kind of thing to mask; "
+                f"this build knows {', '.join(k.name for k in KINDS)}")
+        for name in self.mask:
+            if name not in BY_NAME:
+                raise SettingsError(
+                    f"mask names {name!r}, which is not something this build knows; "
+                    f"it knows {', '.join(k.name for k in KINDS)}")
+            if not BY_NAME[name].ready:
+                raise SettingsError(
+                    f"this build cannot mask {name} yet")
         if self.engine not in ENGINES:
             raise SettingsError(f"engine must be one of {ENGINES}, got {self.engine!r}")
         if self.mode not in MODES:
@@ -387,6 +412,7 @@ class Settings:
 
     def to_dict(self) -> dict:
         d = {k: getattr(self, k) for k in (
+            "mask",
             "engine", "conf", "conf_weak", "det_sizes", "verify", "verify_conf", "verify_iou",
             "confirm_on_crops", "crop_size", "crop_scale",
             "confirm_tta", "verify_conf_view", "third_opinion", "third_conf", "verify_conf_low",
@@ -408,6 +434,7 @@ class Settings:
             "nms_detect", "nms_yunet")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.
+        d["mask"] = list(self.mask)
         d["det_sizes"] = list(self.det_sizes)
         d["hand_windows"] = list(self.hand_windows)
         return d

@@ -6,7 +6,18 @@ next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
 anything measured.
 
-## What this is
+## What this is, and what it is becoming
+
+**Scope changed on 2026-09-10.** The owner asked for sensitive information
+beyond faces. It is now three kinds, each a switch of its own: faces (built),
+personal text (not built), screens as objects (not built). Audio and
+container metadata were offered at the same time and not chosen. The decision
+and the two rules it came with are written into `FACEBLUR_BUILD_PLAN.md`
+under "Scope change"; the one that shapes the work is that **cards are left
+alone**, because on this footage card names, prices and grading labels are
+the point of the dataset, so only personal text is ever masked.
+
+What is built today, and everything below this line, is faces.
 
 FaceBlur: video in, video with faces blurred out. Windows desktop window plus a
 command line. No labels and no human step anywhere in the pipeline, and none
@@ -42,7 +53,7 @@ else untouched.
   actually are. It corrects section 13.4: the check finds real faces two and
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
-- Tests: `tests/`, 874 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- Tests: `tests/`, 956 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Everything is committed and pushed to `HashBrake/faceblur`, `main`, and the
   working tree is clean. The last change of substance is e2663c0, the hand
   rule; commits after it are these notes catching up.
@@ -343,6 +354,7 @@ Asked on 2026-09-09, assessed, not built. The short version:
 | `faceblur/segments.py` | keyframe cuts, copies, encodes, concat, verify, reorder delay |
 | `faceblur/batch.py` | the phased runner (`run_video`), `unconfirmed_runs`, quarantine |
 | `faceblur/pipeline.py` | audit record, single-process path |
+| `faceblur/classes.py` | the kinds of thing that can be masked, and which are ready |
 | `faceblur/verify.py` | the check that reads the output, and the gate |
 | `faceblur/hands.py` | palm detector and landmark model: is this box a hand |
 | `cli.py`, `ui/app.py` | the two front ends |

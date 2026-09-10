@@ -73,6 +73,13 @@ def _require(path: Path) -> Path:
 
 @dataclass(frozen=True)
 class Detection:
+    """One thing found in one frame, in source frame coordinates.
+
+    `kind` is what the user asked to have hidden — a face, personal text, a
+    screen — and it decides the shape of the mask. `source` is which detector
+    said so, which is a different question and is only ever evidence.
+    """
+
     x: float
     y: float
     w: float
@@ -82,6 +89,11 @@ class Detection:
     source: str = "yunet"      # yunet, centerface, track
     verified: bool = False
     confidence: float = 0.0    # the confirming detector's score, when verified
+    kind: str = "face"         # see faceblur/classes.py
+    # Four corners, for a kind whose mask is a polygon. A text line is not
+    # upright and not oval, and its box takes in the page around it. None for
+    # a face, and for any box whose detector only gave a rectangle.
+    quad: Optional[tuple] = None
 
     @property
     def long_side(self) -> float:
@@ -105,15 +117,32 @@ class Detection:
         lm = None
         if self.landmarks is not None:
             lm = tuple((px / factor, py / factor) for px, py in self.landmarks)
+        quad = None
+        if self.quad is not None:
+            quad = tuple((px / factor, py / factor) for px, py in self.quad)
         return replace(self, x=self.x / factor, y=self.y / factor,
-                       w=self.w / factor, h=self.h / factor, landmarks=lm)
+                       w=self.w / factor, h=self.h / factor, landmarks=lm, quad=quad)
+
+    def corners(self) -> tuple:
+        """The four corners to mask: the detector's own, or the box's."""
+        if self.quad is not None:
+            return self.quad
+        return ((self.x, self.y), (self.x + self.w, self.y),
+                (self.x + self.w, self.y + self.h), (self.x, self.y + self.h))
 
     def to_dict(self) -> dict:
-        return {"x": round(self.x, 1), "y": round(self.y, 1), "w": round(self.w, 1),
-                "h": round(self.h, 1), "score": round(self.score, 3),
-                "source": self.source, "verified": self.verified,
-                "landmarks": None if self.landmarks is None
-                else [[round(a, 1), round(b, 1)] for a, b in self.landmarks]}
+        out = {"x": round(self.x, 1), "y": round(self.y, 1), "w": round(self.w, 1),
+               "h": round(self.h, 1), "score": round(self.score, 3),
+               "source": self.source, "verified": self.verified,
+               "landmarks": None if self.landmarks is None
+               else [[round(a, 1), round(b, 1)] for a, b in self.landmarks]}
+        # Only said when it is not the default, so a face record reads as it
+        # did before this file learned about other kinds.
+        if self.kind != "face":
+            out["kind"] = self.kind
+        if self.quad is not None:
+            out["quad"] = [[round(a, 1), round(b, 1)] for a, b in self.quad]
+        return out
 
 
 def iou(a, b) -> float:
@@ -681,9 +710,13 @@ class DetectorBank:
         self.ultraface = None
         if threads:
             cv2.setNumThreads(threads)
-        needs_yunet = settings.engine in ("yunet", "both")
-        needs_cf = settings.engine in ("centerface", "both") or (
-            settings.engine == "yunet" and settings.verify)
+        # A run that was not asked to mask faces loads no face detector and
+        # finds nothing, which is what the rest of the pipeline already knows
+        # how to handle: no tracks, no mask, the whole file copied.
+        faces = settings.wants("face")
+        needs_yunet = faces and settings.engine in ("yunet", "both")
+        needs_cf = faces and (settings.engine in ("centerface", "both") or (
+            settings.engine == "yunet" and settings.verify))
         if needs_yunet:
             self.yunet = YuNetOrtBackend(RAW_FLOOR, settings.nms_yunet, device=settings.device,
                                          threads=threads)

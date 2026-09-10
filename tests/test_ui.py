@@ -168,3 +168,57 @@ def test_the_window_keeps_its_settings(app, source_folder, tmp_path):
     assert again.stride_spin.value() == 4
     assert again.replace_check.isChecked()
     again.settings_store.clear()
+
+
+# ------------------------------------------------- the switches for each kind
+
+def test_the_window_lists_every_kind_and_enables_only_the_built_ones(app):
+    """A person deciding whether to trust the output needs to see that text
+    and screens are not covered. A list that grew later would hide that."""
+    from faceblur.classes import KINDS
+
+    window = MainWindow()
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    try:
+        assert list(window.mask_checks) == [k.name for k in KINDS]
+        for kind in KINDS:
+            check = window.mask_checks[kind.name]
+            assert check.isEnabled() is kind.ready, kind.name
+            if not kind.ready:
+                assert not check.isChecked(), f"{kind.name} must not start ticked"
+    finally:
+        window.close()
+
+
+def test_faces_start_ticked_and_unticking_them_stops_the_run(app, source_folder,
+                                                             tmp_path):
+    """Nothing to mask is not a run. The button goes dead rather than writing
+    a copy that is the same as the source."""
+    window = make_window(app, source_folder, tmp_path / "out")
+    try:
+        assert window._mask() == ("face",)
+        assert window.start_button.isEnabled()
+
+        window.mask_checks["face"].setChecked(False)
+        assert window._mask() == ()
+        assert not window.start_button.isEnabled()
+        assert window.mask_help.isVisible()
+
+        window.mask_checks["face"].setChecked(True)
+        assert window.start_button.isEnabled()
+    finally:
+        window.close()
+
+
+def test_a_kind_with_no_detector_cannot_be_switched_on(app):
+    """Not by clicking, and not by a stored setting from a later build."""
+    window = MainWindow()
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    try:
+        window.settings_store.setValue("mask_text", True)
+        window._restore()
+        assert not window.mask_checks["text"].isChecked()
+        assert "text" not in window._mask()
+    finally:
+        window.settings_store.remove("mask_text")
+        window.close()

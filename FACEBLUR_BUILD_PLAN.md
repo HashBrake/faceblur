@@ -13,7 +13,7 @@ These came from the product owner. Do not reopen them.
 | Question | Decision |
 |---|---|
 | Where it runs | On the user's Windows PC. Video never leaves the machine. |
-| What to redact | Faces only. No plates, no bodies, no text. |
+| What to redact | **Superseded on 2026-09-10.** Was: faces only, no plates, no bodies, no text. Now: faces, personal text, and screens, each one a thing the user can switch on or off by itself. Plates and bodies stay out. See "Scope change" below. |
 | Recall vs speed | Never miss a face. Low threshold, padded boxes, temporal propagation. Accept slower processing and some over-blurring. |
 | Footage type | Egocentric wearable camera ("Ego" camera) footage. Close faces, motion blur, mixed indoor and outdoor, long recordings, batches of many files. |
 | Delivery order | Core library first, then CLI, then UI. All in one repo. |
@@ -319,7 +319,35 @@ Read `blurfaces_prototype.py` first. It works. Refactor it, do not rewrite it fr
 
 Invoke the `apple-design` skill for the Phase 4 review. Invoke `asd-ste100` (Strict mode) over `ui/strings.py` and `humanizer` over `README.md` before Phase 4 verify. If those skills are not installed in your environment, apply the rule lists in Section 7 by hand and say so in the PR.
 
-Do not add features beyond this plan. In particular: no license plate detection, no body blur, no cloud upload, no settings screen, no telemetry. If a phase seems to need something not listed, stop and ask.
+Do not add features beyond this plan, as amended by "Scope change" below. In particular: no license plate detection, no body blur, no cloud upload, no telemetry. If a phase seems to need something not listed, stop and ask.
+
+## Scope change, 2026-09-10
+
+The product owner asked for sensitive information beyond faces. The scope is
+now three classes, each independently selectable in the window and on the
+command line:
+
+| Class | What it masks | State |
+|---|---|---|
+| Faces | The identity ellipse, as before | Built, measured, sections 3 and 10-14 of `docs/report.md` |
+| Text | Personal text only: names, addresses, phone numbers, handwriting, screens showing personal data | Not built |
+| Screens | A display as an object, whatever is on it | Not built |
+
+Two decisions from the owner that the work has to respect:
+
+- **Each class is a separate switch.** Masking faces must not force masking
+  text. The window shows one checkbox per class; the command line takes
+  `--mask face,text,screen`.
+- **Cards are left alone.** On card-collector footage most text is the point
+  of the dataset: card names, prices, grading labels. Only personal text is
+  masked. This is the harder of the two readings and it has a real ceiling,
+  written down in `STATE.md`: OCR on this footage works on text over roughly
+  20-25 px and sharp, and where it fails you do not know what was left. That
+  limit is to be measured and reported, not hidden.
+
+Out of scope, and specifically not chosen when asked on 2026-09-10: audio
+(still copied through untouched) and container metadata. Both are hours of
+work if they are ever wanted; `STATE.md` says what they involve.
 
 Pin every dependency. Record the exact versions that passed Phase 5 in the README.
 

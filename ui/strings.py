@@ -29,6 +29,25 @@ ABOUT_TEXT = (
 )
 MENU_ABOUT = "About FaceBlur"
 
+# Choose what to mask. One switch per kind of sensitive thing. A kind with
+# no detector behind it is shown, so the list does not change shape later,
+# but it is switched off and cannot be switched on.
+MASK_LABEL = "What to mask"
+MASK_HELP = "Choose at least one thing to mask."
+MASK_FACES = "Faces"
+MASK_FACES_HELP = "The app hides each face behind a soft oval. It may miss a face."
+MASK_TEXT = "Personal text"
+MASK_TEXT_HELP = (
+    "Not in this build yet. It will hide names, addresses and phone numbers. "
+    "It will leave card names, prices and grading labels."
+)
+MASK_SCREEN = "Screens"
+MASK_SCREEN_HELP = (
+    "Not in this build yet. It will hide a phone, a monitor or a television, "
+    "and everything on it."
+)
+ACC_MASK_GROUP = "What to mask"
+
 # Step 1, choose the input
 DROP_ZONE_EMPTY = "Drop a video or a folder here"
 DROP_ZONE_HINT = "The app reads every video in a folder."
