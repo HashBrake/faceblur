@@ -331,7 +331,7 @@ command line:
 |---|---|---|
 | Faces | The identity ellipse, as before | Built, measured, sections 3 and 10-14 of `docs/report.md` |
 | Text | Personal text only: names, addresses, phone numbers, handwriting, screens showing personal data | Not built |
-| Screens | A display as an object, whatever is on it | Not built |
+| Screens | A display as an object, whatever is on it | Built and measured for precision, section 15 of `docs/report.md`. Off by default |
 
 Two decisions from the owner that the work has to respect:
 

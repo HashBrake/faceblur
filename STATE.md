@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-10. This file says where the
+Last updated: 2026-09-10, after work package R1. This file says where the
 project stands, what was verified, and what a new person or session should do
 next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
@@ -66,18 +66,84 @@ else untouched.
   actually are. It corrects section 13.4: the check finds real faces two and
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
-- Tests: `tests/`, 997 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- Tests: `tests/`, 999 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Everything is committed and pushed to `HashBrake/faceblur`, `main`, and the
   working tree is clean. The last change of substance is e2663c0, the hand
   rule; commits after it are these notes catching up.
-- Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
-  rebuilt since 2026-09-07, and it now has three more models to carry, so it
-  needs rebuilding before it is handed to anyone. The spec ships three face
-  detectors, two hand models, the screen detector and their licences, and
-  deliberately does not ship the recogniser; `tests/test_models.py` fails if
-  any of that changes.
+- Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`, rebuilt on
+  2026-09-10 in work package R1. It carries three face detectors, two hand
+  models, the screen detector and their licences, and deliberately not the
+  recogniser. `FaceBlur.exe` with arguments is now the command line as well as
+  the window, so the packaged build can be checked without a person clicking.
+  `tests/test_models.py` fails if any `.onnx` in `models/` is neither in the
+  spec nor listed in `NOT_SHIPPED` with a reason.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
   so it always runs the current code.
+
+## The build plan being executed, and the packages done so far
+
+`FACEBLUR_BUILD_PLAN_V2.md` is the spec this session and the ones after it are
+executing. It was written on 2026-09-10 from an audit of the v1 plan against
+what was actually built, and where the two disagree v2 wins. It runs the work
+in this order: R1, S1, the per kind mask accounting of its section 4.3, E1,
+F0 measure, F1, T1, T2, F0 veto, T3, T4 if there is time, then M1. About four
+weeks. Each package ends with its verify step passing, its report section
+written and one commit.
+
+| Package | What | State |
+|---|---|---|
+| R1 | Housekeeping: documents and the packaged app say what the code does | Done 2026-09-10, report section 9.1 |
+| S1 | Screens in the output side check and the gate | Next |
+| 4.3 | Per kind mask accounting | Not started |
+| E1 | Object oracle for evaluation | Not started |
+| F0 | Faces printed on cards | Not started |
+| F1 | Second chance for missed faces | Not started |
+| T1 to T4 | Personal text | Not started |
+| M1 | Metadata line in the record | Not started |
+
+### Decisions taken by default
+
+None yet. The three the spec leaves to the owner are D1 (faces printed on
+cards), D2 (which surfaces text is left on) and D3 (screens off by default).
+Each will be built to the spec's proposed default, made a setting, and listed
+here when its package lands, so that any of them can be reversed with one
+setting.
+
+### R1, done 2026-09-10
+
+The documents, the model list and the packaged app were all behind the code.
+What changed:
+
+- `README.md` describes three kinds rather than one, with a table saying which
+  are built and which are on by default, a section on how a screen is decided
+  and the four caveats that come with it, the full model list including
+  YOLOX-tiny and the two hand models, and a command line block that matches
+  `cli.py`.
+- `docs/report.md` section 7 no longer says text and screens are both out of
+  scope; section 2 lists every model and which of them ship; section 9.1 is
+  new and says what the packaged app carries and how that is now checked.
+- The scope change table in `FACEBLUR_BUILD_PLAN.md` says screens are built.
+- `build\faceblur.spec` lost `centerface.onnx`, which is 7 MB of a static
+  graph nothing loads at run time, and gained `cli` as a hidden import.
+- `faceblur_app.py`: `FaceBlur.exe` with arguments runs the command line, so
+  the packaged build has a verify step that is a command and not a person.
+- `tests/test_models.py` gained two tests: every `.onnx` in `models/` is
+  either in the spec or in `NOT_SHIPPED` with the reason the build does not
+  need it, and every one has a pinned sha256. 999 tests pass.
+- `dist\FaceBlur` was rebuilt. It was five days old and carried neither the
+  hand models nor the screen model, so a person handed that folder had a
+  screens checkbox that could not work.
+
+The verify run was `dist\FaceBlur\FaceBlur.exe footage -o footage_blurred_r1
+--mask face,screen --workers 4`. It wrote four copies in 556 s, every record
+carrying `screens` above zero, and `005035` reproduced section 15.4 to the
+decimal: 0.99 percent of the average frame, 13.3 percent at worst, 40 frames
+over budget, 848 frames carrying a screen mask. The packaged build and the
+source build agree.
+
+What a next person should not assume from this package: nothing here measured
+anything new about faces or screens. R1 moved documents and the build to where
+the code already was.
 
 ## The numbers, and what to say about them
 

@@ -66,9 +66,19 @@ def test_model_sha256(name):
 SPEC = Path(__file__).resolve().parents[1] / "build" / "faceblur.spec"
 
 
+def spec_datas() -> str:
+    """The spec with its comments taken out.
+
+    A file named in a comment is not a file the build carries, and these
+    tests ask what the build carries.
+    """
+    lines = SPEC.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+
+
 def test_every_model_in_the_build_carries_its_licence():
     """A model whose licence asks to travel with it has to be in the build too."""
-    spec = SPEC.read_text(encoding="utf-8")
+    spec = spec_datas()
     for licence in sorted(MODELS.glob("*.LICENSE.txt")):
         family = licence.name.split(".")[0]
         shipped = [n for n in EXPECTED if n.startswith(family) and n in spec]
@@ -78,18 +88,57 @@ def test_every_model_in_the_build_carries_its_licence():
 
 def test_the_face_recogniser_stays_out_of_the_build():
     """A tool that redacts faces has no business shipping a face recogniser."""
-    assert "sface" not in SPEC.read_text(encoding="utf-8")
+    assert "sface" not in spec_datas()
 
 
 def test_the_screen_model_is_in_the_build():
     """A checkbox for screens with no model behind it in the packaged app
     would mask nothing and say nothing."""
-    assert "yolox_tiny.onnx" in SPEC.read_text(encoding="utf-8")
+    assert "yolox_tiny.onnx" in spec_datas()
+
+
+# A model in this folder that the build does not carry has to say why here.
+# Everything else must be in the spec, so that the next kind's model cannot
+# be committed, wired up and then left out of the packaged app, which is how
+# the screen and hand models spent a week missing from dist\FaceBlur.
+NOT_SHIPPED = {
+    "sface.onnx":
+        "the face recogniser: evaluation only, and a tool that redacts faces "
+        "has no business shipping one",
+    "centerface.onnx":
+        "the static graph models/make_dynamic.py derives centerface_dynamic "
+        "from. Nothing loads it at run time",
+    "ultraface.onnx":
+        "the static graph models/make_dynamic.py derives ultraface_dynamic "
+        "from. Nothing loads it at run time",
+}
+
+
+def test_every_model_is_either_in_the_build_or_says_why_not():
+    """A model nobody decided about is a model the packaged app is missing."""
+    spec = spec_datas()
+    for model in sorted(MODELS.glob("*.onnx")):
+        if model.name in NOT_SHIPPED:
+            assert model.name not in spec, (
+                f"{model.name} is listed as not shipped, with the reason "
+                f"{NOT_SHIPPED[model.name]!r}, and the spec ships it anyway")
+            continue
+        assert model.name in spec, (
+            f"{model.name} is in models/ and not in build/faceblur.spec. Add it "
+            f"to the spec's datas, or add it to NOT_SHIPPED here with the "
+            f"reason the build does not need it")
+
+
+def test_every_committed_model_has_a_pinned_hash():
+    """A model with no hash in this file is a model that can be swapped."""
+    for model in sorted(MODELS.glob("*.onnx")):
+        assert model.name in EXPECTED, (
+            f"{model.name} is committed with no sha256 in EXPECTED")
 
 
 def test_the_hand_models_are_in_the_build():
     """The gate needs them: without the hand rule it holds back every copy that
     shows the wearer's own hand."""
-    spec = SPEC.read_text(encoding="utf-8")
+    spec = spec_datas()
     for name in ("palm_detection.onnx", "hand_landmark.onnx"):
         assert name in spec, f"{name} is not in the build"

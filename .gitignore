@@ -32,6 +32,9 @@ dist/
 # Evaluation caches derived from real footage
 eval/cache/
 
-# Run logs
+# Run logs and batch reports. A batch report names source files and
+# carries every audit record, so it belongs beside the output, not in git.
 *_run.log
+*_err.log
+*_report.json
 sweep_*.log

@@ -37,7 +37,10 @@ sample files, 264 seconds in total, sit in `footage/` (gitignored).
 | Python | 3.12.8 |
 | Inference | onnxruntime-directml 1.24.4, onnx 1.17.0 |
 | Video | ffmpeg 7.1 from imageio-ffmpeg 0.6.0, h264_nvenc for encoding |
-| Detectors | YuNet (opencv_zoo, Apache 2.0), CenterFace (deface 1.5.0, MIT) |
+| Face detectors | YuNet (opencv_zoo, Apache 2.0), CenterFace (deface 1.5.0, MIT), UltraFace (Linzaer, MIT) |
+| Screen detector | YOLOX-tiny (Megvii, Apache 2.0), section 15 |
+| Hand models | MediaPipe palm detector and hand landmark model (Apache 2.0), section 14 |
+| Evaluation only | MediaPipe face oracle, SFace recogniser (Apache 2.0). Neither ships |
 
 Exact package versions are pinned in `requirements.txt`; model hashes are in
 `models/README.md` and in every audit record.
@@ -224,7 +227,8 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 - **No larger detector.** RetinaFace, SCRFD or YOLO-face variants would raise
   small-face recall at 3–10x the compute. The evaluation harness is where to
   test one; the defaults were not changed without measurement.
-- **No number plate, text, or body redaction.**
+- **No number plate or body redaction.** Text is not built either, and is
+  the piece still owed; screens are built and measured, section 15.
 - **No manual review UI.** The requirement was no human intervention; the
   audit record is the substitute.
 - **NVDEC** off by default, measured no faster here.
@@ -250,14 +254,64 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 997 tests
+.venv\Scripts\python.exe -m pytest tests                      # 999 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
+.venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # section 15
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO                  # writes docs/precision_report.md
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED           # section 12
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # sections 13 and 14
 ```
+
+### 9.1 What the packaged app carries, and how that is checked
+
+The packaged app is where a promise is easiest to break quietly. A model can
+be committed, wired up, tested and still left out of `build\faceblur.spec`,
+and the only symptom is a checkbox in someone else's copy of the app that
+masks nothing. That is what happened to the hand models and the screen model:
+both landed in the code and both were missing from `dist\FaceBlur` for the
+five days between 2026-09-05 and this rebuild.
+
+Two tests now stand where memory used to. `tests/test_models.py` asserts that
+every `.onnx` in `models/` is either named in the spec's `datas` or listed in
+`NOT_SHIPPED` with the reason the build does not need it, and that every one
+of them has a pinned sha256. The comments in the spec are stripped before the
+search, so a file named only in a comment does not count as shipped.
+
+Three models are in `NOT_SHIPPED`. `sface.onnx` is the face recogniser, which
+is evaluation only and has its own test keeping it out. `centerface.onnx` and
+`ultraface.onnx` are the static graphs `models/make_dynamic.py` derives the
+dynamic ones from; they are committed for provenance and nothing opens them at
+run time. `centerface.onnx` was in the spec and was taken out with this pass,
+which is 7 MB of a file the code cannot load.
+
+**The packaged app is now the command line as well.** `FaceBlur.exe` with no
+arguments opens the window, as a double click always did. With arguments it is
+`cli.py`, so a machine with no Python on it can run a batch, and so this check
+is a command rather than a person clicking through a window. A windowed build
+owns no console, so `faceblur_app._attach_console` takes the shell's own
+console or its redirected output before the run starts, and prints nothing if
+there is neither.
+
+The check, run on this rebuild:
+
+```
+dist\FaceBlur\FaceBlur.exe footage -o footage_blurred_r1 --mask face,screen --workers 4
+```
+
+| File | Frames | Screens found | Frames a screen mask reached | Frame destroyed, mean | Worst frame | Over budget |
+|---|---|---|---|---|---|---|
+| `003939` | 2033 | 30 | 45 | 0.90 % | 4.5 % | 0 |
+| `004100` | 984 | 116 | 167 | 0.93 % | 5.8 % | 6 |
+| `004310` | 938 | 9 | 11 | 2.33 % | 8.9 % | 24 |
+| `005035` | 3971 | 584 | 848 | 0.99 % | 13.3 % | 40 |
+
+Four copies, four records, every one carrying `screens` above zero, in 556 s
+for 264 s of video. The `005035` row reproduces section 15.4 exactly: 0.99
+percent of the average frame, a worst frame of 13.3 percent, 40 frames over
+budget and 848 frames carrying a screen mask. The packaged build and the
+source build are the same build.
 
 ## 10. Missed faces, second pass (2026-09-07)
 

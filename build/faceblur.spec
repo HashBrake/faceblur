@@ -17,10 +17,14 @@ ROOT = Path(SPECPATH).resolve().parent
 # with the licences that travel with them. The hand models are what lets the
 # output-side check tell the wearer's own hand from a face it missed. The
 # face recogniser in models/ is evaluation only and stays out of the build.
+#
+# Only the graphs the code loads travel. models/make_dynamic.py derives the
+# dynamic graphs from centerface.onnx and ultraface.onnx, which are committed
+# for provenance and never opened at run time, so neither is here.
+# tests/test_models.py checks that every other .onnx in models/ is.
 datas = [
     (str(ROOT / "models" / "yunet.onnx"), "models"),
     (str(ROOT / "models" / "yunet_dynamic.onnx"), "models"),
-    (str(ROOT / "models" / "centerface.onnx"), "models"),
     (str(ROOT / "models" / "centerface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "ultraface_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "palm_detection.onnx"), "models"),
@@ -40,6 +44,9 @@ ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe())
 datas.append((str(ffmpeg), "imageio_ffmpeg/binaries"))
 
 hiddenimports = [
+    # FaceBlur.exe with arguments is the command line. The import sits behind
+    # a test on argv, so the analysis cannot see it.
+    "cli",
     "onnxruntime",
     "onnxruntime.capi",
     "onnxruntime.capi._pybind_state",

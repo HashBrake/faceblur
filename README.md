@@ -1,21 +1,35 @@
 # FaceBlur
 
-FaceBlur blurs faces in video. Give it a video or a folder of videos. It writes a
-blurred copy of each one to an output folder you choose.
+FaceBlur hides sensitive things in video. Give it a video or a folder of videos.
+It writes a copy of each one to an output folder you choose, with the things you
+asked for destroyed.
 
 FaceBlur runs on your PC. Your video never leaves the machine.
 
 ## What it does and does not do
 
-FaceBlur masks the smallest region that hides a person's identity: an oval over
-the eyes, nose and mouth. It leaves hair, hands, bodies and objects alone. The
-rest of the picture is untouched, so a blurred copy stays usable as training
-data.
+FaceBlur masks three kinds of thing, and each one is a switch of its own.
+Masking faces does not force masking anything else.
 
-FaceBlur redacts faces. It does not redact number plates, bodies or text.
+| Kind | What it masks | State |
+|---|---|---|
+| Faces | An oval over the eyes, nose and mouth | Built and measured. On by default |
+| Screens | A phone, monitor or television as an object, whatever is on it | Built and measured for precision. Off by default |
+| Personal text | Names, addresses, phone numbers and handwriting, leaving card names, prices and grading labels alone | Not built. The switch refuses with a message that says so |
+
+`--mask face,screen` on the command line, or the checkboxes in the window,
+choose what a run hides. Nothing is ever on by default except faces: widening
+what the tool destroys is a decision on the day.
+
+For faces, FaceBlur masks the smallest region that hides a person's identity.
+It leaves hair, hands, bodies and objects alone. The rest of the picture is
+untouched, so a blurred copy stays usable as training data.
+
+FaceBlur does not redact number plates or bodies, and it does not strip
+container metadata.
 
 FaceBlur does not change audio. It copies the audio track from the source into
-the blurred copy, untouched.
+the blurred copy, untouched. The four sample files carry none.
 
 FaceBlur may miss a face. Read the next section before you rely on it.
 
@@ -73,7 +87,7 @@ rebuild, `docs/report.md` sections 10 and 11 the two passes since.
 
 Check the blurred copies before you share them.
 
-## How it decides what to blur
+## How it decides what is a face
 
 Pixels are destroyed only when several independent checks agree:
 
@@ -129,6 +143,51 @@ more left visible, then the highest recall.
 Every blurred copy comes with an audit record that says how much of each frame
 was destroyed and flags any frame over 5 percent.
 
+## How it decides what is a screen
+
+Screens need none of that machinery. There is no identity to weigh: whatever is
+on the glass is hidden, so the only question is where the glass is. One object
+detector, YOLOX-tiny, answers it, and two rules keep it honest.
+
+1. **A screen has to be seen in three frames** before any of it is masked
+   (`screen_min_run`). A COCO detector calls any large flat rectangle a
+   television, and on this footage the blue table tennis table is called a
+   laptop, a television and a phone by turns. It calls a table one for a frame
+   and then stops; a monitor on a wall stays a monitor. On the sample footage
+   14 of the 29 false runs last a single frame and not one real screen does.
+2. **A box over 12 percent of the frame is not a screen** (`screen_max_area`).
+   The table reads 0.88 over a third of the frame and the real television
+   across the hall reads 0.85 over one percent, so the score separates nothing
+   and the size does.
+
+Both rules are needed. A size cap alone has to sit at 4 percent to reach the
+same precision, and at 4 percent it throws away a real monitor covering 10.6
+percent of the frame, which is the worst screen to lose: one that large and
+that close is the one most likely to show something a person could read. With
+persistence carrying the precision the cap can sit three times looser and keep
+that monitor.
+
+Four things to know before you switch screens on:
+
+- **There is no recall number.** There is no independent witness for screens on
+  this footage, so unlike faces there is precision against one person's eye
+  over 85 detection runs and nothing else. A screen no detector ever finds is
+  not counted anywhere.
+- **9 percent of what it masks is not a screen.** The survivors are small
+  patches: 2.4 percent of a frame of washroom wall for 10 frames, 0.4 percent
+  for 27. They are cheap in pixels and they are still wrong.
+- **The rules are tuned on one venue.** The table tennis hall is what makes the
+  size cap necessary and what sets its value. A room with a large monitor close
+  to the camera and no large flat furniture would want a looser cap, and there
+  is no footage here to set one on.
+- **The output side check does not cover screens yet.** `--check-output` and
+  `--quarantine` read the copy for faces. A screen the run missed is not
+  reported and does not hold a copy back.
+
+The screen mask destroys 0.01 to 0.34 percent of the average frame on the
+sample files, and at most 12 percent of one, which is a large monitor properly
+masked. `docs/report.md` section 15 has the tables.
+
 ## Set up
 
 You need Python 3.12 on Windows.
@@ -153,13 +212,14 @@ deletes unfinished files.
 ## Use the command line
 
 ```
-faceblur INPUT [-o OUTPUT] [--mask face,text,screen]
+faceblur INPUT [-o OUTPUT] [--mask face,screen]
          [--engine yunet|centerface|both] [--conf F]
-         [--det-sizes 1280,1920] [--stride N] [--no-verify] [--max-face F]
-         [--min-track N] [--max-gap N] [--tail N] [--pad F]
+         [--det-sizes 1280,1920] [--stride N] [--no-verify] [--tta 0|1|2]
+         [--no-third] [--no-camera] [--max-face F] [--min-track N]
+         [--max-gap N] [--tail N] [--pad F]
          [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
-         [--hwaccel none|cuda] [--tta 0|1|2] [--no-third] [--no-camera]
+         [--hwaccel none|cuda]
          [--check-output] [--check-stride N] [--quarantine] [--quarantine-px N]
          [--no-hand-rule] [--report PATH] [--recursive] [--no-progress]
 ```
@@ -172,10 +232,10 @@ INPUT is a video or a folder. A folder run reads every video in it. OUTPUT
 defaults to a folder named `<input>_blurred` next to the input. The exit code is
 1 when any video failed.
 
-`--mask` chooses what to hide. Faces are the default and the only kind this
-build can do; `text` and `screen` are named in the interface and refused with
-a message that says so, because a switch that masks nothing is worse than no
-switch. The window shows the same three as checkboxes, with the two that are
+`--mask` chooses what to hide. Faces are the default. `screen` is built and can
+be added, as `--mask face,screen`. `text` is named in the interface and refused
+with a message that says so, because a switch that masks nothing is worse than
+no switch. The window shows the same three as checkboxes, with the one that is
 not built switched off and labelled.
 
 `--no-verify` and `--engine both` find more faces and also blur hands and
@@ -211,7 +271,9 @@ for the right reason.
 - `<name>_blurred.mp4`, the blurred copy, H.264 at crf 12 with the source audio.
 - `<name>_blurred.mp4.json`, the audit record: frames, tracks, how much of each
   frame was masked (mean, p95, max), frames over the mask budget, every setting,
-  the sha256 of each model, and the time taken. After `--check-output` it also
+  the sha256 of each model, and the time taken. With screens on it also holds
+  `screens`, the detections the model made, and `screen_frames`, the frames a
+  screen mask reached after the persistence rule. After `--check-output` it
   holds what a second pass over the copy found: frames checked, faces still
   visible by size, the frame stretches they sit in, and how many of the boxes
   it found were the wearer's hand.
@@ -320,15 +382,20 @@ The result is `dist\FaceBlur\`. The evaluation harness is not part of it.
 DirectML travels with the onnxruntime package, so the packaged app uses the GPU
 too.
 
-## Detectors
+## Models
 
-| Name | Model | Licence | Size |
-|---|---|---|---|
-| `yunet`, finds faces | YuNet from opencv_zoo | Apache 2.0 | 232 KB |
-| `centerface`, confirms them | CenterFace from the deface package | MIT | 7.3 MB |
-| `ultraface`, breaks ties | UltraFace RFB-320 from Linzaer | MIT | 1.3 MB |
+| Name | Model | Licence | Size | What it is for |
+|---|---|---|---|---|
+| `yunet` | YuNet from opencv_zoo | Apache 2.0 | 232 KB | finds face candidates |
+| `centerface` | CenterFace from the deface package | MIT | 7.3 MB | confirms them on a crop |
+| `ultraface` | UltraFace RFB-320 from Linzaer | MIT | 1.3 MB | breaks ties when CenterFace is unsure |
+| `yolox` | YOLOX-tiny from Megvii | Apache 2.0 | 20 MB | finds screens, when screens are switched on |
+| `palm_detection` | MediaPipe palm detector | Apache 2.0 | 4.6 MB | proposes a hand in the output side check |
+| `hand_landmark` | MediaPipe hand landmark model | Apache 2.0 | 11 MB | confirms it is a hand |
 
-`models/README.md` records where each file came from and its sha256.
+`models/README.md` records where each file came from, its sha256, its input
+layout and how its output decodes. `models/sface.onnx`, the face recogniser, is
+evaluation only and never enters the packaged app; a test fails if it does.
 
 ## Versions
 
