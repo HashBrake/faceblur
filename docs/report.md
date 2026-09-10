@@ -1328,7 +1328,65 @@ the number lands beside the precision it belongs with. Until then the honest
 statement about screens is the one section 15.4 makes: precision against one
 person's eye over 85 runs, and no recall figure at all.
 
-### 16.3 What this does not do
+### 16.3 What each kind destroys, measured apart
+
+Work package 4.3 of `FACEBLUR_BUILD_PLAN_V2.md`. The audit record had one
+number for how much of a frame was destroyed, and once two kinds can mask at
+once that number stops answering the question anybody asks of it. A screen
+mask is large by design and a face mask is small on purpose, so a frame three
+percent destroyed may be 0.4 percent of face and the rest glass, and the five
+percent budget that was set on faces no longer means what it says.
+
+`redact.masked_shares` builds each kind's alpha on the same canvas and gives
+the share of the frame it covers. `encode_job` and `process_video` carry one
+list per kind through to the record as `masked_mean_by_kind`,
+`masked_max_by_kind` and `frames_over_budget_by_kind`. The union numbers keep
+their names and their meaning. When a frame carries only one kind, which is
+most frames, the union alpha is that kind's mask and nothing extra is
+computed.
+
+The four sample files, run with `--mask face,screen` and the shipped defaults:
+
+| File | Frames | Union mean | Face | Screen | Union worst | Face | Screen | Over budget: union | face | screen |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `003939` | 2033 | 0.90 % | 0.85 % | 0.05 % | 4.46 % | 4.46 % | 3.29 % | 0 | 0 | 0 |
+| `004100` | 984 | 0.93 % | 0.51 % | 0.43 % | 5.84 % | 5.84 % | 4.70 % | 6 | 6 | 0 |
+| `004310` | 938 | 2.33 % | 2.31 % | 0.01 % | 8.94 % | 8.94 % | 1.05 % | 24 | 23 | 0 |
+| `005035` | 3971 | 0.99 % | 0.69 % | 0.31 % | 13.30 % | 8.33 % | 13.30 % | 40 | 9 | 23 |
+
+**The table tennis file is the case the split exists for.** Read the union
+alone and `005035` has 40 frames over the five percent budget. The face mask
+puts 9 of them there. Twenty three are the screen mask, correctly masking a
+large close monitor, and the remaining 8 are over budget only because the two
+kinds together cross the line where neither does alone. A reader of the old
+record would have seen the face class four times as far over budget as it is.
+
+**The face column reproduces the faces only run exactly.** Section 15.4
+measured `005035` with faces alone at 0.69 percent of the average frame, a
+worst frame of 8.3 percent and 9 frames over budget. The face column of a run
+that also masked screens reads 0.69 percent, 8.33 percent and 9. That is the
+check that this split is measuring what it claims to: adding a second kind
+does not move the first kind's numbers by anything.
+
+The screen column does not reproduce section 15.4 as cleanly. It reads 0.05,
+0.43, 0.01 and 0.31 percent against 15.4's 0.04, 0.34, 0.01 and 0.24. Nothing
+here explains the difference. These numbers come from the shipped pipeline and
+are written into every audit record, so re-running the command reproduces
+them; 15.4's came from a one-off comparison harness that is not in the
+repository and cannot be re-run. Prefer these, and treat 15.4's screen shares
+as the shape of the answer rather than the answer.
+
+**The sweep was never at risk.** The build plan expected the gates in
+`eval/sweep.py` to be diluted by screen masks too. They are not, and the code
+is what says so: `eval/measure.evaluate` builds its own per frame list from
+the raw face cache and the tracker and never runs the screen detector, so no
+screen mask can reach `off_face_mean`, `off_face_max`,
+`off_face_detections_mean` or `hand_damage` however many kinds a run is asked
+for. `tests/test_classes.py::test_the_sweep_measures_faces_and_never_sees_a_screen`
+pins that, so a later change which starts feeding screens into the harness has
+to face the question rather than move every gate quietly.
+
+### 16.4 What this does not do
 
 - **It reports what YOLOX calls a screen.** The check inherits the detector's
   weakness exactly as the face side inherits its detectors': a table that
@@ -1342,5 +1400,8 @@ person's eye over 85 runs, and no recall figure at all.
   are command line only; `ui/app.py` never sets either, so no run started from
   the window is checked or held back. That predates this pass and is not
   changed by it.
+- **Per kind shares are of the frame, not of each other.** Two kinds may
+  overlap, so the shares can sum to more than the union. A face on a
+  television is masked by both classes and counted in both columns.
 - **The by eye labels of section 15.2 are not used here and are not
   re-scored.** Nothing in this section rests on a label.

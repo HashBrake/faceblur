@@ -163,6 +163,32 @@ def build_mask(shape: tuple[int, int], dets: Sequence[Detection],
     return (build_alpha(shape, dets, settings) >= 0.5).astype(np.uint8) * 255
 
 
+def masked_shares(shape: tuple[int, int], dets: Sequence[Detection],
+                  settings: Settings,
+                  alpha: "np.ndarray | None" = None) -> dict[str, float]:
+    """Share of the frame each kind's regions cover, at alpha one half or more.
+
+    The union alpha cannot answer this and the difference is not small. A
+    screen mask is large by design: on the table tennis file the screen class
+    destroys up to 13 percent of a frame while the face class averages under
+    one. A frame whose union share is 3 percent may be 0.4 percent of face and
+    the rest glass, and every budget and gate written about faces has to keep
+    reading the face number now that a second kind can mask beside it.
+
+    The union alpha is passed in when the caller already has it, because when
+    a frame carries only one kind, which is most frames, the union *is* that
+    kind's mask and there is nothing more to compute.
+    """
+    kinds = {det.kind for det in dets}
+    if not kinds:
+        return {}
+    if len(kinds) == 1 and alpha is not None:
+        return {kinds.pop(): float((alpha >= 0.5).mean())}
+    return {name: float((build_alpha(shape, [d for d in dets if d.kind == name],
+                                     settings) >= 0.5).mean())
+            for name in sorted(kinds)}
+
+
 def _cover_region(frame: np.ndarray, cover: np.ndarray, e: "Region",
                   mode: str, strength: int, feather: float) -> None:
     """Fill `cover` inside the region's bounding box with destroyed pixels."""

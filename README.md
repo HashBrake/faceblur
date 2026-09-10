@@ -283,8 +283,11 @@ for the right reason.
 
 - `<name>_blurred.mp4`, the blurred copy, H.264 at crf 12 with the source audio.
 - `<name>_blurred.mp4.json`, the audit record: frames, tracks, how much of each
-  frame was masked (mean, p95, max), frames over the mask budget, every setting,
-  the sha256 of each model, and the time taken. With screens on it also holds
+  frame was masked (mean, p95, max), frames over the mask budget, the same
+  three split by kind, every setting, the sha256 of each model, and the time
+  taken. Read the split when more than one kind is on: a screen mask is large
+  by design, and on the table tennis file the union says 40 frames are over
+  the 5 percent budget where the face mask puts 9 of them there. With screens on it also holds
   `screens`, the detections the model made, and `screen_frames`, the frames a
   screen mask reached after the persistence rule. After `--check-output` it
   holds what a second pass over the copy found: frames checked, faces still

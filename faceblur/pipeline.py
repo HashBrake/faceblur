@@ -21,7 +21,7 @@ import numpy as np
 
 from .detect import Detection, DetectorBank, filter_candidates, weak_candidates
 from .motion import downscale, estimate_shift
-from .redact import redact
+from .redact import masked_shares, redact
 from .settings import Settings
 from .track import Track, Tracker
 from .video import Encoder, VideoError, VideoInfo, probe, read_frames
@@ -62,6 +62,14 @@ class AuditRecord:
     masked_max: float = 0.0
     frames_over_budget: int = 0
     flagged_frames: list = field(default_factory=list)
+    # The three numbers above are the union of every kind's mask, and they
+    # keep that meaning. These split them by kind, because a screen mask is
+    # large by design: a frame 3 percent destroyed may be 0.4 percent of face
+    # and the rest glass, and the face budget has to stay readable in a run
+    # that masks two kinds at once. Empty on a run that masked nothing.
+    masked_mean_by_kind: dict = field(default_factory=dict)
+    masked_max_by_kind: dict = field(default_factory=dict)
+    frames_over_budget_by_kind: dict = field(default_factory=dict)
     engine: str = ""
     model_sha256: dict = field(default_factory=dict)
     compute: dict = field(default_factory=dict)   # provider each model ran on
@@ -275,6 +283,7 @@ def process_video(
     t1 = time.time()
     written = 0
     masked: list[float] = []
+    by_kind: dict[str, list[float]] = {}
     encoder = Encoder(src, dst, p.info, settings.crf, settings.preset,
                       settings.encoder, settings.nvenc_cq)
     try:
@@ -288,6 +297,10 @@ def process_video(
             dets = p.per_frame[index] if index < len(p.per_frame) else []
             out, alpha = redact(frame, dets, settings)
             masked.append(float((alpha >= 0.5).mean()) if dets else 0.0)
+            shares = masked_shares(frame.shape[:2], dets, settings, alpha) if dets else {}
+            for name in set(by_kind) | set(shares):
+                row = by_kind.setdefault(name, [0.0] * (len(masked) - 1))
+                row.append(shares.get(name, 0.0))
             encoder.write(out)
             written += 1
             if on_progress is not None:
@@ -317,6 +330,12 @@ def process_video(
     over = [i for i, v in enumerate(masked) if v > settings.mask_budget]
     record.frames_over_budget = len(over)
     record.flagged_frames = over[:200]
+    record.masked_mean_by_kind = {k: round(float(np.mean(v)), 5)
+                                  for k, v in sorted(by_kind.items())}
+    record.masked_max_by_kind = {k: round(float(np.max(v)), 5)
+                                 for k, v in sorted(by_kind.items())}
+    record.frames_over_budget_by_kind = {
+        k: sum(1 for x in v if x > settings.mask_budget) for k, v in sorted(by_kind.items())}
     record.encode_seconds = round(time.time() - t1, 2)
     record.wall_seconds = round(time.time() - started, 2)
     record.status = STATUS_DONE

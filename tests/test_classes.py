@@ -15,7 +15,7 @@ from faceblur import classes
 from faceblur.classes import ELLIPSE, FACE, POLYGON, SCREEN, TEXT, UnknownKind
 from faceblur.detect import Detection
 from faceblur.redact import (QuadRegion, build_alpha, ellipse_for, grow_quad,
-                             redact, region_for, shape_of)
+                             masked_shares, redact, region_for, shape_of)
 from faceblur.settings import Settings, SettingsError
 
 
@@ -224,3 +224,101 @@ def test_a_face_and_a_line_of_text_in_one_frame_are_both_destroyed():
     assert changed[80, 80], "the face"
     assert changed[201, 201], "the text"
     assert not changed[280, 20], "and nothing between them"
+
+
+# ------------------------------------------- how much of the frame each kind took
+#
+# The audit record's masked_mean, masked_p95, masked_max and frames_over_budget
+# are the union of every kind's mask, and they keep that meaning. The trouble
+# once a second kind can mask beside faces is that a screen mask is large by
+# design: on the table tennis file the screen class destroys up to 13 percent
+# of a frame where the face class averages under one. Read only the union and
+# the face budget stops meaning anything.
+
+
+def screen(x=100.0, y=100.0, w=300.0, h=200.0) -> Detection:
+    return Detection(x, y, w, h, 0.9, None, "tv", True, 0.9, "screen")
+
+
+SHAPE = (600, 800)
+
+
+def test_a_frame_with_one_kind_needs_no_second_pass_to_be_split():
+    """The union alpha is that kind's mask when it is the only kind there,
+    which is most frames, so nothing extra is computed for them."""
+    s = Settings()
+    dets = [face()]
+    alpha = build_alpha(SHAPE, dets, s)
+    shares = masked_shares(SHAPE, dets, s, alpha)
+    assert list(shares) == ["face"]
+    assert shares["face"] == pytest.approx(float((alpha >= 0.5).mean()))
+
+
+def test_two_kinds_in_one_frame_are_measured_apart():
+    s = Settings(mask=("face", "screen"))
+    dets = [face(), screen()]
+    union = build_alpha(SHAPE, dets, s)
+    shares = masked_shares(SHAPE, dets, s, union)
+    assert sorted(shares) == ["face", "screen"]
+    assert shares["screen"] > shares["face"] * 4, "the screen here is much the larger"
+    union_share = float((union >= 0.5).mean())
+    # The parts cannot each be the whole, and together they cannot be less
+    # than it: they may overlap, so the sum is the union or more.
+    assert shares["face"] < union_share
+    assert shares["screen"] < union_share
+    assert shares["face"] + shares["screen"] >= union_share - 1e-9
+
+
+def test_a_frame_with_nothing_on_it_splits_into_nothing():
+    assert masked_shares(SHAPE, [], Settings()) == {}
+
+
+def test_the_face_share_does_not_move_when_a_screen_is_added_beside_it():
+    """This is the whole point of the split. A face that was 0.4 percent of
+    the frame is still 0.4 percent of it when a television is masked too."""
+    s = Settings(mask=("face", "screen"))
+    alone = masked_shares(SHAPE, [face()], s)
+    beside = masked_shares(SHAPE, [face(), screen()], s)
+    assert beside["face"] == pytest.approx(alone["face"])
+
+
+def test_the_record_splits_the_mask_by_kind_and_keeps_the_union(tmp_path, video_with_face):
+    """End to end: the union numbers keep their names and their meaning, and
+    the per kind ones are new beside them."""
+    from faceblur.batch import run_video, serial_submit
+    from faceblur.pipeline import STATUS_DONE
+
+    out = tmp_path / "split.mp4"
+    record = run_video(video_with_face, out,
+                       Settings(device="cpu", copy_clean=False, chunk_seconds=0,
+                                encode_seconds=0),
+                       serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert record.masked_mean > 0, "the face clip is masked"
+    assert list(record.masked_mean_by_kind) == ["face"]
+    assert record.masked_mean_by_kind["face"] == pytest.approx(record.masked_mean, abs=1e-4)
+    assert record.masked_max_by_kind["face"] == pytest.approx(record.masked_max, abs=1e-4)
+    assert record.frames_over_budget_by_kind["face"] == record.frames_over_budget
+
+
+def test_the_sweep_measures_faces_and_never_sees_a_screen():
+    """`eval/measure.py` builds its own per frame list from the raw face cache
+    and the tracker. It never runs the screen detector, so the sweep gates in
+    `eval/sweep.py` cannot be diluted by a screen mask however many kinds a
+    run is asked for.
+
+    This is here so that a later change which starts feeding screens into the
+    harness has to face the question rather than quietly move every gate.
+    """
+    import inspect
+
+    from eval import measure, sweep
+
+    source = inspect.getsource(measure) + inspect.getsource(sweep)
+    for forbidden in ("screens", "ScreenDetector", "screen_min_run", "_screens"):
+        assert forbidden not in source, (
+            f"{forbidden} appears in the evaluation harness. The sweep gates are "
+            f"face numbers and stop meaning what they say if a screen mask reaches "
+            f"them; split them by kind first, as the audit record does.")
+    assert set(sweep.GATES) == {"off_face_mean", "off_face_max",
+                                "off_face_detections_mean", "hand_damage"}

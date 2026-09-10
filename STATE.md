@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-10, after work packages R1 and S1. This file says where the
+Last updated: 2026-09-10, after work packages R1, S1 and 4.3. This file says where the
 project stands, what was verified, and what a new person or session should do
 next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
@@ -94,8 +94,8 @@ written and one commit.
 |---|---|---|
 | R1 | Housekeeping: documents and the packaged app say what the code does | Done 2026-09-10, report section 9.1 |
 | S1 | Screens in the output side check and the gate | Done 2026-09-10, report section 16.1 |
-| 4.3 | Per kind mask accounting | Next |
-| E1 | Object oracle for evaluation | Not started |
+| 4.3 | Per kind mask accounting | Done 2026-09-10, report section 16.3 |
+| E1 | Object oracle for evaluation | Next |
 | F0 | Faces printed on cards | Not started |
 | F1 | Second chance for missed faces | Not started |
 | T1 to T4 | Personal text | Not started |
@@ -222,6 +222,45 @@ What a next person should not assume:
   nothing in the window for that string to attach to, so the naming went into
   `cli.check_line` and the record instead. Giving the window a gate is a piece
   of work nobody has scheduled.
+
+### 4.3, done 2026-09-10
+
+The audit record had one number for how much of a frame was destroyed, and it
+stopped answering the question anybody asks of it the moment two kinds could
+mask at once. `redact.masked_shares` splits it, `encode_job` and
+`process_video` carry one list per kind, and the record gained
+`masked_mean_by_kind`, `masked_max_by_kind` and `frames_over_budget_by_kind`.
+The union numbers keep their names and their meaning. A frame carrying only
+one kind, which is most frames, costs nothing extra: the union alpha is that
+kind's mask.
+
+The number that shows why it was needed, on `005035` with faces and screens
+on: the union says 40 frames are over the 5 percent budget. The face mask puts
+9 of them there, the screen mask 23, and the other 8 are over only because the
+two together cross a line neither crosses alone. Report section 16.3 has the
+four file table.
+
+**The face column reproduces the faces only run exactly**: 0.69 percent of the
+average frame, 8.33 percent at worst, 9 frames over budget, against section
+15.4's 0.69, 8.3 and 9. Adding a second kind does not move the first kind's
+numbers.
+
+What a next person should not assume:
+
+- **The build plan is wrong about the sweep.** Its section 4.3 says the gates
+  in `eval/sweep.py` are diluted by screen masks. They are not.
+  `eval/measure.evaluate` builds its own per frame list from the raw face
+  cache and the tracker and never runs the screen detector, so no screen mask
+  can reach a sweep gate. `test_the_sweep_measures_faces_and_never_sees_a_screen`
+  now fails if that changes.
+- **The screen column does not reproduce section 15.4.** It reads 0.05, 0.43,
+  0.01 and 0.31 percent against 15.4's 0.04, 0.34, 0.01 and 0.24, and nothing
+  found here explains the difference. These come from the shipped pipeline and
+  are in every audit record, so the command reproduces them; 15.4's came from
+  a one-off harness that is not in the repository. Prefer these.
+- **The shares are of the frame, not of each other.** Kinds may overlap, so
+  they can sum to more than the union. A face on a television is counted in
+  both columns.
 
 ## The numbers, and what to say about them
 

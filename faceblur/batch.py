@@ -29,7 +29,7 @@ from .detect import Detection, DetectorBank, filter_candidates, iou, weak_candid
 from .motion import downscale, estimate_shift
 from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED,
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
-from .redact import redact
+from .redact import masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
@@ -190,6 +190,10 @@ def encode_job(job: dict) -> dict:
         encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
                                  encoder_name, settings.nvenc_cq)
         masked = []
+        # One share per frame per kind, beside the union share. A kind that
+        # first appears part way through the segment is padded back to zero,
+        # so every list is as long as `masked`.
+        by_kind: dict[str, list[float]] = {}
         try:
             for offset, frame in enumerate(decode_range(src, times, seg.start, seg.end,
                                                         info, settings.hwaccel)):
@@ -198,6 +202,10 @@ def encode_job(job: dict) -> dict:
                 d = dets.get(seg.start + offset, [])
                 frame_out, alpha = redact(frame, d, settings)
                 masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
+                shares = masked_shares(frame.shape[:2], d, settings, alpha) if d else {}
+                for name in set(by_kind) | set(shares):
+                    row = by_kind.setdefault(name, [0.0] * (len(masked) - 1))
+                    row.append(shares.get(name, 0.0))
                 encoder.write(frame_out)
             error = encoder.close()
         except VideoError as exc:
@@ -207,7 +215,8 @@ def encode_job(job: dict) -> dict:
             encoder.abort()
             raise
         if not error and len(masked) == seg.frames:
-            return {"segment": seg, "masked": masked, "out": str(out), "encoder": encoder_name}
+            return {"segment": seg, "masked": masked, "masked_by_kind": by_kind,
+                    "out": str(out), "encoder": encoder_name}
         last_error = error or (f"decoded {len(masked)} frames, expected {seg.frames}")
         out.unlink(missing_ok=True)
     raise VideoError(f"Could not write the blurred copy. Segment {seg.start}-{seg.end}: "
@@ -403,7 +412,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             record.status = STATUS_STOPPED
             dst.unlink(missing_ok=True)
             return record
-        masked, problem, copied = outcome
+        masked, masked_by_kind, problem, copied = outcome
         record.join_attempts = attempt + 1
         record.error = problem
         if not problem:
@@ -422,6 +431,16 @@ def run_video(src: Path, dst: Path, settings: Settings,
     over = [i for i, v in enumerate(masked) if v > settings.mask_budget]
     record.frames_over_budget = len(over)
     record.flagged_frames = over[:200]
+    # The union numbers above keep their names and their meaning. These split
+    # them, because a screen mask is large by design and would otherwise make
+    # the face numbers unreadable in any run that masks two kinds at once.
+    record.masked_mean_by_kind = {k: round(float(np.mean(v)), 5)
+                                  for k, v in sorted(masked_by_kind.items())}
+    record.masked_max_by_kind = {k: round(float(np.max(v)), 5)
+                                 for k, v in sorted(masked_by_kind.items())}
+    record.frames_over_budget_by_kind = {
+        k: sum(1 for x in v if x > settings.mask_budget)
+        for k, v in sorted(masked_by_kind.items())}
     record.encode_seconds = round(time.time() - t1, 2)
     record.status = STATUS_DONE
 
@@ -489,7 +508,11 @@ def quarantine_output(dst: Path) -> Path:
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
                     work: Path, report, cancelled):
-    """Returns (masked per frame, problem text, frames copied) or None if stopped."""
+    """Returns (masked, masked by kind, problem text, frames copied), or None if stopped.
+
+    `masked` is the union share of each frame and `masked by kind` splits it.
+    Copied stretches carry no mask at all, so they are zero in both.
+    """
     parts = [work / f"seg{k:05d}.mp4" for k in range(len(segments))]
     encode_jobs, copy_jobs = [], []
     for seg, part in zip(segments, parts):
@@ -501,6 +524,7 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
                                 "settings": settings, "segment": seg, "dets": dets,
                                 "out": str(part)})
     masked = [0.0] * len(per_frame)
+    by_kind: dict[str, list[float]] = {}
     done = 0
     total = sum(s.frames for s in segments)
     if submit is serial_submit:
@@ -515,6 +539,9 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
                 return None
             seg = result["segment"]
             masked[seg.start:seg.end] = result["masked"]
+            for name, values in (result.get("masked_by_kind") or {}).items():
+                row = by_kind.setdefault(name, [0.0] * len(per_frame))
+                row[seg.start:seg.end] = values
             done += seg.frames
             report("writing", done, total)
         for result in submit(copy_job, copy_jobs, workers):
@@ -523,17 +550,18 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             done += result["segment"].frames
             report("writing", done, total)
     except VideoError as exc:
-        return masked, str(exc), 0
+        return masked, by_kind, str(exc), 0
 
     part = part_path(dst)
     error = concat(parts, src, part, work / "list.txt")
     if error:
         part.unlink(missing_ok=True)
-        return masked, f"Could not write the blurred copy. ffmpeg said: {error[:300]}", 0
+        return (masked, by_kind,
+                f"Could not write the blurred copy. ffmpeg said: {error[:300]}", 0)
     problem = verify(part, len(per_frame), times[-1] - times[0])
     if problem:
         part.unlink(missing_ok=True)
-        return masked, f"The joined file did not verify: {problem}", 0
+        return masked, by_kind, f"The joined file did not verify: {problem}", 0
     import os
     os.replace(part, dst)
-    return masked, "", sum(s.frames for s in segments if s.copy)
+    return masked, by_kind, "", sum(s.frames for s in segments if s.copy)
