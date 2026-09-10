@@ -33,6 +33,49 @@ class Settings:
     # masks nothing is worse than no switch.
     mask: tuple[str, ...] = ("face",)
 
+    # --- screens -------------------------------------------------------------
+    # Which COCO things count as a screen. The model knows eighty; these are
+    # the ones that are glass with something on them.
+    screen_labels: tuple[str, ...] = ("tv", "laptop", "phone")
+    # One detector, no confirmation, because there is no identity to weigh:
+    # a screen is masked as an object whatever is on it. 0.35 was the first
+    # try and it is too low: section 15.1 has it destroying 78 percent of a
+    # frame. At 0.5 the same footage reads 0.15 to 0.30 percent per frame.
+    screen_conf: float = 0.5
+    screen_nms: float = 0.45
+    # Largest plausible screen, as a share of the frame's area. A COCO
+    # detector calls any large flat rectangle a television and this footage
+    # is full of them: a blue table tennis table reads as a laptop at 0.88
+    # over a third of the frame, a washroom mirror as a television.
+    #
+    # 12 rather than the 4 that a cap on its own needs, because it does not
+    # work on its own: with screen_min_run beside it, 4 and 12 hold the same
+    # 91 percent precision, and 12 keeps a real monitor at 10.6 percent of
+    # the frame that 4 threw away. That monitor is the kind most likely to be
+    # showing something readable, so the looser cap is the safer one once
+    # persistence is carrying the precision. Section 15.3.
+    screen_max_area: float = 0.12
+    # Frames a screen has to be seen in before any of it is masked. This is
+    # what the cap cannot do: 14 of the 29 false runs on the sample footage
+    # last a single frame and no real screen does, because a table only looks
+    # like a laptop from some angles while a monitor on a wall stays a
+    # monitor. It is the same idea as established_after on the face side, and
+    # it costs one real screen of 54.
+    screen_min_run: int = 3
+    # Grow the box by this share of its own size. A detector's box stops at
+    # the glass, and a box that stops at the glass leaves a rim of picture
+    # once the camera has moved between the frame it was found in and the
+    # frame it is masked in.
+    screen_pad: float = 0.06
+    # Frames a screen stays masked after its last sighting, and the most
+    # frames that may be missing between two sightings and still be filled
+    # rather than left open. A screen does not leave the room between one
+    # frame and the next; a detector that drops it for two frames has not
+    # been told that. Two frames side by side have a gap of zero, so a gap
+    # of zero still joins them into a run.
+    screen_tail: int = 6
+    screen_gap: int = 12
+
     # --- detection -----------------------------------------------------------
     # yunet: YuNet finds faces, CenterFace confirms them (see verify).
     # both: union of the two, no confirmation. centerface: CenterFace alone.
@@ -294,6 +337,7 @@ class Settings:
         object.__setattr__(self, "mask", tuple(self.mask))
         object.__setattr__(self, "det_sizes", tuple(int(s) for s in self.det_sizes))
         object.__setattr__(self, "hand_windows", tuple(int(w) for w in self.hand_windows))
+        object.__setattr__(self, "screen_labels", tuple(self.screen_labels))
         self.validate()
 
     def validate(self) -> None:
@@ -339,6 +383,32 @@ class Settings:
         if self.hand_device not in DEVICES:
             raise SettingsError(
                 f"hand_device must be one of {DEVICES}, got {self.hand_device!r}")
+        from .screens import SCREEN_LABELS
+        known = set(SCREEN_LABELS.values())
+        if not self.screen_labels:
+            raise SettingsError("screen_labels must name at least one kind of screen")
+        for name in self.screen_labels:
+            if name not in known:
+                raise SettingsError(
+                    f"screen_labels names {name!r}; the model knows "
+                    f"{', '.join(sorted(known))}")
+        if not 0.0 < self.screen_conf <= 1.0:
+            raise SettingsError(
+                f"screen_conf must be above 0 and at most 1, got {self.screen_conf}")
+        if not 0.0 < self.screen_nms <= 1.0:
+            raise SettingsError(
+                f"screen_nms must be above 0 and at most 1, got {self.screen_nms}")
+        if self.screen_pad < 0:
+            raise SettingsError("screen_pad must be 0 or more")
+        if not 0.0 < self.screen_max_area <= 1.0:
+            raise SettingsError(
+                f"screen_max_area must be above 0 and at most 1, "
+                f"got {self.screen_max_area}")
+        if self.screen_min_run < 1:
+            raise SettingsError(
+                f"screen_min_run must be at least 1, got {self.screen_min_run}")
+        if self.screen_tail < 0 or self.screen_gap < 0:
+            raise SettingsError("screen_tail and screen_gap must be 0 or more")
         if self.crop_size < 64 or self.crop_scale < 1.0:
             raise SettingsError("crop_size must be at least 64 and crop_scale at least 1")
         if not 0.0 < self.conf_weak <= self.conf:
@@ -431,10 +501,13 @@ class Settings:
             "check_output", "check_stride", "quarantine", "quarantine_min_px",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
             "hand_device",
+            "screen_labels", "screen_conf", "screen_nms", "screen_pad",
+            "screen_max_area", "screen_min_run", "screen_tail", "screen_gap",
             "nms_detect", "nms_yunet")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.
         d["mask"] = list(self.mask)
+        d["screen_labels"] = list(self.screen_labels)
         d["det_sizes"] = list(self.det_sizes)
         d["hand_windows"] = list(self.hand_windows)
         return d

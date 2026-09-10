@@ -70,6 +70,10 @@ class AuditRecord:
     reorder_delay: int = 0        # source B-frame delay in frames; copies need 0
     camera_shift_p95: float = 0.0     # source pixels per frame
     camera_shift_max: float = 0.0
+    # Screens found, before the gaps were closed, and the frames that carry
+    # one after. Zero unless the run was asked to mask screens.
+    screens: int = 0
+    screen_frames: int = 0
     # Stretches where the primary detector saw a box nothing confirmed and no
     # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
     unconfirmed_runs: list = field(default_factory=list)

@@ -43,6 +43,10 @@ EXPECTED = {
         "00e6f22f25156220974589e012562ccce84b3d4b043690ac6085e8701261a9df",
         10914627,
     ),
+    "yolox_tiny.onnx": (
+        "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+        20219662,
+    ),
 }
 
 
@@ -75,6 +79,12 @@ def test_every_model_in_the_build_carries_its_licence():
 def test_the_face_recogniser_stays_out_of_the_build():
     """A tool that redacts faces has no business shipping a face recogniser."""
     assert "sface" not in SPEC.read_text(encoding="utf-8")
+
+
+def test_the_screen_model_is_in_the_build():
+    """A checkbox for screens with no model behind it in the packaged app
+    would mask nothing and say nothing."""
+    assert "yolox_tiny.onnx" in SPEC.read_text(encoding="utf-8")
 
 
 def test_the_hand_models_are_in_the_build():

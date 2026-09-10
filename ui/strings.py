@@ -34,18 +34,20 @@ MENU_ABOUT = "About FaceBlur"
 # but it is switched off and cannot be switched on.
 MASK_LABEL = "What to mask"
 MASK_HELP = "Choose at least one thing to mask."
+# Each kind says what it hides, in the present. The window puts MASK_NOT_YET
+# in front of the ones this build cannot do, and it reads that from the
+# registry rather than from the string, so a kind that lands cannot leave a
+# line here saying it has not.
+MASK_NOT_YET = "Not in this build yet."
 MASK_FACES = "Faces"
 MASK_FACES_HELP = "The app hides each face behind a soft oval. It may miss a face."
 MASK_TEXT = "Personal text"
 MASK_TEXT_HELP = (
-    "Not in this build yet. It will hide names, addresses and phone numbers. "
-    "It will leave card names, prices and grading labels."
+    "The app hides names, addresses and phone numbers. It leaves card names, "
+    "prices and grading labels."
 )
 MASK_SCREEN = "Screens"
-MASK_SCREEN_HELP = (
-    "Not in this build yet. It will hide a phone, a monitor or a television, "
-    "and everything on it."
-)
+MASK_SCREEN_HELP = "The app hides a phone, a monitor or a television, and all it shows."
 ACC_MASK_GROUP = "What to mask"
 
 # Step 1, choose the input

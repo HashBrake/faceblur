@@ -6,12 +6,13 @@ than rewriting an earlier one, so a number and the day it was measured stay
 together.
 
 Every number here was produced by the code in this repository with no human
-labels and no human judgement in the loop, with one exception, section 14.1:
-deciding whether a rule that sets a flagged box aside is safe needs to know
-what those boxes actually are, and nothing in this repository knows. Those 108
-boxes were labelled by eye, once, and the section says so and reports the six
-it could not call. Nothing in the pipeline or in the rest of the evaluation
-depends on a label.
+labels and no human judgement in the loop, with two exceptions, sections 14.1
+and 15.2. Both are the same problem: deciding whether a rule that sets a
+detection aside is safe needs to know what those detections actually are, and
+nothing in this repository knows. 108 boxes from the output-side check and 85
+screen runs were labelled by eye, once, by one person; both sections say so
+and report the ones that could not be called. Nothing in the pipeline or in
+the rest of the evaluation depends on a label.
 
 ## 1. The task
 
@@ -249,7 +250,7 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 956 tests
+.venv\Scripts\python.exe -m pytest tests                      # 997 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
@@ -1002,3 +1003,134 @@ whose answer depended on which device it ran on would not be one.
   it looks the same in both, and the source is the sharper of the two. If a
   future change ever masked hands on purpose, this would have to change with
   it.
+
+## 15. Screens as objects (2026-09-10)
+
+The scope changed on 2026-09-10 from faces to faces, personal text and
+screens, each a switch of its own (`FACEBLUR_BUILD_PLAN.md`, "Scope change").
+This section is the screen class. Text is not built.
+
+A screen needs none of the machinery the face side has. There is no identity
+to weigh: whatever is on the glass is hidden, so the only question is where
+the glass is. One general purpose object detector answers it.
+
+### 15.1 The model, and the first run
+
+YOLOX-tiny, Apache 2.0, from Megvii's release, 20 MB. Licence came first:
+most YOLO derivatives in common use are AGPL and this project cannot ship
+them. Of the permissive detectors that remained it is the smallest whose
+decode matches one already here — anchor free, three strides, the same shape
+as YuNet's — so `faceblur/screens.py` could be checked against a frame rather
+than trusted. It is a COCO detector and three of its eighty classes are
+glass: tv, laptop and cell phone.
+
+The decode was checked by eye first: on `005035` frame 309 it puts a box on
+the wall mounted television at 0.85. Two things about the input were found by
+measurement rather than read from a page, and both are recorded in
+`models/README.md`: the frame is letterboxed to the **top left** on grey 114,
+not centred, and it is fed as **raw 0 to 255 BGR with no mean and no standard
+deviation** — normalising it the ImageNet way drops that same score from 0.85
+to 0.004.
+
+Then it was run end to end, and it failed:
+
+| `005035`, 3971 frames | Faces only | Faces and screens, first try |
+|---|---|---|
+| Share of the frame destroyed, mean | 1.7 % | **2.84 %** |
+| Worst frame | 4.8 % | **42.7 %** |
+| Frames over the 5 % budget | 0 | **200** |
+
+### 15.2 What it was actually masking
+
+Every one of the 85 detection runs the model produced across the four sample
+files, at a floor of 0.5, was looked at on the frame it came from. 54 are a
+real screen, 29 are not, 2 could not be called.
+
+The 29 are almost all one thing: **the blue table tennis table**. A COCO
+detector calls any large flat rectangle a television, and this footage is
+made of them. The table is called a laptop, a television and a phone by
+turns. Washroom mirrors, glass walls and dark doorways make up the rest.
+
+Score does not separate them. The table reads **0.88** covering a third of
+the frame; the real television across the hall reads **0.85** covering one
+percent. A bigger model does not separate them either: YOLOX-s, at 36 MB,
+misses the real television at frame 425 outright, scores the one at 309 at
+0.48 against tiny's 0.85, and still calls the glass wall a television.
+
+Two things do separate them, and neither is the detector's opinion.
+
+- **Size.** The false runs are 2.4 to 35 percent of the frame; the wall
+  television and the phones are 0.4 to 1.6.
+- **Persistence.** 14 of the 29 false runs last a single frame and not one
+  real screen does. A table looks like a laptop from some angles and not
+  others, so the detector calls it one and then stops. A monitor on a wall
+  stays a monitor.
+
+### 15.3 The two rules, and why both
+
+Precision over the 83 runs that could be called, and the real screens lost,
+for a minimum run length against a cap on the box's share of the frame:
+
+| Seen in | cap 2 % | cap 4 % | cap 8 % | cap 12 % | cap 25 % | no cap |
+|---|---|---|---|---|---|---|
+| 1 frame | 92 %, lost 5 | 91 %, lost 2 | 87 %, lost 1 | 82 %, lost 0 | 68 %, lost 0 | 65 %, lost 0 |
+| 2 frames | 92 %, lost 5 | 91 %, lost 2 | 90 %, lost 1 | 89 %, lost 0 | 79 %, lost 0 | 78 %, lost 0 |
+| **3 frames** | 92 %, lost 5 | 91 %, lost 2 | 91 %, lost 2 | **91 %, lost 1** | 84 %, lost 1 | 83 %, lost 1 |
+| 4 frames | 95 %, lost 18 | 93 %, lost 16 | 93 %, lost 16 | 93 %, lost 15 | 87 %, lost 15 | 87 %, lost 15 |
+| 6 frames | 95 %, lost 35 | 91 %, lost 33 | 91 %, lost 33 | 92 %, lost 32 | 85 %, lost 32 | 85 %, lost 32 |
+
+The shipped rule is **seen in 3 frames, cap 12 percent** (`screen_min_run`,
+`screen_max_area`), and the point of the table is what it says about doing
+either alone.
+
+A cap alone has to be tight to work: 4 percent, for 91 percent precision. At
+4 percent it throws away a real monitor covering 10.6 percent of the frame,
+and that is the worst place to lose one, because a screen that large and that
+close is the one most likely to be showing something a person could read.
+
+With persistence carrying the precision instead, the cap can sit at 12
+percent for the same 91 percent, and that monitor is kept. Persistence is
+what makes the looser cap safe.
+
+Going further costs too much. At 4 frames precision rises two points and
+fifteen more real screens are lost, because most sightings of the wall
+television are short bursts of three or four frames as the camera swings past
+it. Losing them loses coverage of a screen the run does mask elsewhere.
+
+### 15.4 What it costs, and what is left
+
+Share of each frame the screen mask destroys, with the runs grouped, the
+short ones dropped, gaps filled and the tail added:
+
+| Rule | `003939` | `004100` | `004310` | `005035` | Worst frame |
+|---|---|---|---|---|---|
+| floor 0.35, no cap, no persistence | 0.44 % | 0.46 % | 0.10 % | 0.66 % | 78 % |
+| floor 0.50, no cap, no persistence | 0.15 % | 0.23 % | 0.01 % | 0.30 % | 35 % |
+| floor 0.50, cap 4 %, no persistence | 0.08 % | 0.38 % | 0.07 % | 0.32 % | 6 % |
+| **floor 0.50, cap 12 %, seen in 3** | **0.04 %** | **0.34 %** | **0.01 %** | **0.24 %** | **12 %** |
+
+The face mask on the same four files destroys 0.25 to 1.7 percent of each
+frame and at most 4.8 percent of one. The screen mask is smaller than that on
+average and larger at its worst, and the worst is one frame with a large
+monitor properly masked in it.
+
+What is left, and is not going to be fixed by tuning:
+
+- **9 percent of what it masks is not a screen.** The survivors are small:
+  a 2.4 percent patch of a washroom wall on `003939` for 10 frames, a 0.4
+  percent patch on `005035` for 27. They are cheap in pixels and they are
+  still wrong.
+- **One real screen of 54 is lost** by the persistence rule, and it is a two
+  frame sighting of a monitor at 5.2 percent of the frame.
+- **A screen the detector never finds at all is not counted here**, exactly
+  as with faces. There is no oracle for screens on this footage, so unlike
+  the face numbers there is no recall figure against an independent witness,
+  only precision against one person's eye over 85 runs.
+- **The rule is tuned on one venue.** The table tennis hall is what makes the
+  size cap necessary and what sets its value. A room with a large monitor
+  close to the camera and no large flat furniture would want a looser cap;
+  there is no footage here to set one on.
+- **A screen is masked as an object, whatever is on it.** A monitor showing a
+  scoreboard is destroyed as thoroughly as one showing a spreadsheet of
+  names. That is the scope decision of 2026-09-10, taken so that nothing has
+  to judge what is on the glass, and the cost is over masking.

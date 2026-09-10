@@ -37,12 +37,12 @@ def test_every_kind_is_named_once_and_has_a_shape():
         assert k.label and k.summary
 
 
-def test_only_faces_are_ready_in_this_build():
-    """When text or screens land, this test changes with them, on purpose:
-    nothing else in the codebase should have to."""
-    assert [k.name for k in classes.available()] == ["face"]
-    assert FACE.ready
-    assert not TEXT.ready and not SCREEN.ready
+def test_which_kinds_this_build_can_actually_do():
+    """This test changes as each kind lands, on purpose: nothing else in the
+    codebase should have to, and a reader wants one place that says it."""
+    assert [k.name for k in classes.available()] == ["face", "screen"]
+    assert FACE.ready and SCREEN.ready
+    assert not TEXT.ready
 
 
 def test_a_face_is_hidden_by_an_ellipse_and_the_others_by_their_own_corners():
@@ -79,14 +79,24 @@ def test_the_flag_refuses_an_empty_list():
 
 # ----------------------------------------------------------------- settings
 
-def test_the_default_run_masks_faces():
+def test_the_default_run_masks_faces_and_nothing_else():
+    """Screens are built but off by default. Widening what a tool destroys
+    is the owner's decision on the day, not a side effect of an upgrade."""
     assert Settings().mask == ("face",)
     assert Settings().wants("face")
+    assert not Settings().wants("screen")
     assert not Settings().wants("text")
 
 
+def test_screens_can_be_asked_for_on_their_own_or_beside_faces():
+    assert Settings(mask=("screen",)).wants("screen")
+    both = Settings(mask=("face", "screen"))
+    assert both.wants("face") and both.wants("screen")
+    assert classes.parse("screen,face") == ("face", "screen"), "listing order"
+
+
 def test_settings_refuse_a_kind_this_build_cannot_do():
-    for bad in ((), ("plate",), ("text",), ("face", "screen")):
+    for bad in ((), ("plate",), ("text",), ("face", "text")):
         with pytest.raises(SettingsError):
             Settings(mask=bad)
 

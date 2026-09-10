@@ -91,6 +91,28 @@ def _bank(settings: Settings) -> DetectorBank:
     return bank
 
 
+_SCREENS: dict = {}
+
+
+def _screens(settings: Settings):
+    """The worker's cached screen detector, built the first time it is asked.
+
+    Kept apart from `_bank` for the same reason the hand models are: most
+    runs never ask for screens, and a model that is never used should not be
+    loaded, still less loaded once per worker.
+    """
+    from .screens import ScreenDetector
+
+    key = (settings.device, settings.screen_labels, settings.screen_conf,
+           settings.screen_nms, settings.screen_pad)
+    found = _SCREENS.get(key)
+    if found is None:
+        found = ScreenDetector(settings, threads=_THREADS)
+        _SCREENS.clear()
+        _SCREENS[key] = found
+    return found
+
+
 _HAND_RULES: dict = {}
 
 
@@ -117,7 +139,8 @@ def detect_job(job: dict) -> dict:
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     bank = _bank(settings)
-    strong, weak, shifts = {}, {}, {}
+    screens = _screens(settings) if settings.wants("screen") else None
+    strong, weak, shifts, found_screens = {}, {}, {}, {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -133,11 +156,22 @@ def detect_job(job: dict) -> dict:
             prev_small = small
         if i % settings.stride:
             continue
+        if screens is not None:
+            # The frame is already decoded for the face pass, and this is one
+            # more inference on it at a sixteenth of the area.
+            hits = screens.detect(frame)
+            if hits:
+                found_screens[i] = hits
         raw = bank.detect_raw(frame)
         strong[i] = filter_candidates(raw, settings, shape)
         weak[i] = weak_candidates(raw, settings, shape)
+    compute = dict(bank.compute)
+    hashes = dict(bank.model_hashes)
+    if screens is not None:
+        compute.update(screens.compute)
+        hashes.update(screens.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
-            "compute": bank.compute, "hashes": bank.model_hashes}
+            "screens": found_screens, "compute": compute, "hashes": hashes}
 
 
 def encode_job(job: dict) -> dict:
@@ -270,6 +304,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
              "start": a, "end": b} for a, b in _chunks(n, chunk)]
     strong: list[list[Detection]] = [[] for _ in range(n)]
     weak: list[list[Detection]] = [[] for _ in range(n)]
+    screens_found: dict[int, list[Detection]] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
     compute, hashes = {}, {}
@@ -289,6 +324,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             weak[i] = d
         for i, sh in result.get("shifts", {}).items():
             shifts[i] = sh
+        screens_found.update(result.get("screens") or {})
         compute, hashes = result["compute"], result["hashes"]
         done_frames += result["end"] - result["start"]
         report("detecting", done_frames, n)
@@ -313,6 +349,18 @@ def run_video(src: Path, dst: Path, settings: Settings,
     per_frame, tracks = tracker_for(settings).run(
         strong, weak, shifts if settings.camera_comp else None, (info.height, info.width))
     record.tracks = len(tracks)
+
+    # ---- 2b. screens, which need no tracker: they are large, rigid and
+    # found outright, so all they want is short gaps closed and a tail.
+    if settings.wants("screen"):
+        from .screens import hold
+
+        held = hold(screens_found, settings, n)
+        record.screens = sum(len(v) for v in screens_found.values())
+        record.screen_frames = len(held)
+        for i, dets in held.items():
+            if 0 <= i < n:
+                per_frame[i] = list(per_frame[i]) + list(dets)
     if settings.camera_comp:
         mag = np.hypot(*np.asarray(shifts, dtype=np.float64).T) if n else np.zeros(1)
         record.camera_shift_p95 = round(float(np.percentile(mag, 95)), 2)

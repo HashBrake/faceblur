@@ -68,8 +68,9 @@ SCREEN = Kind(
     label="Screens",
     shape=POLYGON,
     summary="a phone, monitor or television as an object, whatever is on it",
-    ready=False,
+    ready=True,
 )
+
 
 # Order matters: it is the order the window lists them in, and faces are the
 # one most runs want.

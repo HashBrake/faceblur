@@ -413,10 +413,15 @@ class MainWindow(QMainWindow):
             check = QCheckBox(label)
             check.setMinimumHeight(CONTROL_HEIGHT - 4)
             check.setEnabled(kind.ready)
+            # Faces are the only kind on by default. Widening what the app
+            # destroys is a decision on the day, not a side effect of an
+            # upgrade that switched something else on.
             check.setChecked(kind.ready and kind is FACE)
             check.toggled.connect(self._update_start_enabled)
             self.mask_checks[kind.name] = check
             layout.addWidget(check)
+            if not kind.ready:
+                help_text = f"{S.MASK_NOT_YET} {help_text}"
             layout.addWidget(help_label(help_text))
 
         self.mask_help = help_label(S.MASK_HELP)

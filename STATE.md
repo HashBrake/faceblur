@@ -1,6 +1,6 @@
 # STATE — handover notes
 
-Last updated: 2026-09-09, second pass that day. This file says where the
+Last updated: 2026-09-10. This file says where the
 project stands, what was verified, and what a new person or session should do
 next. The README explains how to use the tool; `docs/report.md` holds the
 measurements, one section per pass, and is the place to look before changing
@@ -9,22 +9,30 @@ anything measured.
 ## What this is, and what it is becoming
 
 **Scope changed on 2026-09-10.** The owner asked for sensitive information
-beyond faces. It is now three kinds, each a switch of its own: faces (built),
-personal text (not built), screens as objects (not built). Audio and
-container metadata were offered at the same time and not chosen. The decision
-and the two rules it came with are written into `FACEBLUR_BUILD_PLAN.md`
-under "Scope change"; the one that shapes the work is that **cards are left
-alone**, because on this footage card names, prices and grading labels are
-the point of the dataset, so only personal text is ever masked.
+beyond faces. It is now three kinds, each a switch of its own: **faces**
+(built, sections 3 and 10 to 14), **screens** as objects (built the same day,
+section 15), **personal text** (not built). Audio and container metadata were
+offered at the same time and not chosen. The decision and the two rules it
+came with are in `FACEBLUR_BUILD_PLAN.md` under "Scope change"; the one that
+shapes the work still to do is that **cards are left alone**, because on this
+footage card names, prices and grading labels are the point of the dataset,
+so only personal text is ever masked.
 
-What is built today, and everything below this line, is faces.
+Faces are on by default and screens are not. Widening what the tool destroys
+is a decision on the day, not a side effect of an upgrade.
 
-FaceBlur: video in, video with faces blurred out. Windows desktop window plus a
-command line. No labels and no human step anywhere in the pipeline, and none
-in any measurement that gets re-run — with one exception, recorded in section
-14.1: deciding whether the hand rule was safe meant knowing what 108 boxes
-actually were, and they were labelled by eye, once. Nothing the pipeline does
-depends on a label. Built for Ego camera footage (1600x1300, ~30 fps, h264,
+Most of what follows is about faces, which is where almost all the
+measurement is. Section 15 and the 2026-09-10 note below are the screens.
+
+FaceBlur: video in, video with the sensitive things destroyed. Windows
+desktop window plus a command line. No labels and no human step anywhere in
+the pipeline, and none in any measurement that gets re-run — with two
+exceptions, both recorded where they are used and both the same shape of
+problem. Deciding whether a rule that sets a detection aside is safe means
+knowing what those detections actually are, and nothing in this repository
+knows: section 14.1, the 108 boxes the output-side check reported, and
+section 15.2, the 85 screen runs. Each was labelled by eye, once, by one
+person. Nothing the pipeline does depends on a label. Built for Ego camera footage (1600x1300, ~30 fps, h264,
 no audio) of card collectors, where the goal is: destroy the minimum region
 that hides a person's identity and leave hands, cards, screens and everything
 else untouched.
@@ -48,20 +56,26 @@ else untouched.
   longer existed.
 - Pass five, 2026-09-08 to 09, section 13: `faceblur/verify.py`, the check
   that reads the output instead of the source, and the `--quarantine` gate.
+- Pass seven, 2026-09-10, section 15: the scope change, the kind registry
+  that makes each class a switch of its own (`faceblur/classes.py`), and the
+  screen class (`faceblur/screens.py`). The screen detector failed its first
+  run over real footage and the two rules that fixed it are the interesting
+  part; see the note below.
 - Pass six, 2026-09-09, section 14: the hand rule (`faceblur/hands.py`), and
   the eye pass over all 108 boxes the check reports that says what they
   actually are. It corrects section 13.4: the check finds real faces two and
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
-- Tests: `tests/`, 956 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- Tests: `tests/`, 997 passing (`.venv\Scripts\python.exe -m pytest tests`).
 - Everything is committed and pushed to `HashBrake/faceblur`, `main`, and the
   working tree is clean. The last change of substance is e2663c0, the hand
   rule; commits after it are these notes catching up.
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`. Not
-  rebuilt since 2026-09-07, and it now has two more models to carry, so it
+  rebuilt since 2026-09-07, and it now has three more models to carry, so it
   needs rebuilding before it is handed to anyone. The spec ships three face
-  detectors, the two hand models and their licences, and deliberately does not
-  ship the recogniser; `tests/test_models.py` fails if any of that changes.
+  detectors, two hand models, the screen detector and their licences, and
+  deliberately does not ship the recogniser; `tests/test_models.py` fails if
+  any of that changes.
 - Desktop shortcut `FaceBlur.lnk` on this PC launches `.venv\Scripts\pythonw.exe -m ui.app`,
   so it always runs the current code.
 
@@ -241,6 +255,81 @@ sets aside 12 or 13 hands over almost all of that. Section 14.2 has the
 table, and says what the same rule looks like without the second model: a
 needle, where growing the region one step loses seven faces.
 
+## What changed on 2026-09-10 (the scope, and screens)
+
+Two things, and the second is a lesson rather than a feature.
+
+**Each kind is a switch.** `faceblur/classes.py` is a registry: a kind carries
+its name, its label, the shape of its mask and whether a detector exists
+behind it. The window's checkboxes, the `--mask` flag and its help text are
+all derived from that last field, so a switch cannot promise more than the
+build can do, and a kind that lands needs one line changed. `Detection` now
+carries a `kind`, and `redact.py` has a polygon path beside the ellipse: an
+ellipse over a line of text spills onto the page in the middle and misses the
+first and last characters. Blocks for a quad are sized by its **short** side,
+because sizing a 400 px line of text by its length gives one block across it.
+
+**The screen class failed its first run, and the fix is worth reading before
+adding a fourth kind.** YOLOX-tiny, Apache 2.0, decode verified against a
+frame by eye. Run end to end on `005035` it destroyed 2.84 percent of the
+average frame and 42.7 percent of the worst, and put 200 frames over the mask
+budget where faces alone put none.
+
+The cause was not the threshold. A COCO detector calls any large flat
+rectangle a television, and this footage is made of them: **the blue table
+tennis table is detected as a laptop, a television and a phone by turns**.
+Washroom mirrors and glass walls make up the rest. The score is no help at
+all: the table reads 0.88 over a third of the frame, the real television
+across the hall reads 0.85 over one percent. A bigger model is no help
+either, and is worse: YOLOX-s misses the real television outright.
+
+All 85 detection runs across the four files were looked at, one at a time: 54
+real screens, 29 not, 2 that could not be called. Two rules came out of that,
+and the reason both are needed is the useful part:
+
+1. **Seen in three frames before anything is masked** (`screen_min_run`). 14
+   of the 29 false runs last a single frame and not one real screen does. A
+   table looks like a laptop from some angles and not others; a monitor on a
+   wall stays a monitor. Same idea as `established_after` on the face side.
+2. **A cap on the box at 12 percent of the frame** (`screen_max_area`).
+
+A cap on its own has to sit at 4 percent to reach 91 percent precision, and
+at 4 percent it throws away a real monitor covering 10.6 percent of the
+frame. That is the worst screen to lose: one that large and that close is the
+one most likely to be showing something readable. With persistence carrying
+the precision the cap can sit three times looser at the same 91 percent, and
+that monitor is kept. Going to four frames buys two points and costs fifteen
+more real screens, because most sightings of the wall television are bursts
+of three or four frames as the camera swings past.
+
+End to end on `005035`, the file that showed the problem:
+
+| | mean | p95 | worst | over budget |
+|---|---|---|---|---|
+| faces only | 0.69 % | 1.90 % | 8.3 % | 9 |
+| plus screens, first try | 2.84 % | 15.77 % | 42.7 % | 357 |
+| plus screens, cap only | 1.05 % | 2.57 % | 8.3 % | 17 |
+| plus screens, shipped rule | 0.99 % | 2.56 % | 13.3 % | 40 |
+
+Persistence lowered the masked frames from 1326 to 848 and kept the large
+monitor: it drops flickers, not screens. The worst frame and the extra
+over-budget frames are that monitor, correctly masked.
+
+What a next person should not assume about screens:
+
+- **There is no recall number.** There is no oracle for screens on this
+  footage, so unlike faces there is precision against one person's eye over
+  85 runs and nothing else. A screen no detector ever finds is not counted.
+- **9 percent of what it masks is not a screen**, in small patches: 2.4
+  percent of a frame of washroom wall for 10 frames, 0.4 percent for 27.
+- **The cap is tuned on one venue.** The table tennis hall is what makes it
+  necessary and what sets its value. A room with a large monitor close to the
+  camera and no large flat furniture would want a looser one, and there is no
+  footage here to set it on.
+- **The output-side check does not cover screens.** `verify.py` reads the
+  copy for faces only. A screen the run missed is not reported and does not
+  hold a copy back.
+
 ## Sample footage and outputs
 
 `footage/` holds four Ego files (264 s total). They, every output folder and
@@ -255,6 +344,7 @@ workers, and happens on its own when the fingerprint no longer matches.
 ```
 .venv\Scripts\python.exe -m ui.app                        # window
 .venv\Scripts\python.exe cli.py footage -o footage_blurred_v9
+.venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # screens too
 .venv\Scripts\python.exe cli.py footage -o out --quarantine    # with the gate
 .venv\Scripts\python.exe -m pytest tests                  # tests
 .venv\Scripts\python.exe -m eval.misses VIDEO --images DIR      # where faces may still be missed
@@ -270,6 +360,16 @@ main environment.
 
 ## Known limits and open items
 
+- **Screens are measured for precision only, and only on this venue.** The
+  four caveats are in the 2026-09-10 note above. The first thing to build for
+  them is coverage in `verify.py`, so that a missed screen holds a copy back
+  the way a missed face does.
+- **Personal text is the piece still owed.** Two to three weeks, most of it
+  the label-free evaluation rather than the detector, and the rule that cards
+  are left alone is what makes it hard: OCR on this footage works on text
+  over roughly 20 to 25 px and sharp, and where it fails you do not know what
+  was left. Expect the text gate to hold copies back far more often than the
+  face gate does, and say so before anyone runs a batch.
 - **The gate still holds all four sample files, and should.** They show
   faces. Missing fewer of them is the work that would change that, and section
   12.4 already says the cheap ways of doing it (a bigger scan, tiling) were
@@ -355,6 +455,7 @@ Asked on 2026-09-09, assessed, not built. The short version:
 | `faceblur/batch.py` | the phased runner (`run_video`), `unconfirmed_runs`, quarantine |
 | `faceblur/pipeline.py` | audit record, single-process path |
 | `faceblur/classes.py` | the kinds of thing that can be masked, and which are ready |
+| `faceblur/screens.py` | YOLOX, the size cap and the persistence rule |
 | `faceblur/verify.py` | the check that reads the output, and the gate |
 | `faceblur/hands.py` | palm detector and landmark model: is this box a hand |
 | `cli.py`, `ui/app.py` | the two front ends |

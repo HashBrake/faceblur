@@ -123,3 +123,32 @@ layout, which `faceblur/hands.py` reproduces. `hand_landmark.onnx` takes one
 `presence`, `handedness` and `world`; only `presence` is used, and it is
 already a probability — a sigmoid over it would compress black (0.007) and a
 hand (0.89) into 0.50 and 0.71 and leave nothing to threshold.
+
+## yolox_tiny.onnx
+
+| Field | Value |
+|---|---|
+| Original name | yolox_tiny.onnx |
+| Source | Megvii, YOLOX, release 0.1.1rc0 |
+| URL | https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx |
+| Licence | Apache 2.0, see yolox.LICENSE.txt |
+| Size | 20219662 bytes |
+| sha256 | 427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7 |
+
+Taken on 2026-09-10, for the screen class. Licence came first in the choice:
+most YOLO derivatives in common use are AGPL and this project cannot ship
+them. Of the permissive detectors that remained, this is the smallest whose
+decode matches one already in the repo, so `faceblur/screens.py` could be
+checked against a frame rather than trusted.
+
+Input `images` [1, 3, 416, 416], BGR, 0 to 255, NCHW, **no mean and no
+standard deviation**: normalising it the ImageNet way drops the best score on
+a frame holding a television from 0.85 to 0.004. The frame is letterboxed to
+the top left on grey (114), as YOLOX's own preprocessing does. Output
+`output` [1, 3549, 85] is undecoded: four box numbers, an objectness, then 80
+class scores, against the anchor free grid of strides 8, 16 and 32 that gives
+52x52 + 26x26 + 13x13 = 3549 rows.
+
+It is a COCO detector and this project wants three of its eighty classes: tv
+(62), laptop (63) and cell phone (67). `screen_labels` chooses among those
+three and nothing else in the code hard-codes them.
