@@ -87,3 +87,23 @@ def test_parse_det_sizes_reads_a_list():
 def test_parse_det_sizes_refuses_an_empty_list():
     with pytest.raises(SettingsError):
         parse_det_sizes("  ")
+
+
+def test_every_tuple_setting_survives_a_json_round_trip():
+    """The audit record is written as JSON and read back to compare.
+
+    A tuple comes back a list, so a tuple setting that `to_dict` does not
+    convert makes the record unequal to itself one save later. `text_sizes`
+    did exactly that on 2026-09-12 and `tests/test_pipeline.py` caught it;
+    this is the general form, so the next kind's sizes cannot repeat it.
+    """
+    import json
+
+    from faceblur.settings import Settings
+
+    recorded = Settings().to_dict()
+    tuples = [k for k, v in recorded.items() if isinstance(v, tuple)]
+    assert not tuples, (
+        f"{tuples} are tuples in to_dict and will come back from JSON as lists. "
+        f"Convert them in to_dict, beside det_sizes")
+    assert json.loads(json.dumps(recorded)) == recorded

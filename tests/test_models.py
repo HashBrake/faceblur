@@ -47,6 +47,10 @@ EXPECTED = {
         "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
         20219662,
     ),
+    "text_detection_ppocrv3.onnx": (
+        "03f550c6b406fda8bf54bd8327815f6c7e2edd98cea02348c93d879254366587",
+        2423490,
+    ),
 }
 
 
@@ -144,6 +148,12 @@ NOT_SHIPPED = {
     "ultraface.onnx":
         "the static graph models/make_dynamic.py derives ultraface_dynamic "
         "from. Nothing loads it at run time",
+    "text_detection_ppocrv3.onnx":
+        "package T1 measures text and nothing masks it: classes.TEXT.ready is "
+        "False, so the app cannot select the kind and the model would be 2.4 MB "
+        "of dead weight. Package T3 turns text on and moves this line into the "
+        "spec, and test_a_ready_kind_has_its_model_in_the_build fails until it "
+        "does",
 }
 
 
@@ -160,6 +170,23 @@ def test_every_model_is_either_in_the_build_or_says_why_not():
             f"{model.name} is in models/ and not in build/faceblur.spec. Add it "
             f"to the spec's datas, or add it to NOT_SHIPPED here with the "
             f"reason the build does not need it")
+
+
+def test_a_ready_kind_has_its_model_in_the_build():
+    """The rule that NOT_SHIPPED must not be allowed to outlive its reason.
+
+    A kind the window offers is a kind the packaged app has to be able to
+    mask. The screen and hand models spent a week missing from the packaged
+    app and the only symptom was a checkbox that masked nothing in somebody
+    else's copy. So the moment `classes.TEXT.ready` becomes True, the text
+    model has to be in the spec.
+    """
+    from faceblur import classes
+
+    if classes.TEXT.ready:
+        assert "text_detection_ppocrv3.onnx" in spec_datas(), (
+            "text is ready and its model is not in build/faceblur.spec. Add it "
+            "to the spec's datas and take it out of NOT_SHIPPED here")
 
 
 def test_every_committed_model_has_a_pinned_hash():

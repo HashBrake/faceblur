@@ -2468,3 +2468,202 @@ both is invisible to this.
 
 It is off by default. A run that does not check its output has no seeds, and
 `Settings` refuses the combination rather than doing nothing quietly.
+
+## 21. Text: a detector, and what it finds here (2026-09-12)
+
+Package T1 builds the text detector and measures it. **Nothing masks text.**
+`classes.TEXT.ready` is still False, no part of the pipeline imports
+`faceblur/text.py`, and a test keeps both true. Package T3 was to turn text
+on; section 21.5 is what this pass found out about that.
+
+    .venv\Scripts\python.exe -m eval.text VIDEO --sizes 960,1280,1920,2560,3200
+    .venv\Scripts\python.exe -m eval.text VIDEO --normalisation
+    .venv\Scripts\python.exe -m eval.text --audit
+
+### 21.1 The model, and the one thing it needed settled
+
+PP-OCRv3 detection, Apache 2.0, from PaddlePaddle's own release, converted to
+ONNX by OpenCV's model zoo. A DB model: it returns one probability map at the
+size of its input and the boxes are contours of that map.
+
+**The build plan asked for PP-OCRv4 converted here with `paddle2onnx`, and
+this is v3 converted by the zoo.** The rule that asked for it is "no pre
+converted file from an unknown repository", and this zoo is where
+`yunet.onnx` came from: the project already depends on it. A conversion run
+on this machine would also produce a hash only this machine could reproduce,
+where the zoo's file has a URL and a sha256 anybody can check, which is the
+stronger guarantee of the two. `models/README.md` records it.
+
+The zoo ships the same weights twice, as `text_detection_cn_...` and
+`text_detection_en_...`. Their Git LFS pointers carry the same oid, so the
+choice between English and Chinese models does not exist.
+
+**Which normalisation.** The zoo's own wrapper applies the ImageNet mean and
+standard deviation. On a drawn card of four known lines the two are level:
+
+| | 960 | 1920 | 2560 |
+|---|---|---|---|
+| plain 0 to 1 | 5 quads | 6 | 6 |
+| ImageNet | 6 quads | 6 | 6 |
+
+On real frames they are not, and the difference is not subtle. On the first
+frame of the canteen file, plain puts 36 blobs above threshold at 2560 and
+ImageNet puts none at all; on the washroom file, 52 against 32. A
+preprocessing that matched the export would not return an empty map where the
+other returns a full one. **Plain 0 to 1**, which is the same answer
+`screens.py` got from YOLOX and for the same reason.
+
+### 21.2 The scales, chosen by measurement
+
+The build plan proposed 960 and 1920. Quads found over 24 sampled frames of
+each file, each size on its own:
+
+| | 960 | 1280 | 1920 | 2560 | 3200 |
+|---|---|---|---|---|---|
+| `003939` | 5 | 11 | 31 | 31 | 35 |
+| `004100` | 9 | 10 | 17 | 20 | 27 |
+| `004310` | 0 | 5 | 16 | 51 | 64 |
+| `005035` | 6 | 1 | 13 | 23 | 32 |
+| Cost a frame | 25 to 41 ms | 34 to 37 ms | 67 to 70 ms | 110 to 115 ms | 167 to 173 ms |
+
+The text in this footage is small. At 960 the canteen file returns nothing at
+all, and on the frame where the detector does fire at 960 it fires large: the
+share of the frame covered at 960 is often bigger than at 2560 while finding
+a quarter as many quads. Comparing the two pairs directly:
+
+| | Lines a frame | Share of the frame, mean | Worst single frame | Cost |
+|---|---|---|---|---|
+| 960 and 1920 | 0.98 | 1.73% | 19.8% | 118 to 160 ms |
+| 1920 and 2560 | 1.68 | 0.98% | 7.3% | 190 to 236 ms |
+
+Seventy percent more lines covering half the area, and the worst quad on any
+frame drops from a fifth of the picture to a fourteenth. **`text_sizes` ships
+at 1920 and 2560.**
+
+### 21.3 What it finds, looked at one quad at a time
+
+124 quads, from 16 sampled frames of each of the four files, each rendered as
+a crop with its quad drawn on it and labelled by eye. The labels are
+committed at `docs/audits/text_quads_2026-09-12.csv`; the crops are pixels of
+real footage and are not. `eval.text --render-audit FOLDER` regenerates them
+for anybody who wants to disagree, and `eval.text --audit` prints these
+tables from the CSV.
+
+| Verdict | Quads | Share |
+|---|---|---|
+| text: the quad is on writing | 5 | 4% |
+| has text: writing inside, the quad is the object it is printed on | 8 | 6% |
+| none: no writing at all | 111 | 90% |
+
+**Nine quads in ten are not text.** And nothing separates them:
+
+| | n | Score, lowest | Median | Highest | Short side, median |
+|---|---|---|---|---|---|
+| text | 5 | 0.656 | 0.781 | 0.829 | 42 px |
+| has text | 8 | 0.637 | 0.730 | 0.770 | 105 px |
+| none | 111 | 0.603 | 0.701 | **0.918** | 68 px |
+
+The highest scoring quad in the whole set is not text. Raising the threshold
+throws the real ones away first:
+
+| `text_box_thresh` | text kept | has text kept | none kept |
+|---|---|---|---|
+| 0.60 | 5 | 8 | 111 |
+| 0.70 | 4 | 4 | 56 |
+| 0.75 | 3 | 2 | 29 |
+| 0.80 | 1 | 0 | 13 |
+| 0.85 | 0 | 0 | 2 |
+
+Area does not separate them either: the quads with no writing take a median
+0.44 percent of the frame and the ones with writing 0.49.
+
+**What the false ones are** is consistent enough to name: rows of ceiling
+lights and lit strips, window frames and stair railings, the wearer's own
+hand on a mop pole, white wall fixtures, and twice a person's face. What the
+real ones are: a "NO SMOKING" sign, one other wall sign, a single letter
+printed on a passing shirt, and two captions on a television. The soap
+dispenser in the washroom accounts for seven of the eight "has text" quads,
+where the word `SARAYA` is real and the quad is the whole dispenser.
+
+| File | Quads | text | has text | none |
+|---|---|---|---|---|
+| `003939` washroom | 31 | 2 | 7 | 22 |
+| `004100` corridor | 27 | 0 | 0 | 27 |
+| `004310` canteen | 39 | 1 | 0 | 38 |
+| `005035` table tennis hall | 27 | 2 | 1 | 24 |
+
+The corridor file returns 27 quads and not one of them has a word in it.
+
+### 21.4 What is there, and where
+
+Over 40 sampled frames of each file, at the shipped scales:
+
+| | Lines a frame | Most | Frames with any | Share of the frame | Worst frame | Cost |
+|---|---|---|---|---|---|---|
+| `003939` | 2.05 | 6 | 38 of 40 | 1.26% | 3.80% | 205 ms |
+| `004100` | 1.18 | 4 | 23 of 40 | 0.71% | 8.05% | 196 ms |
+| `004310` | 2.20 | 8 | 34 of 40 | 1.06% | 5.48% | 190 ms |
+| `005035` | 1.48 | 5 | 27 of 40 | 0.99% | 4.88% | 203 ms |
+
+No quad on any file reached `text_max_frac`, so there are no pages in this
+footage.
+
+Against the OWLv2 oracle, which knows a screen, a sign, a document and a
+badge, 247 of the 276 lines sit on **nothing it can name**: 23 on a screen,
+4 on a sign, 2 on a badge. That agrees with the audit rather than adding to
+it; the oracle called 12 of the 13 quads that do carry writing "none" as
+well, because a word on a soap dispenser is not on any surface it was asked
+about.
+
+**44 of the 276 lines, 16 percent, are inside the handled zone**, which under
+the rule of 2026-09-11 is text the collector is handling and would never be
+masked. The zone is doing its part.
+
+The cost is about 200 ms a frame, which is two and a half times what the face
+pass costs on the same frame.
+
+### 21.5 What this says about T3, which was to turn text on
+
+T3 was to add the policy, the gate and `TEXT.ready`. On this evidence it
+should not set `ready`, and the reason is not the policy.
+
+At the shipped thresholds this detector would mask 276 regions over 160
+frames, of which about 28 carry any writing at all. The rest are lights,
+railings, a hand, and twice a face. Under the rule that is not a wash: over
+masking outside the zone is the cheaper error, and 1 percent of the frame is
+well inside the mask budget. But the same rule says the point of masking is
+to remove information, and a mask that removes information one time in ten
+is not doing the job it costs 200 ms a frame to do. Worse, two of the 111
+false quads are faces, which the face pass already covers, and one is the
+wearer's own hand on the mop, which the zone protects only because the zone
+happened to reach it.
+
+**So text is recorded as blocked, not done, and T3 is not started.**
+`STATE.md` carries what would unblock it:
+
+- **Footage with words in it.** These four files are a washroom, a corridor,
+  a canteen and a sports hall, filmed at 1600x1300 with motion blur, and
+  they contain about a dozen readable words between them. A collector's desk
+  covered in card labels, prices and grading slabs is the scene this tool is
+  for and it is not in the sample. The same model finds four lines of four on
+  a drawn card, so the detector is not simply broken.
+- **A second model to agree with, which is the answer the face side found.**
+  One detector at one threshold is what section 10 rejected for faces and
+  this is the same shape of problem: nothing here confirms a quad, and the
+  score alone does not separate a sign from a ceiling light.
+
+### 21.6 What this does not do, and does not claim
+
+Nothing is read. The detector returns quads and no characters, no OCR runs,
+and package T4 is the only thing that would ever change that.
+
+The audit is one person's eye on 124 crops. The labels are committed so that
+someone else can look at the same crops and disagree, and the command that
+regenerates them is committed too. What is not claimed is a recall number:
+these are the quads the detector produced, so they say how often it is wrong
+and say nothing about the words it never found.
+
+The 90 percent is about this footage and this model at these settings. It is
+not a statement about PP-OCRv3, which finds four lines of four on a clean
+card, and it is not a statement about what text masking would cost on
+footage that has text in it.

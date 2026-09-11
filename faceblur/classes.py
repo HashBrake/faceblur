@@ -58,8 +58,12 @@ TEXT = Kind(
     name="text",
     label="Personal text",
     shape=POLYGON,
-    summary="names, addresses, phone numbers and handwriting, leaving card "
-            "names, prices and grading labels alone",
+    # The scope this line described until 2026-09-12 was the owner's first
+    # one: personal text masked, a card's own name and price left alone. The
+    # rule of 2026-09-11 replaced it. What the wearer is handling is never
+    # masked, whatever it says, and everything else that carries information
+    # is, so the line no longer needs a list of what counts as personal.
+    summary="writing on anything the wearer is not handling, whatever it says",
     ready=False,
 )
 

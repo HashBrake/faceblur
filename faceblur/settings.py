@@ -386,6 +386,43 @@ class Settings:
     nms_detect: float = 0.35
     nms_yunet: float = 0.30
 
+    # --- text ----------------------------------------------------------------
+    # PP-OCRv3 detection, a DB model: one probability map the size of its
+    # input, and the boxes are contours of it. Package T1 measures what it
+    # finds; nothing masks text yet and `classes.TEXT.ready` still says so.
+    #
+    # Two scales. A sign across a room and a label in the wearer's hand are
+    # two orders of magnitude apart in pixels and one input size cannot have
+    # both. The build plan proposed 960 and 1920; measured on the four sample
+    # files, 960 finds almost nothing and what it does find is mostly one
+    # huge false quad a frame, up to a fifth of the picture. At 1920 and 2560
+    # there are 70 percent more lines covering half the area, and the worst
+    # single quad drops from 19.8 percent of a frame to 7.3. Report 21.2.
+    text_sizes: tuple[int, ...] = (1920, 2560)
+    # Where the map counts as ink. DB's published default.
+    text_thresh: float = 0.3
+    # The mean probability inside a contour, which is what keeps or drops it.
+    # The peak would call a wall text on one bright pixel.
+    text_box_thresh: float = 0.6
+    # The map is trained to shrink each region away from its neighbours, so
+    # the raw contour stops inside the letters and this grows it back.
+    text_unclip: float = 1.6
+    # The short side of a quad, in frame pixels. Below this a box is as
+    # likely to be a tile pattern as a word.
+    text_min_px: int = 12
+    # A quad over this share of the frame is a page rather than a line: a
+    # menu, a poster, a notice. Kept and counted apart, because one of them
+    # covers a third of a frame on its own.
+    text_max_frac: float = 0.3
+    # Merging the scales: NMS on the bounding boxes, not on the quads.
+    text_nms: float = 0.5
+    # Text over time, on the pattern of the screen rules. A line of text does
+    # not blink and the detector does.
+    text_min_run: int = 2
+    text_gap: int = 6
+    text_tail: int = 3
+    text_link_iou: float = 0.3
+
     # --- checking the finished copy ------------------------------------------
     # Detect on the output as well: a face found there, on pixels nothing
     # changed, is one this run missed, and nothing that reads the source can
@@ -500,6 +537,23 @@ class Settings:
                                 f"{self.check_stride}")
         if self.second_chance_min_px < 0:
             raise SettingsError("second_chance_min_px must be 0 or more")
+        if not self.text_sizes or any(s < 64 for s in self.text_sizes):
+            raise SettingsError(f"every text size must be at least 64, got {self.text_sizes}")
+        for name in ("text_thresh", "text_box_thresh", "text_nms", "text_link_iou"):
+            value = getattr(self, name)
+            if not 0.0 < value <= 1.0:
+                raise SettingsError(f"{name} must be above 0 and at most 1, got {value}")
+        if not 0.0 < self.text_max_frac <= 1.0:
+            raise SettingsError(f"text_max_frac must be above 0 and at most 1, "
+                                f"got {self.text_max_frac}")
+        if self.text_unclip <= 0:
+            raise SettingsError(f"text_unclip must be above 0, got {self.text_unclip}")
+        if self.text_min_px < 1:
+            raise SettingsError(f"text_min_px must be at least 1, got {self.text_min_px}")
+        if self.text_min_run < 1:
+            raise SettingsError(f"text_min_run must be at least 1, got {self.text_min_run}")
+        if self.text_gap < 0 or self.text_tail < 0:
+            raise SettingsError("text_gap and text_tail must be 0 or more")
         if self.quarantine_min_px < 0:
             raise SettingsError("quarantine_min_px must be 0 or more")
         if not self.hand_windows or any(w < 64 for w in self.hand_windows):
@@ -669,6 +723,9 @@ class Settings:
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "nvenc_sessions", "hwaccel",
+            "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
+            "text_min_px", "text_max_frac", "text_nms", "text_min_run",
+            "text_gap", "text_tail", "text_link_iou",
             "check_output", "check_stride", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
@@ -687,6 +744,7 @@ class Settings:
         d["screen_labels"] = list(self.screen_labels)
         d["det_sizes"] = list(self.det_sizes)
         d["hand_windows"] = list(self.hand_windows)
+        d["text_sizes"] = list(self.text_sizes)
         return d
 
 

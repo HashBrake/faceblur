@@ -196,3 +196,46 @@ class scores, against the anchor free grid of strides 8, 16 and 32 that gives
 It is a COCO detector and this project wants three of its eighty classes: tv
 (62), laptop (63) and cell phone (67). `screen_labels` chooses among those
 three and nothing else in the code hard-codes them.
+
+## text_detection_ppocrv3.onnx
+
+| Field | Value |
+|---|---|
+| Original name | text_detection_cn_ppocrv3_2023may.onnx |
+| Source | opencv_zoo, models/text_detection_ppocr |
+| URL | https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/text_detection_ppocr/text_detection_cn_ppocrv3_2023may.onnx |
+| Licence | Apache 2.0, see ppocr.LICENSE.txt |
+| Size | 2423490 bytes |
+| sha256 | 03f550c6b406fda8bf54bd8327815f6c7e2edd98cea02348c93d879254366587 |
+
+Taken on 2026-09-12, for package T1. PP-OCRv3 text detection, from
+PaddlePaddle's own release, converted to ONNX by OpenCV's model zoo. As with
+`yunet.onnx`, the GitHub raw URL returns a Git LFS pointer and the file comes
+from the LFS media endpoint above.
+
+**The build plan asked for PP-OCRv4 converted here with `paddle2onnx`, and
+this is v3 converted by the zoo.** The rule it was protecting is "no pre
+converted file from an unknown repository", and this zoo is not an unknown
+repository: it is where `yunet.onnx` came from and this project already
+depends on it. A conversion done on this machine would also carry a hash
+only this machine could reproduce, where the zoo's file has a URL and a
+sha256 that anybody can check, which is the stronger guarantee of the two.
+Report section 21 and `STATE.md` record the decision.
+
+The zoo ships the same file twice, as `text_detection_cn_...` and
+`text_detection_en_...`. Their Git LFS pointers carry the same oid, so the
+two names are one model and the choice between them does not exist.
+
+Input `x` [1, 3, H, W], NCHW, **plain 0 to 1 with no mean and no standard
+deviation**, letterboxed on black with the aspect kept and each side rounded
+up to a multiple of 32. The zoo's own Python wrapper applies the ImageNet
+mean and standard deviation through `cv.dnn_TextDetectionModel_DB` instead.
+On a drawn card of black words the two are level, five or six quads each for
+four lines. On real frames they are not: plain puts more of the map above
+threshold at every scale, and at 2560 on one canteen frame the ImageNet path
+returns an empty map where plain returns a full one. Report 21.1 has the
+table, from `eval.text --normalisation`.
+
+Output `4` is one probability map at the size of the input, no batch and no
+channel dimension. `faceblur/text.py` thresholds it, takes contours, fits
+`cv2.minAreaRect` and grows each rectangle by DB's own unclip rule.

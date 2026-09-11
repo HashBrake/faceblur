@@ -20,7 +20,7 @@ Masking faces does not force masking anything else.
 |---|---|---|
 | Faces | An oval over the eyes, nose and mouth | Built and measured. On by default |
 | Screens | A phone, monitor or television as an object, whatever is on it | Built and measured for precision. Off by default |
-| Personal text | Names, addresses, phone numbers and handwriting | Not built. The switch refuses with a message that says so |
+| Personal text | Writing on anything the wearer is not handling, whatever it says | The detector is built and measured, nothing masks text yet. The switch refuses with a message that says so |
 
 `--mask face,screen` on the command line, or the checkboxes in the window,
 choose what a run hides. Nothing is ever on by default except faces: widening

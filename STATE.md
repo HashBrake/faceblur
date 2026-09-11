@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1159 passing, about five minutes
+tree is clean. Tests: `tests/`, 1184 passing, about five minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -106,10 +106,10 @@ tree is clean. Tests: `tests/`, 1159 passing, about five minutes
 | G1 | The gate in the window | Done, report 18 |
 | F2 | Recall outside the zone | Done, report 19. Nothing moved, and the gates are the finding |
 | F1 | Second chance for missed faces | Done, report 20 |
-| **T1** | **Text detector** | **Next** |
-| T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
-| S2 | Screens outside the zone | Not started |
-| D | Defaults: all three kinds on | Not started, needs T3 |
+| T1 | Text detector | Done, report 21 |
+| T3 | Text policy, gate, ready | **Blocked by T1's numbers.** 90 percent of what the detector finds here is not text |
+| **S2** | **Screens outside the zone** | **Next** |
+| D | Defaults: all three kinds on | Blocked with T3 |
 | T4, M1 | Identifiers, metadata line | Optional |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
@@ -169,6 +169,36 @@ mask reached**. The faces the check finds and the sightings the recogniser
 matches are almost disjoint populations here, so F1 moved identifiability
 barely at all: 46 leaks to 43 on one file, 323 to 327 on the other. What is
 left is the mask, which is section 12's question.
+
+**T1 is done and it blocks T3.** Report 21. The detector is PP-OCRv3 from
+OpenCV's model zoo, Apache 2.0, committed with its hash; the build plan asked
+for v4 converted here with `paddle2onnx` and `models/README.md` records why
+the zoo's file is the better of the two. It runs at 1920 and 2560, not the
+960 and 1920 the plan proposed, because at 960 this footage returns almost
+nothing and what it returns is one huge false quad a frame.
+
+**Then 124 of its quads were rendered as crops and labelled by eye. Five are
+on writing, eight contain writing, and 111 have no words in them at all.**
+The labels are committed at `docs/audits/text_quads_2026-09-12.csv` and
+`eval.text --audit` prints the tables from them. Nothing separates the two
+groups: the highest scoring quad in the set is a ceiling light, raising
+`text_box_thresh` throws the real ones away first, and the areas are the
+same. The false ones are lights, railings, window frames, a hand on a mop
+and twice a face.
+
+So **T3 is blocked, not skipped**, and the block is about the footage and the
+model rather than the policy. What would unblock it:
+
+- footage with words in it. These four files hold about a dozen readable
+  words between them, and the same model finds four lines of four on a drawn
+  card, so the detector is not broken. A collector's desk of card labels and
+  prices is the scene this tool is for and it is not in the sample;
+- a second model to agree with, which is what section 10 settled for faces.
+  One detector at one threshold is exactly what was rejected there, and the
+  score alone does not separate a sign from a strip light.
+
+**D is blocked with it**, since it turns on every ready kind and text is not
+one. S2 does not depend on either.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 
@@ -230,6 +260,25 @@ lives:
   footage this tool is for is people doing exactly that, so the blind region
   was worth more than the extra 18 percent. Report 17.7 has the table.
 
+- **T1: PP-OCRv3 from OpenCV's zoo, not PP-OCRv4 converted here.** The rule
+  was "no pre converted file from an unknown repository" and the zoo is where
+  `yunet.onnx` came from. A conversion done on this machine would carry a
+  hash only this machine could reproduce; the zoo's has a URL and a sha256
+  anybody can check. `models/README.md` and report 21.1.
+- **T1: `text_sizes` ships at 1920 and 2560**, not the plan's 960 and 1920.
+  Measured on all four files: 70 percent more lines covering half the area,
+  and the worst single quad on a frame drops from a fifth of the picture to
+  a fourteenth. Report 21.2.
+- **T1: the text kind's one line summary was rewritten.** It described the
+  owner's first scope, personal text masked and a card's own price left
+  alone, which the rule of 2026-09-11 replaced. It is user facing, in
+  `--help` and the window.
+- **T1: text is recorded as blocked rather than shipped half on.** A detector
+  that is 90 percent wrong could be defended under the rule, because over
+  masking outside the zone is the cheaper error and 1 percent of a frame is
+  well inside the budget. It is still not worth 200 ms a frame to remove
+  information one time in ten, and two of its false quads are faces the face
+  pass already covers. Report 21.5.
 - **F1: a seed no track picks up is masked on its own frame, with the run's
   own tail.** The spec said the seeds go through a second `Tracker.run` and
   they do, but `min_track` 2 drops a seed that stands alone and that is most
