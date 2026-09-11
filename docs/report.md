@@ -254,7 +254,7 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 999 tests
+.venv\Scripts\python.exe -m pytest tests                      # 1046 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # section 15
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
@@ -1525,6 +1525,15 @@ to face the question rather than move every gate quietly.
   reads as a laptop for three checked frames on the copy will hold a copy
   back. There is no oracle for screens on this footage, so there is no way
   here to say how many of the 82 are real. Work package E1 is what would.
+- **A screen over the size cap is not reported, on purpose.**
+  `residual_job` calls the same `screens.detect` the pipeline calls, so
+  `screen_max_area` applies on the copy side too and a monitor over 12 percent
+  of the frame is invisible to the check as well as to the run. That is scope
+  rather than a miss: the pipeline decided not to mask it, and a gate that
+  held the copy back for a thing the run was never going to mask would hold
+  back every file with a table in it. It does mean the check cannot tell you
+  about the one screen the cap is most likely to be wrong about. The cap is
+  the place to argue, not the gate.
 - **There is a recall number now, and it is a bound.** Section 16.2 has it. A
   screen neither the shipped detector nor the oracle finds is still in nobody's
   column.
@@ -1538,3 +1547,87 @@ to face the question rather than move every gate quietly.
   television is masked by both classes and counted in both columns.
 - **The by eye labels of section 15.2 are not used here and are not
   re-scored.** Nothing in this section rests on a label.
+
+### 16.5 Screens outside the handled zone
+
+Held for work package S2. Section 16.2 says the shipped screen class reports
+most of what the oracle sees at a score under `screen_conf` 0.5, and the rule
+of 2026-09-11 changes what a lower floor costs: a masked table is a cost to
+the environment rather than to privacy, and a handled screen is protected by
+the zone whatever the floor. S2 re-measures at 0.5, 0.4, 0.3 and 0.25 with the
+zone on and moves the default only if precision holds.
+
+### 16.6 Fixes from the review of that pass (2026-09-11)
+
+Seven things the last pass got wrong or left undone, found by reviewing it
+rather than by running it. Two changed behaviour, three changed tests, two
+changed documents.
+
+**The exit code was not the gate's answer.** `python -m faceblur.verify`
+returned 1 whenever it reported any box at all, so a single frame flicker on a
+table failed the command while the gate itself would have shipped the copy. A
+script could not tell "look at this" from "do not ship this", which is the
+only question an exit code is good for. It now follows `held_for` and nothing
+else, and everything found is still printed and still in the record.
+
+Run on the `004310` copy from work package R1, which the check finds 10 screen
+boxes in, none of them lasting the three checked frames the gate asks for:
+
+| Command | What it reports | The gate | Exit |
+|---|---|---|---|
+| `--mask screen` | 10 screen boxes over the size floor, 7 runs, none of 3 | ships | 0 |
+| `--mask face,screen` | the same, plus the faces | held back for face | 1 |
+
+Before this change the first row exited 1.
+
+**A row was not enough to rebuild the detection it came from.** `_row` carried
+a centre, a long side and a score. Package F1 seeds the tracker with the
+check's own finds, and a seed with no width, height or landmarks masks an
+upright ellipse of guessed shape over a face that is turned. Every row of
+every kind now carries `w`, `h` and `landmarks`, rounded the way
+`Detection.to_dict` rounds them, and `verify.detection_from_row` turns one
+back into a `Detection`. A row written before today has none of those, so
+`detection_from_row` falls back to a square box with no landmarks rather than
+raising on somebody's old record.
+
+**Two tests were guarding by substring.**
+`test_the_sweep_measures_faces_and_never_sees_a_screen` asserted that the word
+`screens` did not appear in the evaluation harness source, and
+`test_the_oracle_never_runs_in_the_pipeline` searched `faceblur/*.py` for
+`torch`. Both fail on a comment, which makes the rule impossible to write
+about in the file it guards, and both pass on an import assembled at run time,
+which is the case worth catching. They now parse the file with `ast` and check
+the module and symbol names actually imported, walking into function bodies
+because that is where this codebase puts its expensive imports.
+
+**The oracle trusted its own cache.** A revision pin says which commit to
+fetch; it does not say that what is on the disk is still that commit, and a
+detector with altered weights does not fail, it answers differently. Two hours
+later the answer is in a report attributed to a model nobody can identify.
+`eval/oracle_owl.verify_weights` hashes `model.safetensors` before the model
+is built and stops if the size or the sha256 does not match the pin. It costs
+about a second on 620 MB, once per run.
+
+The pin lives as a constant in `eval/oracle_owl.py` rather than being read out
+of `models/README.md` at run time, which is what the build plan asked for.
+Parsing a markdown document to decide whether to trust a model is worse than
+one constant plus a test that the two agree, so
+`test_the_pinned_weights_are_the_ones_the_documentation_names` fails if the
+README ever drifts from the code.
+
+**Three documents were stale.** Section 9 said 999 tests. The README's screen
+caveats listed what was measured without saying what it means, and now say it
+in one sentence: the screen class misses most of the screens an independent
+witness sees and holds most copies back for the ones it finds, so it is fit
+for best effort masking with the gate off and not for unattended use until S2.
+`STATE.md` was 847 lines with the S1 findings in four places, and was
+rewritten to about half that, around the rule rather than around the history.
+
+**One behaviour was kept rather than fixed**, and written down instead.
+`residual_job` calls the same `screens.detect` the pipeline calls, so
+`screen_max_area` applies on the copy side too and a monitor over 12 percent
+of the frame is invisible to the check as well as to the run. That is scope
+rather than a miss: the pipeline decided not to mask it, and a gate that held
+a copy back for something the run was never going to mask would hold back
+every file with a table in it. It does mean the check is silent about the one
+screen the cap is most likely to be wrong about, and section 16.4 now says so.

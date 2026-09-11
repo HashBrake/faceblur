@@ -21,8 +21,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from eval import oracle_owl                                        # noqa: E402
-from eval.oracle_owl import (CARD_PROMPTS, PROMPTS, SCREEN_PROMPTS,  # noqa: E402
-                             boxes_for, cache_path, fingerprint)
+from eval.oracle_owl import (CARD_PROMPTS, MODEL, PROMPTS, REVISION,  # noqa: E402
+                             SCREEN_PROMPTS, WEIGHTS_BYTES, WEIGHTS_SHA256,
+                             WeightsWrong, boxes_for, cache_path, fingerprint,
+                             verify_weights)
 from eval.screens import MIN_SHARE, oracle_screens                 # noqa: E402
 
 
@@ -149,3 +151,50 @@ def test_the_floor_is_applied_before_anything_else():
 def test_an_empty_frame_answers_nothing_rather_than_raising():
     assert oracle_screens(frame_rows(), 0, 0.3) == []
     assert oracle_screens({"shape": [10, 10], "frames": {}}, 5, 0.3) == []
+
+
+# ------------------------------------------------------------- the weights
+
+def test_the_pinned_weights_are_the_ones_the_documentation_names():
+    """One hash, two places, and they have to agree.
+
+    `models/README.md` is where a reader looks for what a model is; the
+    constant in `eval/oracle_owl.py` is what the code checks against. Two
+    copies of a number drift, so this fails when they do.
+    """
+    readme = (REPO / "models" / "README.md").read_text(encoding="utf-8")
+    assert WEIGHTS_SHA256 in readme, (
+        "the oracle weight hash in eval/oracle_owl.py is not in models/README.md")
+    assert str(WEIGHTS_BYTES) in readme
+    assert REVISION in readme and MODEL in readme
+
+
+def test_weights_that_are_the_wrong_size_stop_the_run(monkeypatch, tmp_path):
+    """A detector with altered weights does not fail, it answers differently,
+    and two hours later the answer is in a report attributed to a model nobody
+    can identify. So it stops before it starts."""
+    wrong = tmp_path / "model.safetensors"
+    wrong.write_bytes(b"not the weights")
+    monkeypatch.setattr(oracle_owl, "weights_path", lambda: wrong)
+    with pytest.raises(WeightsWrong) as exc:
+        verify_weights()
+    assert str(WEIGHTS_BYTES) in str(exc.value)
+
+
+def test_weights_that_are_missing_say_how_to_fetch_them(monkeypatch):
+    monkeypatch.setattr(oracle_owl, "weights_path", lambda: None)
+    with pytest.raises(WeightsWrong) as exc:
+        verify_weights()
+    assert REVISION in str(exc.value)
+
+
+def test_weights_that_match_the_pin_are_accepted(monkeypatch, tmp_path):
+    import hashlib
+
+    body = b"x" * 32
+    good = tmp_path / "model.safetensors"
+    good.write_bytes(body)
+    monkeypatch.setattr(oracle_owl, "weights_path", lambda: good)
+    monkeypatch.setattr(oracle_owl, "WEIGHTS_BYTES", len(body))
+    monkeypatch.setattr(oracle_owl, "WEIGHTS_SHA256", hashlib.sha256(body).hexdigest())
+    assert verify_weights() == hashlib.sha256(body).hexdigest()

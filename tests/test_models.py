@@ -105,15 +105,23 @@ def test_the_evaluation_only_models_stay_out_of_the_build():
 
 
 def test_the_oracle_never_runs_in_the_pipeline():
-    """Nothing the packaged app imports may reach the oracle, and the oracle
-    may not reach for the network when something does import it."""
-    import pathlib
+    """Nothing the packaged app imports may reach the oracle or torch.
 
-    package = pathlib.Path(__file__).resolve().parents[1] / "faceblur"
+    Read by `ast` rather than by searching the source for a word. A grep here
+    used to fail whenever a comment mentioned torch, which made the rule
+    impossible to write about, and it would have passed a dynamic import
+    assembled from pieces.
+    """
+    from test_classes import imported_names
+
+    package = Path(__file__).resolve().parents[1] / "faceblur"
     for module in sorted(package.glob("*.py")):
-        text = module.read_text(encoding="utf-8")
-        for name in ("oracle_owl", "transformers", "torch", "huggingface"):
-            assert name not in text, f"faceblur/{module.name} reaches for {name}"
+        names = imported_names(module)
+        for forbidden in ("oracle_owl", "eval.oracle_owl", "transformers", "torch",
+                          "huggingface_hub", "mediapipe"):
+            assert forbidden not in names, (
+                f"faceblur/{module.name} imports {forbidden}, which is evaluation "
+                f"only and is not in the packaged build")
 
 
 def test_the_screen_model_is_in_the_build():

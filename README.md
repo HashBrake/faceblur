@@ -183,6 +183,10 @@ Four things to know before you switch screens on:
   size cap necessary and what sets its value. A room with a large monitor close
   to the camera and no large flat furniture would want a looser cap, and there
   is no footage here to set one on.
+- **A screen over the size cap is invisible to the check as well.** The check
+  runs the same detector with the same 12 percent cap, so a monitor larger
+  than that is neither masked nor reported. That is scope, not a miss, but it
+  is the screen the cap is most likely to be wrong about.
 - **A screen the check reports may be a table.** `--check-output` now reads the
   copy for screens as well as faces, and it inherits the detector's weakness
   the way it inherits the face detectors': it reports what YOLOX calls a
@@ -192,6 +196,13 @@ Four things to know before you switch screens on:
 The screen mask destroys 0.01 to 0.34 percent of the average frame on the
 sample files, and at most 12 percent of one, which is a large monitor properly
 masked. `docs/report.md` section 15 has the tables.
+
+**What sections 16.1 and 16.2 mean together, in one sentence: the screen class
+misses most of the screens an independent witness sees, and holds most copies
+back for the ones it does find.** So it is fit for best effort masking with the
+gate off, and it is not fit for unattended use with the gate on, because it
+will quarantine nearly everything while still leaving screens in the copies it
+releases. Switching screens on is worth doing; relying on it is not, yet.
 
 ## Set up
 

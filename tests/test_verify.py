@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -20,9 +21,9 @@ from faceblur.pipeline import STATUS_DONE, sidecar_path
 from faceblur.settings import Settings
 from faceblur.redact import redact
 from faceblur.verify import (FLAT_DIFF, KINDS_CHECKED, MISSED_APPLIED, applied, box_diff,
-                             check, classify, describe, frame_noise, held_for,
-                             kinds_checked, not_hands, of_kind, runs_of, screen_runs,
-                             summarise)
+                             check, classify, describe, detection_from_row, frame_noise,
+                             held_for, kinds_checked, not_hands, of_kind, runs_of,
+                             screen_runs, summarise)
 
 LM = ((10.0, 10.0), (30.0, 10.0), (20.0, 20.0), (12.0, 30.0), (28.0, 30.0))
 FAST = dict(device="cpu", copy_clean=False, chunk_seconds=0, encode_seconds=0)
@@ -467,3 +468,84 @@ def test_a_run_with_screens_on_writes_the_screen_fields_and_they_round_trip(
     assert isinstance(read_back["held_back_for"], list)
     assert read_back["flat_by_kind"].get("screen") is not None
     assert all(row.get("kind") in ("face", "screen") for row in read_back["residual_list"])
+
+
+# ------------------------------------- a row is enough to rebuild a detection
+#
+# Package F1 seeds the tracker with the check's own finds. A row that carries
+# a centre and a long side and nothing else cannot be turned back into the
+# detection it came from: the box is guessed square and the ellipse goes on
+# upright over a face that is turned.
+
+
+def test_a_face_row_carries_the_whole_box_and_its_landmarks(tmp_path, video_with_face,
+                                                            monkeypatch):
+    import faceblur.batch as batch
+
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _NothingFound())
+    out = tmp_path / "rows.mp4"
+    record = run_video(video_with_face, out, Settings(check_output=True, **FAST),
+                       serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    faces = of_kind(record.residual_list, "face")
+    assert faces, "the unmasked copy shows faces"
+    for row in faces:
+        assert row["w"] > 0 and row["h"] > 0
+        assert set(row) >= {"kind", "frame", "px", "x", "y", "w", "h", "score",
+                            "landmarks", "applied"}
+    assert any(row["landmarks"] for row in faces), "YuNet gives five points"
+
+
+def test_a_row_rebuilds_the_detection_it_came_from():
+    source = Detection(120.0, 90.0, 40.0, 60.0, 0.87, LM)
+    row = {"kind": "face", "frame": 3, "px": round(source.long_side),
+           "x": round(source.cx), "y": round(source.cy),
+           "w": round(source.w, 1), "h": round(source.h, 1), "score": 0.87,
+           "landmarks": [[round(a, 1), round(b, 1)] for a, b in LM], "applied": 0.0}
+    back = detection_from_row(row)
+    assert back.x == pytest.approx(source.x, abs=0.5)
+    assert back.y == pytest.approx(source.y, abs=0.5)
+    assert back.w == pytest.approx(source.w) and back.h == pytest.approx(source.h)
+    assert back.landmarks == LM
+    assert back.kind == "face"
+
+
+def test_a_row_from_before_the_box_was_carried_still_rebuilds():
+    """An audit record written before 2026-09-11 has no width, height or
+    landmarks. The best that can be done with one is a square box, and that is
+    better than raising on somebody's old record."""
+    old = {"kind": "face", "frame": 3, "px": 50, "x": 100, "y": 100, "score": 0.9,
+           "applied": 0.0}
+    back = detection_from_row(old)
+    assert (back.w, back.h) == (50.0, 50.0)
+    assert back.landmarks is None
+
+
+def test_a_screen_row_carries_its_box_and_its_label():
+    settings = Settings(**SCREENS)
+    out = screen_report([4, 5, 6], settings)
+    for row in of_kind(out["residual_list"], "screen"):
+        assert row["label"] == "tv"
+        assert row["w"] > 0 and row["h"] > 0
+
+
+# ----------------------------------------------- the exit code is the gate
+
+def test_the_exit_code_is_the_gate_and_not_the_find_count(tmp_path, video_with_face,
+                                                          monkeypatch):
+    """A single frame flicker on a table used to fail the command while the
+    gate itself would have shipped the copy, so a script could not tell "look
+    at this" from "do not ship this". Everything found is still printed."""
+    import faceblur.verify as verify
+
+    report = screen_report([4], Settings(**SCREENS))     # one frame: no run
+    assert report["residual_screens"] == 1
+    monkeypatch.setattr(verify, "check", lambda *a, **k: report)
+    monkeypatch.setattr(sys, "argv",
+                        ["verify", str(video_with_face), str(video_with_face),
+                         "--mask", "face,screen"])
+    assert verify.main() == 0, "nothing holds this copy back, so it ships"
+
+    three = screen_report([4, 5, 6], Settings(**SCREENS))
+    monkeypatch.setattr(verify, "check", lambda *a, **k: three)
+    assert verify.main() == 1, "a run of three does hold it back"

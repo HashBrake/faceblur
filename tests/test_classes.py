@@ -8,6 +8,8 @@ no detector behind it cannot be turned on by anybody, on any surface.
 """
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -301,6 +303,36 @@ def test_the_record_splits_the_mask_by_kind_and_keeps_the_union(tmp_path, video_
     assert record.frames_over_budget_by_kind["face"] == record.frames_over_budget
 
 
+def imported_names(path) -> set[str]:
+    """Every module and symbol a file imports, by reading its syntax.
+
+    `ast`, not a substring search over the source. A test that greps for a
+    word fails on the word appearing in a comment or a docstring, which makes
+    it impossible to write about the thing the test is guarding, and it passes
+    on `getattr(mod, "tor" + "ch")`, which is the case it should catch. The
+    walk covers imports inside functions, which is where this codebase puts
+    the expensive ones.
+    """
+    import ast
+
+    names: set[str] = set()
+    tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module:
+                names.add(module)
+                names.add(module.split(".")[0])
+            for alias in node.names:
+                names.add(f"{module}.{alias.name}" if module else alias.name)
+                names.add(alias.name)
+    return names
+
+
 def test_the_sweep_measures_faces_and_never_sees_a_screen():
     """`eval/measure.py` builds its own per frame list from the raw face cache
     and the tracker. It never runs the screen detector, so the sweep gates in
@@ -310,15 +342,14 @@ def test_the_sweep_measures_faces_and_never_sees_a_screen():
     This is here so that a later change which starts feeding screens into the
     harness has to face the question rather than quietly move every gate.
     """
-    import inspect
-
-    from eval import measure, sweep
-
-    source = inspect.getsource(measure) + inspect.getsource(sweep)
-    for forbidden in ("screens", "ScreenDetector", "screen_min_run", "_screens"):
-        assert forbidden not in source, (
-            f"{forbidden} appears in the evaluation harness. The sweep gates are "
+    root = pathlib.Path(__file__).resolve().parents[1] / "eval"
+    names = imported_names(root / "measure.py") | imported_names(root / "sweep.py")
+    for forbidden in ("faceblur.screens", "ScreenDetector", "runs_in", "hold"):
+        assert forbidden not in names, (
+            f"the evaluation harness imports {forbidden}. The sweep gates are "
             f"face numbers and stop meaning what they say if a screen mask reaches "
             f"them; split them by kind first, as the audit record does.")
+    from eval import sweep
+
     assert set(sweep.GATES) == {"off_face_mean", "off_face_max",
                                 "off_face_detections_mean", "hand_damage"}

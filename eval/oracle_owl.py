@@ -56,6 +56,15 @@ CACHE_DIR = REPO / "eval" / "cache"
 # out to describe a build that no longer existed.
 MODEL = "google/owlv2-base-patch16-ensemble"
 REVISION = "cfd3195ba4ea9592eec887ded089f4c08eff231d"
+# The weights, checked before they are used. A revision pin says which commit
+# to fetch; it does not say that what is on this disk is still that commit. A
+# cache can be corrupted, replaced, or fetched once through something that
+# rewrote it, and a detector with altered weights does not fail, it answers
+# differently. `models/README.md` carries the same two numbers and
+# `tests/test_oracle.py` fails if the two ever disagree.
+WEIGHTS = "model.safetensors"
+WEIGHTS_SHA256 = "e1e130b9e404cf91a75ad45644c1da9d7fa5284085eecc864266a6923efb99e7"
+WEIGHTS_BYTES = 619918824
 
 # Bump when what the cache holds changes.
 CACHE_VERSION = 1
@@ -93,6 +102,48 @@ THRESHOLD = 0.10
 # files is about two hours and a crash at ninety minutes should not cost the
 # ninety minutes.
 FLUSH_EVERY = 40
+
+
+class WeightsWrong(RuntimeError):
+    """The oracle's weights on this disk are not the ones that were pinned."""
+
+
+def weights_path() -> Path | None:
+    """Where the pinned weights sit in the cache, or None if not fetched yet."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return None
+    found = try_to_load_from_cache(MODEL, WEIGHTS, revision=REVISION)
+    return Path(found) if isinstance(found, str) else None
+
+
+def verify_weights() -> str:
+    """Hash the weights and compare with the pin. Raises, or returns the hash.
+
+    About a second on 620 MB, once per run, against a measurement that takes
+    two hours and would otherwise be attributed to a model nobody could
+    identify afterwards.
+    """
+    path = weights_path()
+    if path is None or not path.is_file():
+        raise WeightsWrong(
+            f"the oracle weights are not in the cache. Fetch revision {REVISION} of "
+            f"{MODEL} into {HF_CACHE} first, with the network on and "
+            f"HF_HUB_OFFLINE unset.")
+    size = path.stat().st_size
+    if size != WEIGHTS_BYTES:
+        raise WeightsWrong(
+            f"{path} is {size} bytes and the pin says {WEIGHTS_BYTES}. These are "
+            f"not the weights every oracle number in docs/report.md was measured "
+            f"with.")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != WEIGHTS_SHA256:
+        raise WeightsWrong(
+            f"{path} hashes to {digest} and the pin says {WEIGHTS_SHA256}. A "
+            f"detector with altered weights does not fail, it answers "
+            f"differently, so this stops here.")
+    return digest
 
 
 def fingerprint(stride: int, threshold: float) -> str:
@@ -160,6 +211,7 @@ def run(video: Path, stride: int = 5, threshold: float = THRESHOLD,
     from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
     video = Path(video)
+    verify_weights()
     torch.set_grad_enabled(False)
     processor = Owlv2Processor.from_pretrained(MODEL, revision=REVISION)
     model = Owlv2ForObjectDetection.from_pretrained(MODEL, revision=REVISION).eval()

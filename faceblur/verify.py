@@ -186,12 +186,41 @@ def kinds_checked(settings: Settings) -> tuple[str, ...]:
 
 def _row(det: Detection, frame: int, changed: float, would: float,
          noise: float) -> dict:
-    """One find, as the record keeps it. Coordinates and counts, never pixels."""
+    """One find, as the record keeps it. Coordinates and counts, never pixels.
+
+    The whole box and its landmarks, not just a centre and a long side. A row
+    has to be enough to rebuild the `Detection` it came from: the second
+    chance of package F1 seeds the tracker with these finds, and a tracker
+    given a centre and a size but no landmarks masks an upright ellipse over a
+    face that is turned. Rounded the way `Detection.to_dict` rounds, so the
+    two read alike.
+    """
     over = max(0.0, would - noise)
     return {"kind": det.kind, "frame": frame, "px": round(det.long_side),
             "x": round(det.cx), "y": round(det.cy),
+            "w": round(det.w, 1), "h": round(det.h, 1),
             "score": round(det.score, 3),
+            "landmarks": None if det.landmarks is None
+            else [[round(a, 1), round(b, 1)] for a, b in det.landmarks],
             "applied": round(max(0.0, changed - noise) / over, 3) if over else None}
+
+
+def detection_from_row(row: dict) -> Detection:
+    """The `Detection` a row came from, near enough to seed a tracker with.
+
+    `x` and `y` in a row are the centre, because that is what a person reading
+    the record wants; `Detection` holds a corner. Rows written before
+    2026-09-11 carry no width, height or landmarks, and the best that can be
+    done with one is a square box of `px` with no landmarks, which is what
+    this returns rather than raising.
+    """
+    w = float(row.get("w") or row["px"])
+    h = float(row.get("h") or row["px"])
+    landmarks = row.get("landmarks")
+    return Detection(row["x"] - w / 2, row["y"] - h / 2, w, h, row["score"],
+                     None if not landmarks else tuple((a, b) for a, b in landmarks),
+                     row.get("label", "copy"), True, row["score"],
+                     row.get("kind", "face"))
 
 
 def residual_job(job: dict) -> dict:
@@ -248,10 +277,10 @@ def residual_job(job: dict) -> dict:
                 flat["screen"] += 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
-                # The box, so that `summarise` can group these into runs, and
-                # the label, so that a reader knows the detector said phone
-                # rather than television.
-                row.update({"w": round(det.w), "h": round(det.h), "label": det.source})
+                # The label as well, so that a reader knows the detector said
+                # phone rather than television. The box itself is in the row
+                # already, and `summarise` groups the runs from it.
+                row["label"] = det.source
                 found.append(row)
     return {"start": start, "end": end, "checked": checked,
             "flat": sum(flat.values()), "flat_by_kind": flat,
@@ -474,11 +503,16 @@ def main() -> int:
               f"at ({row['x']},{row['y']})  score {row['score']:.2f}  "
               f"applied {row['applied']}{mark}")
     held = held_for(report, settings)
-    if held:
-        print(f"  this copy would be held back for: {', '.join(held)}")
+    print(f"  this copy would be held back for: {', '.join(held)}" if held
+          else "  this copy would ship")
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1), encoding="utf-8")
-    return 1 if report["residual_faces"] or report.get("residual_screens") else 0
+    # The exit code is the gate's answer and nothing else. It used to be true
+    # whenever any box was reported, which made a single frame flicker on a
+    # table fail the command while the gate itself would have shipped the
+    # copy: a script could not tell "look at this" from "do not ship this".
+    # Everything found is still printed and still in the record.
+    return 1 if held else 0
 
 
 if __name__ == "__main__":
