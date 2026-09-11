@@ -8,6 +8,11 @@ FaceBlur runs on your PC. Your video never leaves the machine.
 
 ## What it does and does not do
 
+One rule decides everything: **whatever the wearer is handling is never
+touched, and everything else that carries information is destroyed.** A card
+or a phone in their hands stays readable because that is the task being
+recorded. A sign on the wall behind them does not.
+
 FaceBlur masks three kinds of thing, and each one is a switch of its own.
 Masking faces does not force masking anything else.
 
@@ -15,15 +20,44 @@ Masking faces does not force masking anything else.
 |---|---|---|
 | Faces | An oval over the eyes, nose and mouth | Built and measured. On by default |
 | Screens | A phone, monitor or television as an object, whatever is on it | Built and measured for precision. Off by default |
-| Personal text | Names, addresses, phone numbers and handwriting, leaving card names, prices and grading labels alone | Not built. The switch refuses with a message that says so |
+| Personal text | Names, addresses, phone numbers and handwriting | Not built. The switch refuses with a message that says so |
 
 `--mask face,screen` on the command line, or the checkboxes in the window,
 choose what a run hides. Nothing is ever on by default except faces: widening
 what the tool destroys is a decision on the day.
 
 For faces, FaceBlur masks the smallest region that hides a person's identity.
-It leaves hair, hands, bodies and objects alone. The rest of the picture is
+It leaves hair, bodies and objects alone. The rest of the picture is
 untouched, so a blurred copy stays usable as training data.
+
+## The handled zone
+
+Around the wearer's hands, and around what those hands are holding, nothing is
+ever masked. That region is found on every frame by two hand models and
+subtracted from every mask at the last step, so it is not a threshold that
+usually holds but a region that is taken back out. It stays for about three
+seconds after a hand leaves, moving with the camera, so a thing put down on a
+table is still protected while it is being worked through.
+
+On the sample footage it covers 7 to 11 percent of each frame, and the wearer's
+hands are in shot on essentially every frame of every file. It costs about 60
+ms a frame, which roughly doubles the detection pass; `--no-zone` turns it off
+and is for measuring what it costs, not for a copy that ships.
+
+Two things it does **not** promise, both measured and both in
+`docs/report.md` section 17:
+
+- **A face is protected only where a hand is actually on it**, not everywhere
+  the hand can reach. Without that split the zone was found protecting
+  bystanders' faces from redaction in 20 of 27 cases that were looked at by
+  eye. One of those twenty is still protected: a face directly beside its
+  owner's own hand, where no region separates the two. The cost of the fix is
+  that three of seven of the wearer's own hands, which the face detectors
+  mistake for faces, are now masked.
+- **A printed face on a card held in the hand is masked**, because the card
+  sits in the hand's reach rather than under the hand itself. Set
+  `zone_face_needs_hand` to false to protect it instead, and read section 17.5
+  before doing so.
 
 FaceBlur does not redact number plates or bodies, and it does not strip
 container metadata.
@@ -235,7 +269,7 @@ faceblur INPUT [-o OUTPUT] [--mask face,screen]
          [--max-gap N] [--tail N] [--pad F]
          [--mode blur|pixelate|solid] [--workers N] [--device auto|gpu|cpu]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
-         [--hwaccel none|cuda]
+         [--hwaccel none|cuda] [--no-zone]
          [--check-output] [--check-stride N] [--quarantine] [--quarantine-px N]
          [--no-hand-rule] [--report PATH] [--recursive] [--no-progress]
 ```
@@ -247,6 +281,9 @@ faceblur INPUT [-o OUTPUT] [--mask face,screen]
 INPUT is a video or a folder. A folder run reads every video in it. OUTPUT
 defaults to a folder named `<input>_blurred` next to the input. The exit code is
 1 when any video failed.
+
+`--no-zone` masks inside the handled zone as well. It exists to measure what
+the zone costs and a copy that ships should never be made with it.
 
 `--mask` chooses what to hide. Faces are the default. `screen` is built and can
 be added, as `--mask face,screen`. `text` is named in the interface and refused
@@ -303,7 +340,10 @@ for the right reason.
   by design, and on the table tennis file the union says 40 frames are over
   the 5 percent budget where the face mask puts 9 of them there. With screens on it also holds
   `screens`, the detections the model made, and `screen_frames`, the frames a
-  screen mask reached after the persistence rule. After `--check-output` it
+  screen mask reached after the persistence rule. It always holds the handled
+  zone's share of the frame, the hands found per frame, and
+  `masked_in_zone_prevented`, the share of the frame the zone took back out of
+  the masks. After `--check-output` it
   holds what a second pass over the copy found: frames checked, faces still
   visible by size, the frame stretches they sit in, how many of the boxes it
   found were the wearer's hand, the screens still visible and the runs they

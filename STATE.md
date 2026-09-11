@@ -336,6 +336,10 @@ records and `docs/report.md` are what an auditor actually asks for.
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED             # is anybody still identifiable
 .venv\Scripts\python.exe -m eval.sweep VIDEO                    # choose settings, write the report
 .venv\Scripts\python.exe -m eval.screens VIDEO                  # the screen class against the oracle
+.venv\Scripts\python.exe -m eval.zone VIDEO --frames 40         # zone share, hands per frame, cost
+.venv\Scripts\python.exe -m eval.zone VIDEO --copy COPY         # masked pixels inside MediaPipe's hands
+.venv\Scripts\python.exe -m eval.zone VIDEO --audit DIR         # render frames, write the label CSV
+.venv\Scripts\python.exe cli.py footage -o out --no-zone        # measure what the zone costs
 .venv-oracle\Scripts\python.exe eval\oracle_owl.py VIDEO --stride 5
 dist\FaceBlur\FaceBlur.exe footage -o out --mask face,screen    # packaged, no Python needed
 ```
@@ -348,6 +352,12 @@ pin to save disk would put the face side's evidence at risk.
 
 `faceblur.verify` exits 1 when the gate would hold the copy back and 0
 otherwise, and prints everything it found either way.
+
+The handled zone runs on every run and costs about 60 ms a frame, roughly
+doubling the detect phase: 966 s against 556 s over the four sample files.
+`--no-zone` is for measuring that, never for a copy that ships. `eval.zone
+--audit` writes its frames wherever you point it, which must be outside the
+repository, and its labels to `docs/audits/`, which is committed.
 
 `eval.oracle_owl` takes about 4.2 s a frame on the processor, so the four
 files at stride 5 are about two hours. It resumes after a kill, checks the
