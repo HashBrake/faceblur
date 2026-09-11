@@ -7,7 +7,8 @@
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
              [--no-third] [--no-camera] [--check-output] [--check-stride N]
-             [--quarantine] [--quarantine-px N] [--no-hand-rule]
+             [--quarantine] [--quarantine-px N] [--second-chance N]
+             [--no-hand-rule]
              [--report PATH] [--no-progress] [--recursive]
 
 INPUT is a video file or a folder of videos. OUTPUT defaults to a folder named
@@ -283,6 +284,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quarantine-px", type=int, default=defaults.quarantine_min_px,
                         help="the smallest face that holds a copy back "
                              "(default: %(default)s px)")
+    parser.add_argument("--second-chance", type=int, default=defaults.second_chance,
+                        help="write the copy again with the faces the check found "
+                             "put back in as detections, this many times "
+                             "(default: %(default)s). Implies --check-output")
     parser.add_argument("--mask", default=",".join(defaults.mask),
                         help="what to hide, comma separated (default: %(default)s). "
                              + "; ".join(f"{k.name}: {k.summary}" for k in available_kinds())
@@ -348,10 +353,11 @@ def main(argv: list[str] | None = None) -> int:
             copy_clean=args.copy_clean,
             hwaccel=args.hwaccel,
             zone=args.zone,
-            check_output=args.check_output or args.quarantine,
+            check_output=args.check_output or args.quarantine or bool(args.second_chance),
             check_stride=args.check_stride,
             quarantine=args.quarantine,
             quarantine_min_px=args.quarantine_px,
+            second_chance=args.second_chance,
             hand_rule=args.hand_rule,
         )
     except (SettingsError, UnknownKind) as exc:

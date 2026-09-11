@@ -398,6 +398,20 @@ class Settings:
     # Implies check_output.
     quarantine: bool = False
     quarantine_min_px: int = 24
+    # A second chance for the faces the check found. Each round seeds the
+    # tracker with the boxes the check confirmed, writes the file again and
+    # checks it again. No threshold is lowered: the seeds are faces a second
+    # detection pass already found on pixels the first pass never changed,
+    # which is evidence rather than a guess. Package F2 measured what
+    # lowering a threshold costs instead, report 19.
+    #
+    # Off by default because it costs another write and another check, and
+    # because a round is worth nothing without the check that feeds it.
+    second_chance: int = 0
+    # A seed has to be this many pixels on its long side. Below it the box is
+    # as likely to be a pattern as a face and the mask it would drag along is
+    # larger than the thing it covers.
+    second_chance_min_px: int = 16
     # The check runs the same face detectors that produced the copy, and they
     # call the wearer's hand a face. The pipeline keeps hands out of the mask
     # with track-level rules; a check that reads one frame at a time cannot,
@@ -472,6 +486,20 @@ class Settings:
             raise SettingsError("chunk_seconds and min_copy_seconds must be 0 or more")
         if self.check_stride < 1:
             raise SettingsError(f"check_stride must be at least 1, got {self.check_stride}")
+        if self.second_chance < 0:
+            raise SettingsError(f"second_chance must be 0 or more, got {self.second_chance}")
+        if self.second_chance and not (self.check_output or self.quarantine):
+            raise SettingsError("second_chance needs check_output: the seeds are what "
+                                "the check found in the copy")
+        if self.second_chance and self.check_stride != 1:
+            # A stride means the check looked at one frame in N, so a face it
+            # found is a face on that frame and nothing is known about the
+            # frames between. Seeding a tracker from that would put a mask
+            # where nothing was looked at.
+            raise SettingsError("second_chance needs check_stride 1, got "
+                                f"{self.check_stride}")
+        if self.second_chance_min_px < 0:
+            raise SettingsError("second_chance_min_px must be 0 or more")
         if self.quarantine_min_px < 0:
             raise SettingsError("quarantine_min_px must be 0 or more")
         if not self.hand_windows or any(w < 64 for w in self.hand_windows):
@@ -642,6 +670,7 @@ class Settings:
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "nvenc_sessions", "hwaccel",
             "check_output", "check_stride", "quarantine", "quarantine_min_px",
+            "second_chance", "second_chance_min_px",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
             "hand_device",
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",

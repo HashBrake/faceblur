@@ -276,7 +276,8 @@ faceblur INPUT [-o OUTPUT] [--mask face,screen]
          [--encoder auto|nvenc|x264] [--chunk-seconds S] [--no-copy]
          [--hwaccel none|cuda] [--no-zone]
          [--check-output] [--check-stride N] [--quarantine] [--quarantine-px N]
-         [--no-hand-rule] [--report PATH] [--recursive] [--no-progress]
+         [--second-chance N] [--no-hand-rule] [--report PATH] [--recursive]
+         [--no-progress]
 ```
 
 ```
@@ -297,8 +298,13 @@ no switch. The window shows the same three as checkboxes, with the one that is
 not built switched off and labelled.
 
 `--no-verify` and `--engine both` find more faces and also blur hands and
-objects. On the Ego footage they touched 7.7 percent of hand pixels. Use them
-only when a missed face costs more than a damaged frame.
+objects. The handled zone takes the wearer's hands out of every mask and it
+is not enough to make these safe: it protects a face only where a hand is on
+it, and it only knows the hands its own palm detector found. Measured again
+with the zone on, they put masks on 0.39 percent of the wearer's hand pixels
+on one sample file and 1.41 percent on another, against a limit of 0.1
+(report section 19). Use them only when a missed face costs more than a
+damaged frame.
 
 `--check-output` runs the detectors over the finished copy as well. A face
 found there, on pixels the run never changed, is a face the run missed, and
@@ -308,6 +314,15 @@ PC. `--quarantine` turns that into a gate: a copy that still shows a face of
 24 px or more (`--quarantine-px`) is moved into a `quarantine` folder beside
 the output instead of shipping, with its audit record naming the frames. Use
 both for anything that leaves the machine.
+
+`--second-chance N` uses what the check found. A face it finds in the copy
+is a face this run missed, on pixels the run never changed, and it goes back
+in as a detection: the file is written again from the source, never from the
+copy, and checked again. No threshold is lowered. It costs another write and
+another check, about the same again as the first pass. On one sample file it
+took the faces still visible in the copy from 8 to 1; on another, from 13 to
+9, because most of what is left there is a face a mask already partly covers
+and putting the same box back cannot help. Report section 20.
 
 The check looks for what the run was asked to mask. With `--mask face,screen`
 it reads the copy for screens too, at about 2 to 6 percent on top of the face

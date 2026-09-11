@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1145 passing, about four minutes
+tree is clean. Tests: `tests/`, 1159 passing, about five minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -105,8 +105,8 @@ tree is clean. Tests: `tests/`, 1145 passing, about four minutes
 | R3 | The orientation table made re-runnable; 17.7 narrowed to what was measured | Done, report 17.7 |
 | G1 | The gate in the window | Done, report 18 |
 | F2 | Recall outside the zone | Done, report 19. Nothing moved, and the gates are the finding |
-| **F1** | **Second chance for missed faces** | **Next** |
-| T1 | Text detector | Not started |
+| F1 | Second chance for missed faces | Done, report 20 |
+| **T1** | **Text detector** | **Next** |
 | T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
 | S2 | Screens outside the zone | Not started |
 | D | Defaults: all three kinds on | Not started, needs T3 |
@@ -151,13 +151,24 @@ which the rule of 2026-09-11 replaced with the per frame mask budget, and
 the build sits at 0.50, 2.27 and 0.67 percent masked against a budget of 5.
 **The gates were not touched.** See the open questions.
 
-**Then F1**, the second chance. The output side check already names the
-frames a copy still shows a face on, with the hand rows and the zone rows
-marked so they can be left out, and F2 says plainly that no threshold is
-going to find those faces on the first pass. Seeds come from
-`report["residual_list"]`, the rows with neither a `hand` nor a `zone` key.
-Spec section F1 for the rest; it is unchanged and every hook it names was
-confirmed to exist on 2026-09-12.
+**F1 is done.** Report 20. `--second-chance N`, off by default: the faces
+the output side check found in the copy go back in as detections, the file is
+written again from the source and checked again. On `004100` the faces still
+visible went from 8 to 1; on `004310` from 13 to 9, because most of what is
+left there is a face a mask already partly covers and putting the same box
+back cannot help. It costs another write and another check, 110 s of a 298 s
+run. Both copies are still held back.
+
+Two things in it are worth knowing before touching it. **The tracker throws
+most of the seeds away**: `min_track` is 2 and a seed that stands alone on
+one frame makes a track of one, so eight seeds made three tracks. A seed no
+track picks up is now masked on its own frame, with the run's own `tail`
+either side, and that is the difference between 8 to 6 and 8 to 1. And
+**every leak `eval/reid` finds, in all four copies measured, is on a box the
+mask reached**. The faces the check finds and the sightings the recogniser
+matches are almost disjoint populations here, so F1 moved identifiability
+barely at all: 46 leaks to 43 on one file, 323 to 327 on the other. What is
+left is the mask, which is section 12's question.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 
@@ -219,6 +230,18 @@ lives:
   footage this tool is for is people doing exactly that, so the blind region
   was worth more than the extra 18 percent. Report 17.7 has the table.
 
+- **F1: a seed no track picks up is masked on its own frame, with the run's
+  own tail.** The spec said the seeds go through a second `Tracker.run` and
+  they do, but `min_track` 2 drops a seed that stands alone and that is most
+  of them. The rule exists so one spurious detection cannot become a mask,
+  and a seed is not one: it is a box a second detection pass found in the
+  finished copy, on pixels the first pass never changed, after the hand rule
+  and the zone have both had a say. Measured: 8 to 6 through the tracker
+  alone, 8 to 1 with the put back and the tail. Report 20.2.
+- **F1: `second_chance` is off by default** and `Settings` refuses it without
+  `check_output` and with a `check_stride` above 1, rather than doing nothing
+  quietly. A stride means one frame in N was looked at, and seeding a tracker
+  from that would put a mask where nothing was looked at.
 - **F2: the defaults do not move**, and the gates were not touched to make
   them. Verification is refused by the hand gate on two files of three and
   2560 costs more than it returns, so the verdict holds under any reading of

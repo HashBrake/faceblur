@@ -2308,3 +2308,163 @@ negotiable, or cost more than they return. The honest next moves are a second
 detector view that does not add tracks, which is package F1's second chance
 at the frames the output side check already names, and footage from a second
 venue: every number above comes from one building.
+
+## 20. A second chance for the faces the check found (2026-09-12)
+
+Section 19 measured what it costs to find more faces by asking the detector
+to be less sure: on two files of three it puts masks on the wearer's own
+hands, which is the one thing this project never does. So the answer is not
+a lower threshold.
+
+The output side check already knows where the misses are. It detects on the
+finished copy, and a face it finds there on pixels the first pass never
+changed is a face this run missed, at a threshold the run already trusts.
+Package F1 puts those boxes back in and writes the file again.
+
+    .venv\Scripts\python.exe cli.py FOLDER -o OUT --quarantine --second-chance 1
+
+Off by default. It costs another write and another check.
+
+### 20.1 What may seed a pass, and what may not
+
+`verify.second_chance_seeds` takes the check's rows and drops four kinds:
+
+- anything marked `hand`, because MediaPipe's models say it is the wearer's
+  own hand and section 14 measured how often that is right;
+- anything marked `zone`, because the handled zone set it aside on purpose
+  and masking it one round later is the rule broken with extra steps;
+- anything that is not a face, because a screen is held by `screens.hold`
+  and a run of one frame is what a table looks like;
+- anything under `second_chance_min_px`, 16 px, where a box is as likely to
+  be a pattern as a face.
+
+On `004310` that is 2 of the 13 rows the check produced, and both were right
+to drop: the copy still shows the wearer's own hand in one and a thing the
+zone is protecting in the other.
+
+The file is written again **from the source**, never from the copy, so a
+face found late is blurred once rather than twice. The write goes through
+the same part file and the same join check as the first, so a run killed in
+the middle leaves the first copy where it was.
+
+### 20.2 The tracker throws most of the evidence away, and why
+
+A seed is one box on one frame. `Tracker.run` keeps a track only when it has
+`min_track` confirmations, which is 2, so a seed with nothing beside it is
+dropped and the second pass writes the same file again. Measured on the two
+sample files, seeding the tracker and nothing else:
+
+| | Faces still visible, first pass | After | Seeds | New tracks |
+|---|---|---|---|---|
+| `004100` | 8 | 6 | 8 | 3 |
+| `004310` | 13 | 10 | 11 | 3 |
+
+Eight seeds made three tracks. The other five were thrown away by a rule
+written for a different problem: `min_track` is there so that one spurious
+detection cannot become a mask, and a seed is not a spurious detection. It
+is a box a second detection pass found in the finished copy, on pixels the
+first pass never changed, after the hand rule and the zone have both had a
+say. So a seed no track picks up is masked on its own frame instead.
+
+That leaves one thing, and the footage says what it is. With seeds put back
+on their own frame, `004100` went from 8 faces still visible to 2, and both
+survivors sat at frames 402 and 591, two and three frames from a seed. The
+face was there the whole time and the detector blinked. So a put back seed
+carries the run's own `tail`, the same two frames the tracker gives the last
+sighting of a track, and for the same reason. The box is not grown along the
+tail because nothing here knows which way the face went.
+
+| | Faces still visible | Largest |
+|---|---|---|
+| `004100` first pass | 8 | 104 px |
+| seeds through the tracker | 6 | 104 px |
+| seeds put back as well | 2 | 47 px |
+| with the run's own tail | **1** | 47 px |
+| `004310` first pass | 13 | 187 px |
+| seeds through the tracker | 10 | 232 px |
+| seeds put back as well | 9 | 232 px |
+| with the run's own tail | **9** | 232 px |
+
+### 20.3 Why one file barely moves
+
+`004310` is a washroom with people at the sinks: 107 tracks against
+`004100`'s 34, and most of its misses are not faces the mask never reached.
+They are faces a mask already partly covers. Of its 11 seeds, 9 landed on a
+box the mask was already drawing, so putting the same box back cannot help,
+and only 2 were put back at all.
+
+The rows say it plainly. The check calls a box missed when the copy moved it
+by less than 0.3 of what a full mask would, and the rule was calibrated by
+eye at 0.11 to 0.19 for a real miss and 0.53 to 1.44 for a masked face
+(section 14). Three of the nine left on `004310` read 0.278, 0.284 and
+0.299: the mask ran, it landed, and it did not cover enough of the box to
+cross the line. That is a mask size question, not a detection question, and
+F1 has nothing to offer it.
+
+**Both copies are still held back.** On this footage the second chance cuts
+what is left rather than clearing it.
+
+### 20.4 What it costs, and what it does not damage
+
+| | First pass | With a second chance |
+|---|---|---|
+| `004100` wall | 219 s | 298 s |
+| `004310` wall | 275 s | 401 s |
+| `004100` frame masked, mean | 0.500% | 0.532% |
+| `004310` frame masked, mean | 2.310% | 2.335% |
+| `004100` frames over the mask budget | 4 | 4 |
+| `004310` frames over the mask budget | 24 | 24 |
+
+The round itself is 110 s and 149 s of those runs. The extra masking is
+three hundredths of a point on one file and two on the other, and neither
+puts another frame over the 5 percent budget.
+
+**It does not reach into the zone.** `zone_pixels_changed_max` went 0.00099
+to 0.00125 on `004100` and did not move on `004310`, against a gate of 0.010,
+and no frame was over it on either. Measured on the finished copies against
+MediaPipe's own hand hulls, which nothing in the pipeline has seen:
+
+    .venv\Scripts\python.exe -m eval.zone VIDEO --copy COPY --frames 8
+
+| Hand pixels destroyed | First pass | With a second chance |
+|---|---|---|
+| `004100` | 0.020% | 0.021% |
+| `004310` | 0.081% | 0.080% |
+
+### 20.5 It does not move identifiability, and that is worth knowing
+
+    .venv\Scripts\python.exe -m eval.reid VIDEO COPY --stride 2
+
+| Sightings that still look like the source face | First pass | With a second chance |
+|---|---|---|
+| `004100` | 46 of 519 | 43 of 519 |
+| `004310` | 323 of 3232 | 327 of 3232 |
+
+Seven of eight faces removed from `004100` bought three fewer leaks, and
+`004310` did not move at all: 4 sightings of 3232, inside the under 24 px
+bucket where section 12 says the crop carries too much unchanged room to
+trust.
+
+The reason is in the rows, and it is the useful part. **Every leak in all
+four copies is on a box the mask reached**, `applied` 0.2 or more. Not one
+is a face the pipeline never touched. So the faces the check finds and the
+sightings the recogniser matches are almost disjoint populations on this
+footage: the check finds faces nothing covered, and the recogniser matches
+faces that were covered and stayed recognisable anyway.
+
+F1 fixes the first of those. The second is the mask itself, which is
+section 12's question and not this one's.
+
+### 20.6 What this does not do
+
+One round. `second_chance` takes a number and the loop runs until the check
+stops finding seeds, but nothing here measured more than one round, and the
+second would cost another write and another check for whatever the first
+left behind.
+
+It cannot find a face that neither pass sees. The check uses the same
+detectors that made the copy, at a lower threshold, and a face invisible to
+both is invisible to this.
+
+It is off by default. A run that does not check its output has no seeds, and
+`Settings` refuses the combination rather than doing nothing quietly.

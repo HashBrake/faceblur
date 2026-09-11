@@ -532,6 +532,42 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "residual_list": kept}
 
 
+def second_chance_seeds(report: dict, settings: Settings) -> dict:
+    """Rows from the check that may seed a second pass, by frame.
+
+    Package F1. The check detects on the finished copy and a face it finds
+    on pixels the first pass never changed is a face this run missed. Those
+    boxes are evidence rather than a guess: a detector this run already
+    trusts saw them at a threshold this run already uses. So they go back in
+    as detections and the tracker runs again.
+
+    Four kinds of row are left out, and each for its own reason:
+
+    - anything the check marked `hand`, because MediaPipe's models say it is
+      the wearer's own hand and section 14 measured how often that is right;
+    - anything the check marked `zone`, because the handled zone set it aside
+      on purpose and masking it is the one thing this project never does;
+    - anything that is not a face, because a screen is held by
+      `screens.hold` and a run of one frame is what a table looks like;
+    - anything under `second_chance_min_px`, because a box that small is as
+      likely to be a pattern as a face and the mask it drags along is bigger
+      than the thing it covers.
+
+    The row's own score comes back with it, so a seed cannot claim more
+    confidence than the check had.
+    """
+    seeds: dict[int, list[Detection]] = {}
+    for row in report.get("residual_list") or ():
+        if row.get("kind", "face") != "face":
+            continue
+        if "hand" in row or "zone" in row:
+            continue
+        if row.get("px", 0) < settings.second_chance_min_px:
+            continue
+        seeds.setdefault(int(row["frame"]), []).append(detection_from_row(row))
+    return seeds
+
+
 def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
     """Which kinds hold this copy back, in listing order. Empty means it ships.
 

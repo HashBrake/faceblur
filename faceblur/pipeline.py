@@ -138,6 +138,17 @@ class AuditRecord:
     held_back_for: list = field(default_factory=list)
     quarantined: bool = False
     check_seconds: float = 0.0
+    # The second chance, package F1. Every count above is the last round's,
+    # so these say what the first pass had and what the extra rounds did.
+    # Zero everywhere means no round ran, which is the default.
+    residual_faces_first_pass: int = 0
+    second_chance_rounds: int = 0
+    second_chance_seeds: int = 0
+    second_chance_tracks_added: int = 0
+    # Seeds no track picked up, masked on their own frame instead. See the
+    # comment in batch.run_video: a seed is evidence, not a stray detection.
+    second_chance_seeds_kept: int = 0
+    second_chance_seconds: float = 0.0
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0

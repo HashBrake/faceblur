@@ -33,7 +33,7 @@ from .redact import build_alpha, masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
-from .verify import check, held_for
+from .verify import check, held_for, second_chance_seeds
 from .video import VideoError, VideoInfo, part_path, probe
 
 Submit = Callable[[Callable, list, int], list]
@@ -361,6 +361,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
     strong: list[list[Detection]] = [[] for _ in range(n)]
     weak: list[list[Detection]] = [[] for _ in range(n)]
     screens_found: dict[int, list[Detection]] = {}
+    held_screens: dict[int, list[Detection]] = {}
     hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
@@ -413,10 +414,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
     if settings.wants("screen"):
         from .screens import hold
 
-        held = hold(screens_found, settings, n)
+        held_screens = hold(screens_found, settings, n)
         record.screens = sum(len(v) for v in screens_found.values())
-        record.screen_frames = len(held)
-        for i, dets in held.items():
+        record.screen_frames = len(held_screens)
+        for i, dets in held_screens.items():
             if 0 <= i < n:
                 per_frame[i] = list(per_frame[i]) + list(dets)
     # ---- 2d. the handled zone, built once over the whole timeline because
@@ -446,97 +447,195 @@ def run_video(src: Path, dst: Path, settings: Settings,
 
     # ---- 3 to 5. segment, write, join. Once with copies, once more without
     # if the mixed join does not verify.
-    t1 = time.time()
+    #
+    # A function rather than a straight line because package F1 runs it
+    # again: a second chance writes the whole file a second time from the
+    # source, never from the copy, so a face found late is blurred once and
+    # not blurred twice.
     keys = keyframes(src, times)
-    masked_flags = [bool(f) for f in per_frame]
     min_copy = max(1, int(round(settings.min_copy_seconds * info.fps)))
+    piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
     # Copied pieces must carry the same reordering delay as the encoded ones,
     # which have none. A source with B-frames is encoded whole.
     record.reorder_delay = reorder_delay(src)
     want_copy = settings.copy_clean and record.reorder_delay == 0
-    for attempt, copy_clean in enumerate((want_copy, False)):
-        if attempt and not want_copy:
-            break
-        segments = plan_segments(masked_flags, keys, n, min_copy, copy_clean)
-        piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
-        segments = split_long(segments, keys, piece)
-        work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
-        try:
-            outcome = _write_and_join(src, dst, info, times, settings, segments, per_frame,
-                                      submit, workers, Path(work), report, cancelled,
-                                      zones)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
-        if outcome is None:
-            record.status = STATUS_STOPPED
+
+    def write_pass() -> bool:
+        """Write `dst` from `src` with the masks in `per_frame`. Sets the
+        record's quality numbers. False means it gave up and said why."""
+        t1 = time.time()
+        masked_flags = [bool(f) for f in per_frame]
+        masked = masked_by_kind = prevented = None
+        for attempt, copy_clean in enumerate((want_copy, False)):
+            if attempt and not want_copy:
+                break
+            segments = split_long(plan_segments(masked_flags, keys, n, min_copy, copy_clean),
+                                  keys, piece)
+            work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
+            try:
+                outcome = _write_and_join(src, dst, info, times, settings, segments, per_frame,
+                                          submit, workers, Path(work), report, cancelled,
+                                          zones)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            if outcome is None:
+                record.status = STATUS_STOPPED
+                dst.unlink(missing_ok=True)
+                return False
+            masked, masked_by_kind, prevented, problem, copied = outcome
+            record.join_attempts = attempt + 1
+            record.error = problem
+            if not problem:
+                record.frames_copied = copied
+                break
             dst.unlink(missing_ok=True)
-            return record
-        masked, masked_by_kind, prevented, problem, copied = outcome
-        record.join_attempts = attempt + 1
-        record.error = problem
-        if not problem:
-            record.frames_copied = copied
-            break
-        dst.unlink(missing_ok=True)
-    if record.error:
-        record.wall_seconds = round(time.time() - started, 2)
-        return record
+        if record.error:
+            return False
 
-    m = np.asarray(masked) if masked else np.zeros(1)
-    record.frames = n
-    record.masked_mean = round(float(m.mean()), 5)
-    record.masked_p95 = round(float(np.percentile(m, 95)), 5)
-    record.masked_max = round(float(m.max()), 5)
-    over = [i for i, v in enumerate(masked) if v > settings.mask_budget]
-    record.frames_over_budget = len(over)
-    record.flagged_frames = over[:200]
-    # The union numbers above keep their names and their meaning. These split
-    # them, because a screen mask is large by design and would otherwise make
-    # the face numbers unreadable in any run that masks two kinds at once.
-    record.masked_mean_by_kind = {k: round(float(np.mean(v)), 5)
-                                  for k, v in sorted(masked_by_kind.items())}
-    record.masked_max_by_kind = {k: round(float(np.max(v)), 5)
-                                 for k, v in sorted(masked_by_kind.items())}
-    record.frames_over_budget_by_kind = {
-        k: sum(1 for x in v if x > settings.mask_budget)
-        for k, v in sorted(masked_by_kind.items())}
-    if prevented:
-        record.masked_in_zone_prevented = round(float(np.mean(prevented)), 5)
-    record.encode_seconds = round(time.time() - t1, 2)
-    record.status = STATUS_DONE
+        m = np.asarray(masked) if masked else np.zeros(1)
+        record.frames = n
+        record.masked_mean = round(float(m.mean()), 5)
+        record.masked_p95 = round(float(np.percentile(m, 95)), 5)
+        record.masked_max = round(float(m.max()), 5)
+        over = [i for i, v in enumerate(masked) if v > settings.mask_budget]
+        record.frames_over_budget = len(over)
+        record.flagged_frames = over[:200]
+        # The union numbers above keep their names and their meaning. These split
+        # them, because a screen mask is large by design and would otherwise make
+        # the face numbers unreadable in any run that masks two kinds at once.
+        record.masked_mean_by_kind = {k: round(float(np.mean(v)), 5)
+                                      for k, v in sorted(masked_by_kind.items())}
+        record.masked_max_by_kind = {k: round(float(np.max(v)), 5)
+                                     for k, v in sorted(masked_by_kind.items())}
+        record.frames_over_budget_by_kind = {
+            k: sum(1 for x in v if x > settings.mask_budget)
+            for k, v in sorted(masked_by_kind.items())}
+        record.masked_in_zone_prevented = (round(float(np.mean(prevented)), 5)
+                                           if prevented else 0.0)
+        record.encode_seconds = round(record.encode_seconds + time.time() - t1, 2)
+        record.status = STATUS_DONE
+        return True
 
-    # ---- 6. check the copy, and hold it back if it still shows a face
-    if settings.check_output or settings.quarantine:
+    def check_pass():
+        """Detect on the finished copy and put what it found in the record.
+
+        Returns the check's own report, or None if it could not run. The
+        quarantine decision is not made here: package F1 gets its rounds
+        first, and a copy that is moved is a copy the next round cannot
+        write to.
+        """
         t2 = time.time()
         report("checking", 0, n)
         try:
-            found = check(src, dst, settings, settings.check_stride, submit, workers, chunk)
+            got = check(src, dst, settings, settings.check_stride, submit, workers, chunk)
         except VideoError as exc:
             record.error = str(exc)
+            return None
+        record.checked_frames = got["frames_checked"]
+        record.residual_faces = got["residual_faces"]
+        record.residual_hands = got["residual_hands"]
+        record.residual_in_zone = got["residual_in_zone"]
+        record.residual_max_px = got["residual_max_px"]
+        record.model_sha256 = {**record.model_sha256, **got["hand_models"]}
+        record.compute = {**record.compute, **got["hand_compute"]}
+        record.residual_frames = got["residual_frames"]
+        record.residual_by_size = got["residual_by_size"]
+        record.residual_runs = got["residual_runs"]
+        record.residual_list = got["residual_list"]
+        record.flat_boxes = got["flat_boxes"]
+        record.flat_by_kind = got["flat_by_kind"]
+        record.residual_screens = got["residual_screens"]
+        record.residual_screen_frames = got["residual_screen_frames"]
+        record.residual_screen_max_px = got["residual_screen_max_px"]
+        record.residual_screen_runs = got["residual_screen_runs"]
+        record.zone_pixels_changed_max = got["zone_pixels_changed_max"]
+        record.zone_frames_over = got["zone_frames_over"]
+        record.zone_list = got["zone_list"]
+        record.check_seconds = round(record.check_seconds + time.time() - t2, 2)
+        report("checking", n, n)
+        return got
+
+    if not write_pass():
+        record.wall_seconds = round(time.time() - started, 2)
+        return record
+
+    # ---- 6. check the copy, and hold it back if it still shows a face
+    found = None
+    if settings.check_output or settings.quarantine:
+        found = check_pass()
+        if found is None:
             record.wall_seconds = round(time.time() - started, 2)
             return record
-        record.checked_frames = found["frames_checked"]
-        record.residual_faces = found["residual_faces"]
-        record.residual_hands = found["residual_hands"]
-        record.residual_in_zone = found["residual_in_zone"]
-        record.residual_max_px = found["residual_max_px"]
-        record.model_sha256 = {**record.model_sha256, **found["hand_models"]}
-        record.compute = {**record.compute, **found["hand_compute"]}
-        record.residual_frames = found["residual_frames"]
-        record.residual_by_size = found["residual_by_size"]
-        record.residual_runs = found["residual_runs"]
-        record.residual_list = found["residual_list"]
-        record.flat_boxes = found["flat_boxes"]
-        record.flat_by_kind = found["flat_by_kind"]
-        record.residual_screens = found["residual_screens"]
-        record.residual_screen_frames = found["residual_screen_frames"]
-        record.residual_screen_max_px = found["residual_screen_max_px"]
-        record.residual_screen_runs = found["residual_screen_runs"]
-        record.zone_pixels_changed_max = found["zone_pixels_changed_max"]
-        record.zone_frames_over = found["zone_frames_over"]
-        record.zone_list = found["zone_list"]
-        record.check_seconds = round(time.time() - t2, 2)
-        report("checking", n, n)
+
+    # ---- 7. the second chance, package F1
+    #
+    # The check found faces in the copy on pixels nothing changed. They are
+    # evidence: a detector saw them at a threshold this run already trusts,
+    # on a frame the first pass looked at and passed over. So they go back in
+    # as seeds and the tracker runs again, which is what turns a box on one
+    # frame into a mask over the stretch the face is there for. Nothing is
+    # lowered and nothing is guessed. Report section 20.
+    if found is not None and settings.second_chance:
+        t3 = time.time()
+        record.residual_faces_first_pass = record.residual_faces
+        for _ in range(settings.second_chance):
+            seeds = second_chance_seeds(found, settings)
+            if not seeds:
+                break
+            record.second_chance_rounds += 1
+            record.second_chance_seeds += sum(len(v) for v in seeds.values())
+            for i, dets in seeds.items():
+                strong[i] = list(strong[i]) + list(dets)
+            per_frame, tracks = tracker_for(settings).run(
+                strong, weak, shifts if settings.camera_comp else None,
+                (info.height, info.width))
+            record.second_chance_tracks_added += len(tracks) - record.tracks
+            record.tracks = len(tracks)
+            if settings.wants("screen"):
+                # The tracker does not know about screens and the run above
+                # threw away what section 2b put in. Put it back.
+                for i, dets in held_screens.items():
+                    if 0 <= i < n:
+                        per_frame[i] = list(per_frame[i]) + list(dets)
+            # A seed the tracker dropped goes back as a mask on its own frame.
+            # `min_track` is there so that one spurious detection cannot become
+            # a mask, and a seed is not one: it is a box a second detection
+            # pass found in the finished copy, on pixels the first pass never
+            # changed. Keeping the rule here throws away most of what the
+            # check paid for, and it is measured: on 004100 eight seeds made
+            # three tracks and five fell on the floor.
+            #
+            # With the run's own `tail` either side of the sighting, which is
+            # what the tracker gives the last frame of a track and for the
+            # same reason: a face seen on one frame was there just before and
+            # just after, and the detector is what blinks. Measured, on
+            # 004100: seeds alone left two faces visible at frames 402 and
+            # 591, two and three frames from a seed, and the tail is what
+            # closes them. The box is not grown along the tail, because
+            # nothing here knows which way the face went.
+            tail = max(0, settings.tail)
+            for i, dets in seeds.items():
+                for d in dets:
+                    if any(iou(d, other) >= 0.3 for other in per_frame[i]):
+                        continue
+                    record.second_chance_seeds_kept += 1
+                    for k in range(i - tail, i + tail + 1):
+                        if 0 <= k < n and not any(iou(d, o) >= 0.3 for o in per_frame[k]):
+                            per_frame[k] = list(per_frame[k]) + [d]
+            record.frames_with_mask = sum(1 for f in per_frame if f)
+            if not write_pass():
+                record.second_chance_seconds = round(time.time() - t3, 2)
+                record.wall_seconds = round(time.time() - started, 2)
+                return record
+            found = check_pass()
+            if found is None:
+                record.second_chance_seconds = round(time.time() - t3, 2)
+                record.wall_seconds = round(time.time() - started, 2)
+                return record
+        record.second_chance_seconds = round(time.time() - t3, 2)
+
+    # ---- 8. the gate, on whatever the last check found
+    if found is not None:
         # Hands do not hold a copy back. They are in the record either way.
         # Which kinds do is `verify.held_for`, so that the gate and the report
         # of it cannot drift apart.
