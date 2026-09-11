@@ -1,10 +1,14 @@
 # STATE — handover notes
 
-Last updated: 2026-09-10, after work packages R1, S1, 4.3 and E1. This file says where the
-project stands, what was verified, and what a new person or session should do
-next. The README explains how to use the tool; `docs/report.md` holds the
-measurements, one section per pass, and is the place to look before changing
-anything measured.
+Last updated: 2026-09-11. Work packages R1, S1, 4.3 and E1 of
+`FACEBLUR_BUILD_PLAN_V2.md` are done, committed and pushed; F1 is next and has
+not been started. This file says where the project stands, what was verified,
+and what a new person or session should do next. The README explains how to
+use the tool; `docs/report.md` holds the measurements, one section per pass,
+and is the place to look before changing anything measured.
+
+**If you read one thing here, read "What to do next" below, and then section
+16.2 of the report.** The two together say why the plan's order changed.
 
 ## What this is, and what it is becoming
 
@@ -14,9 +18,10 @@ beyond faces. It is now three kinds, each a switch of its own: **faces**
 section 15), **personal text** (not built). Audio and container metadata were
 offered at the same time and not chosen. The decision and the two rules it
 came with are in `FACEBLUR_BUILD_PLAN.md` under "Scope change"; the one that
-shapes the work still to do is that **cards are left alone**, because on this
-footage card names, prices and grading labels are the point of the dataset,
-so only personal text is ever masked.
+shapes the work still to do is that **cards are left alone**, because card
+names, prices and grading labels are the point of the dataset this tool is
+for, so only personal text is ever masked. That rule still stands and there is
+nothing on these four sample files to apply it to; see below.
 
 Faces are on by default and screens are not. Widening what the tool destroys
 is a decision on the day, not a side effect of an upgrade.
@@ -32,10 +37,28 @@ problem. Deciding whether a rule that sets a detection aside is safe means
 knowing what those detections actually are, and nothing in this repository
 knows: section 14.1, the 108 boxes the output-side check reported, and
 section 15.2, the 85 screen runs. Each was labelled by eye, once, by one
-person. Nothing the pipeline does depends on a label. Built for Ego camera footage (1600x1300, ~30 fps, h264,
-no audio) of card collectors, where the goal is: destroy the minimum region
-that hides a person's identity and leave hands, cards, screens and everything
-else untouched.
+person. Nothing the pipeline does depends on a label. **Neither set of labels
+was committed**, so neither audit can be re-scored or extended by anybody;
+only the counts in those two sections survive. A third audit, if there is one,
+should write its labels to a file beside the report.
+
+Built for Ego camera footage (1600x1300, about 30 fps, h264, no audio), where
+the goal is: destroy the minimum region that hides a person's identity and
+leave hands, cards, screens and everything else untouched.
+
+**The four sample files are not card collector footage**, and until
+2026-09-11 every document here implied they were. They are a washroom being
+cleaned, a corridor being mopped, a canteen and a table tennis hall, and the
+wearer appears to be a facilities worker. Measured, not guessed: an open
+vocabulary oracle asked about trading cards, graded slabs and binder pages
+over 1587 frames spread across all four files reports zero at any score of
+0.2 or above, against 3213 televisions on one file alone. Everything else in
+this file is consistent with that once you look for it: the wearer's hand on
+a mop, the face in a washroom mirror, the blue table tennis table.
+
+The card collector dataset is still what the tool is *for*. It is not what
+these four files are, and no number in this repository has ever been measured
+on a card.
 
 ## Where things stand
 
@@ -66,10 +89,14 @@ else untouched.
   actually are. It corrects section 13.4: the check finds real faces two and
   a half times as often as hands, so the hand rule was not what stood between
   the gate and unattended use.
-- Tests: `tests/`, 999 passing (`.venv\Scripts\python.exe -m pytest tests`).
+- Pass eight, 2026-09-10 to 11: work packages R1, S1, 4.3 and E1 of
+  `FACEBLUR_BUILD_PLAN_V2.md`, one commit each, each with its verify step
+  passing and its report section written. Sections 16.1 to 16.4. The notes
+  for each are below.
+- Tests: `tests/`, 1037 passing (`.venv\Scripts\python.exe -m pytest tests`),
+  about four minutes.
 - Everything is committed and pushed to `HashBrake/faceblur`, `main`, and the
-  working tree is clean. The last change of substance is e2663c0, the hand
-  rule; commits after it are these notes catching up.
+  working tree is clean. The last commit is 12e9bb8, the object oracle.
 - Packaged app: `dist\FaceBlur\` builds from `build\faceblur.spec`, rebuilt on
   2026-09-10 in work package R1. It carries three face detectors, two hand
   models, the screen detector and their licences, and deliberately not the
@@ -101,6 +128,39 @@ written and one commit.
 | T1, T3, T4 | Personal text | Not started. Worth more than expected, see E1 |
 | T2 | Card and slab veto | **Blocked: no cards in the footage** |
 | M1 | Metadata line in the record | Not started |
+
+### What to do next
+
+**Start F1, the second chance for missed faces.** It is section 5 of the build
+plan under F1, about a week, and it is the one package that changes whether
+this tool can be left running unattended. The gate holds all four sample files
+back for about fifty real faces; F1 feeds the copy side finds the output check
+already produces back into the tracker and writes the file again, without
+lowering a single threshold. Everything it hooks into exists and was checked
+this pass: `verify.residual_job` returns the rows, `batch.run_video` has the
+step 6 the seeds come from, and `verify.held_for` is the one place the gate is
+decided.
+
+**Do not start F0 or T2.** They are blocked, not deferred, and the reason is
+above: there are no cards in this footage. F0 measures how often a printed
+face on a card is masked and T2 tunes a veto on card text. On these four files
+both would produce a zero and the false impression that the question had been
+answered. Build them when card footage exists, and see section 16.2.1 of the
+report for the measurement that says it does not.
+
+**After F1, T1 is the useful one**, and it is worth more than the plan
+expected: the canteen file has signage and packaging and a person in the
+washroom file wears a shirt with text on it, which is exactly the case the
+build plan's section 7 item 25 names as personal text. T3 needs T2's card veto
+by the plan's design, so read D2 again before starting it and decide what the
+veto means when there are no cards to veto.
+
+**Do not change `screen_conf` on the strength of the new recall number.**
+Section 16.2 shows the shipped screen class masks 0 to 23 percent of what the
+oracle sees and that a lower confidence floor is the only lever that would
+move it. Section 15.1 already measured what a lower floor costs: 78 percent of
+a frame destroyed at its worst. That trade is the owner's, and the standing
+rule is not to loosen a precision setting to chase recall.
 
 ### Decisions taken by default
 
@@ -361,7 +421,34 @@ evidence (see "the caches were stale" below). Output folder `footage_blurred_v8`
 
 (`003939` has no MediaPipe oracle, so it has no consensus or hand numbers.)
 
-The last two rows were re-measured on 2026-09-09 with the hand rule on.
+Those are faces, on copies made with faces alone. With screens on as well,
+measured on 2026-09-10 to 11 in work packages S1, 4.3 and E1, output folders
+`footage_blurred_r1` and `footage_blurred_43`:
+
+| Measure | `003939` | `004100` | `004310` | `005035` |
+|---|---|---|---|---|
+| Frame destroyed by the face mask, mean | 0.85 % | 0.51 % | 2.31 % | 0.69 % |
+| Frame destroyed by the screen mask, mean | 0.05 % | 0.43 % | 0.01 % | 0.31 % |
+| Frames over the 5 percent budget: union | 0 | 6 | 24 | 40 |
+| ... of which the face mask alone | 0 | 6 | 23 | 9 |
+| Screens the copy still shows | 11 | 14 | 10 | 129 |
+| Runs of those long enough to hold the copy back | 1 | 3 | 0 | 7 |
+| Held back for | face, screen | face, screen | face | face, screen |
+| Screen recall against the oracle | 0 % | 2 % | 0 % | 23 % |
+
+Read the last row with section 16.2, not on its own: it is one model's opinion
+against another's and it is a bound in both directions.
+
+**The face counts in the two tables do not match, and that is the copies, not
+the check.** Report section 16.1 gives 7, 9, 16 and 67 faces still visible
+against the 7, 8, 15 and 64 above. The first table reads `footage_blurred_v8`,
+made with faces alone; the second reads copies made with faces and screens, so
+a face detector is not looking at the same pixels. The check itself is
+unchanged, which is what identical face counts with the screen pass on and off
+show.
+
+The last two rows of the first table were re-measured on 2026-09-09 with the
+hand rule on.
 Section 13.4 reports 94 boxes on `005035` where two runs of the current code
 report 75; the other three files reproduce exactly. Nothing was found to
 explain it and the 2026-09-08 run cannot be repeated, so the section keeps its
@@ -617,24 +704,49 @@ workers, and happens on its own when the fingerprint no longer matches.
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # what the copy still shows
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --no-hand-rule  # ... counting hands as faces
 .venv\Scripts\python.exe -m eval.sweep VIDEO                    # choose settings, write the report
+.venv-oracle\Scripts\python.exe eval\oracle_owl.py VIDEO --stride 5  # what an independent witness sees
+.venv\Scripts\python.exe -m eval.screens VIDEO                  # score the screen class against it
+dist\FaceBlur\FaceBlur.exe footage -o out --mask face,screen    # the packaged app, no Python needed
 ```
 
-The evaluation needs `.venv-eval` for MediaPipe (the third detector and the
-hand regions); see the README. `eval.reid` and `faceblur.verify` need only the
-main environment.
+Three environments. `.venv` runs everything that ships. `.venv-eval` has
+MediaPipe, for the third face detector and the hand regions. `.venv-oracle`
+has torch and transformers for the object oracle, and exists separately
+because MediaPipe pins numpy below 2 and every face number here was measured
+through MediaPipe. `eval.reid`, `eval.screens` and `faceblur.verify` need only
+the main environment.
+
+`eval.oracle_owl` is slow on purpose, about 4.2 s a frame on the processor, so
+the four sample files at stride 5 take about two hours. It resumes: killing it
+and running it again picks up where it stopped. Its cache carries a
+fingerprint of its own source, so editing a prompt rebuilds rather than
+quietly answering with the old one.
 
 ## Known limits and open items
 
-- **Screens are measured for precision only, and only on this venue.** The
-  four caveats are in the 2026-09-10 note above. The first thing to build for
-  them is coverage in `verify.py`, so that a missed screen holds a copy back
-  the way a missed face does.
+- **Screens have a recall number now and it is 0 to 23 percent.** Section
+  16.2. The two rules section 15.3 tuned are not what costs it: the size cap
+  loses nothing and persistence loses nine sightings on one file. What costs
+  it is that YOLOX-tiny at `screen_conf` 0.5 does not report most of what the
+  oracle sees. Read both numbers as bounds in both directions; the washroom
+  has no screens in it and the oracle still finds 17 there.
+- **The window cannot run the output side check or the gate at all.**
+  `ui/app.py` never sets `check_output` or `quarantine`, so no run started
+  from the window is checked or held back, and the person most likely to need
+  the gate is the one using the window. This predates every package in this
+  pass and none of them changed it. Giving the window a gate is not on
+  anybody's plan.
+- **The tuning of the screen rules is still tuned on one venue.** The table
+  tennis hall is what makes the size cap necessary and what sets its value,
+  and there is still no second venue to set it on.
 - **Personal text is the piece still owed.** Two to three weeks, most of it
-  the label-free evaluation rather than the detector, and the rule that cards
-  are left alone is what makes it hard: OCR on this footage works on text
-  over roughly 20 to 25 px and sharp, and where it fails you do not know what
-  was left. Expect the text gate to hold copies back far more often than the
-  face gate does, and say so before anyone runs a batch.
+  the label-free evaluation rather than the detector. OCR on this footage
+  works on text over roughly 20 to 25 px and sharp, and where it fails you do
+  not know what was left. Expect the text gate to hold copies back far more
+  often than the face gate does, and say so before anyone runs a batch. The
+  rule that cards are left alone was going to be what made it hard; on this
+  footage there are no cards, so the hard part is now the size floor and the
+  signage instead.
 - **The gate still holds all four sample files, and should.** They show
   faces. Missing fewer of them is the work that would change that, and section
   12.4 already says the cheap ways of doing it (a bigger scan, tiling) were
@@ -725,7 +837,11 @@ Asked on 2026-09-09, assessed, not built. The short version:
 | `faceblur/hands.py` | palm detector and landmark model: is this box a hand |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/` | label-free evaluation, the sweep, the misses yardstick |
+| `eval/oracle_owl.py` | the object oracle: OWLv2, pinned, evaluation only, never ships |
+| `eval/screens.py` | the shipped screen class scored against the oracle |
 | `eval/common.py` | the raw cache and its fingerprint |
 | `eval/reid.py` | the recogniser: threshold on this footage, what the mask does, what is left in the copy |
 | `models/sface.onnx` | face recogniser, evaluation only, never in the build |
+| `FACEBLUR_BUILD_PLAN_V2.md` | the spec being executed; where it and the code disagree, the code wins |
+| `requirements-oracle.txt` | the third environment, and why it is a third one |
 | `docs/report.md` | quality, accuracy, speed, hardware, assumptions, done and not done |
