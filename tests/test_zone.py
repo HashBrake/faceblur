@@ -402,3 +402,34 @@ def test_a_polygon_moved_by_the_camera_keeps_its_shape():
 def test_a_polygon_off_the_edge_is_outside_the_frame():
     assert inside_frame(square(100, 100, 50), SHAPE)
     assert not inside_frame(square(-500, 100, 50), SHAPE)
+
+
+# ---------------------------------------------- the report's own numbers
+
+def test_the_orientation_tables_come_from_a_command_and_not_from_a_note():
+    """Report 17.7's tables are printed by `eval.zone --orientation`.
+
+    The pass that first produced them worked them out in a throwaway script,
+    which is the one thing this project's own rule forbids: every number in
+    the report has to come from something a third party can re-run. This
+    fails if the command stops answering, or if the audit CSVs lose the
+    columns it reads.
+    """
+    from eval.zone import orientation_tables, pointing
+
+    text = orientation_tables()
+    assert "The wearer's hands" in text and "A bystander's hands" in text
+    assert "zone_orientation" in text
+    assert "179 rows from 4 files" in text, "the committed audit is four files of 179"
+
+
+def test_the_angle_is_recovered_from_the_quad_the_audit_committed():
+    """Straight up the frame is zero, and the quad carries the rotation, so
+    nothing has to be detected again to score the rule."""
+    from eval.zone import pointing
+
+    up = "100,100 200,100 200,300 100,300"        # top edge above bottom edge
+    assert abs(pointing(up)) < 1e-6
+    down = "100,300 200,300 200,100 100,100"
+    assert abs(abs(pointing(down)) - 180) < 1e-6
+    assert pointing("1,2 3,4") is None

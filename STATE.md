@@ -178,8 +178,12 @@ the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
 footage that has no cards and no face to face bystanders:
 
 - D1, a printed face on a handled card (`zone_face_needs_hand`, report 17.5).
-- The orientation rule for "whose hands" on a bystander facing the wearer
-  (report 17.7).
+- The orientation rule for "whose hands" on a bystander **facing** the wearer
+  with their hands up toward the camera (report 17.7). All 20 bystander rows
+  in the audit are people beside or across from the wearer with their hands
+  turned the same way as the wearer's, so what was refuted is narrower than
+  the hypothesis. A collector handing a card across a table is the case that
+  would test it.
 - `zone_top_frac` 0.15, chosen for people holding things up to look at them
   (report 17.7).
 - The 12 percent "whose hands" error rate, measured on a facilities worker's
@@ -424,6 +428,7 @@ records and `docs/report.md` are what an auditor actually asks for.
 .venv\Scripts\python.exe -m eval.zone VIDEO --frames 40         # zone share, hands per frame, cost
 .venv\Scripts\python.exe -m eval.zone VIDEO --copy COPY         # masked pixels inside MediaPipe's hands
 .venv\Scripts\python.exe -m eval.zone VIDEO --audit DIR         # render frames, write the label CSV
+.venv\Scripts\python.exe -m eval.zone --orientation            # report 17.7's tables from the labels
 .venv\Scripts\python.exe cli.py footage -o out --no-zone        # measure what the zone costs
 .venv-oracle\Scripts\python.exe eval\oracle_owl.py VIDEO --stride 5
 dist\FaceBlur\FaceBlur.exe footage -o out --mask face,screen    # packaged, no Python needed

@@ -1944,11 +1944,13 @@ and they are not comparable. Two things in the breakdown are worth keeping:
 man bends over at the left and the wearer's own hand on the mop is not covered
 at all; and `005035` contributes none, because nobody else comes close enough.
 
-**The wrist to knuckle direction does not separate them.** `hands.rect_for`
-already computes the angle that puts the wrist to middle knuckle line upright,
-and the idea was that the wearer's hands point up the frame while a bystander
-facing them points down. Scored against the 179 labels, by recovering the
-angle from each committed quad:
+**The wrist to knuckle direction does not separate a bystander standing beside
+the wearer.** `hands.rect_for` already computes the angle that puts the wrist
+to middle knuckle line upright, and the idea was that the wearer's hands point
+up the frame while somebody facing them points down. Scored against the 179
+labels, by recovering the angle from each committed quad:
+
+    .venv\Scripts\python.exe -m eval.zone --orientation
 
 | | n | min | median | p90 | max |
 |---|---|---|---|---|---|
@@ -1971,6 +1973,16 @@ measurement refutes the hypothesis rather than the threshold, so a value that
 had no effect would be a knob with nothing behind it. `zone_face_needs_hand`
 stays as it is, and the re-sweep that was conditional on this table was not
 run.
+
+**What this does not refute, because the footage has no case of it.** All 20
+bystander rows are people beside or across from the wearer with their hands
+turned the same way as the wearer's: a counter worker reaching in from the
+right, a man bending over at the left, a man at the next sink. Nobody in these
+four files stands face to face with the wearer and holds their hands up toward
+the camera, which is the case the hypothesis was actually about and the case a
+collector handing a card across a table would produce. The rule is refuted on
+the footage that exists, and it is on the list in `STATE.md` to re-measure
+when footage with cards in it arrives.
 
 **The window grid is cut by a fifth, and the first attempt at it was wrong.**
 Thirty windows of 512 px at half overlap cover the frame; the wearer's arms

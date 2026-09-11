@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,76 @@ from faceblur.zone import (HandFinder, alpha_for, build, polygon_for,  # noqa: E
                            qualifies, share)
 
 AUDIT_DIR = REPO / "docs" / "audits"
+
+
+# The angles the orientation table is printed at. Wide, because the question
+# it answers is whether any threshold separates the two at all.
+ORIENTATION_ANGLES = (60, 80, 100, 120, 140, 160, 180)
+
+
+def pointing(corners: str) -> float | None:
+    """Degrees from straight up the frame, from a committed quad.
+
+    `hands.rect_for` builds the quad already rotated by the angle that puts
+    the wrist to middle knuckle line upright, so the midpoint of the top edge
+    minus the midpoint of the bottom edge is the direction the hand points.
+    Nothing has to be re-detected: the number comes out of the four corners
+    the audit committed.
+    """
+    pts = [tuple(map(float, c.split(","))) for c in corners.split()]
+    if len(pts) != 4:
+        return None
+    top = ((pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2)
+    bottom = ((pts[2][0] + pts[3][0]) / 2, (pts[2][1] + pts[3][1]) / 2)
+    return math.degrees(math.atan2(top[0] - bottom[0], -(top[1] - bottom[1])))
+
+
+def orientation_tables(audit_dir: Path = AUDIT_DIR) -> str:
+    """The two tables of report section 17.7, from the committed labels.
+
+    The idea this scores: the wearer's hands point up the frame, away from a
+    camera on their chest, while somebody facing them points down or across.
+    It is refuted on this footage and the tables are how. They are printed by
+    a command rather than kept in a note, because every number in the report
+    has to come from something a third party can re-run, and the pass that
+    first produced these broke that rule in the section that restates it.
+    """
+    by_verdict: dict[str, list[float]] = {}
+    rows = files = 0
+    for path in sorted(audit_dir.glob("zone_hands_*.csv")):
+        files += 1
+        with path.open(encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                rows += 1
+                angle = pointing(row.get("corners", ""))
+                if angle is not None and row.get("verdict"):
+                    by_verdict.setdefault(row["verdict"], []).append(abs(angle))
+    if not by_verdict:
+        return (f"no labelled rows under {audit_dir}. The audit CSVs carry a "
+                f"verdict column; an unfilled one measures nothing.")
+
+    def pick(xs, f):
+        return xs[min(len(xs) - 1, int(f * len(xs)))]
+
+    out = [f"{rows} rows from {files} files under {audit_dir}", "",
+           "| | n | min | median | p90 | max |", "|---|---|---|---|---|---|"]
+    for name in ("wearer", "bystander", "cannot tell"):
+        xs = sorted(by_verdict.get(name, []))
+        if not xs:
+            continue
+        label = {"wearer": "The wearer's hands", "bystander": "A bystander's hands",
+                 "cannot tell": "Could not be called"}[name]
+        out.append(f"| {label} | {len(xs)} | {xs[0]:.0f} deg | {pick(xs, .5):.0f} deg | "
+                   f"{pick(xs, .9):.0f} deg | {xs[-1]:.0f} deg |")
+    wearer = by_verdict.get("wearer", [])
+    other = by_verdict.get("bystander", [])
+    out += ["", "| `zone_orientation` | The wearer's hands kept | A bystander's dropped |",
+            "|---|---|---|"]
+    for angle in ORIENTATION_ANGLES:
+        kept = sum(1 for a in wearer if a <= angle)
+        dropped = sum(1 for a in other if a > angle)
+        out.append(f"| {angle} deg | {kept} of {len(wearer)} | {dropped} of {len(other)} |")
+    return "\n".join(out)
 
 
 def sample_frames(video: Path, count: int) -> list[int]:
@@ -256,7 +327,11 @@ def render_audit(video: Path, settings: Settings, count: int, out_dir: Path,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("video", nargs="+")
+    ap.add_argument("video", nargs="*")
+    ap.add_argument("--orientation", action="store_true",
+                    help="print the wrist to knuckle tables of report 17.7 from the "
+                         "committed audit labels, and exit. Needs no video and no "
+                         "model: the angle comes out of the quads in the CSV")
     ap.add_argument("--frames", type=int, default=40,
                     help="frames to sample, spread over the file (default: 40)")
     ap.add_argument("--report", default=None,
@@ -271,6 +346,11 @@ def main() -> int:
                          "MediaPipe's own hand regions on it")
     ap.add_argument("--json", default=None, help="write the full result here")
     args = ap.parse_args()
+    if args.orientation:
+        print(orientation_tables())
+        return 0
+    if not args.video:
+        ap.error("name a video, or pass --orientation")
 
     settings = Settings(mask=("face", "screen"))
     if args.stride:
