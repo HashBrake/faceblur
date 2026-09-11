@@ -114,127 +114,136 @@ tree is clean. Tests: `tests/`, 1195 passing, about six minutes
 | T4 | Identifiers by pattern | Optional, and blocked with T3 |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
-### What to do next
+### What happened this weekend
 
-**The weekend build, 2026-09-12 to 14.** The owner is away and asked for a
-long unattended run through the packages in order: R3, G1, F2, F1, T1, T3,
-S2, D, then T4 and M1. Every decision is delegated. At the end, or whenever
-the session must stop, this section is rewritten as "what happened", with
-the packages done, the numbers, and the decisions taken by default at the
-top, so the owner can read it in five minutes on Monday.
+**Seven packages, all seven committed and pushed.** Every one asked for in the
+order R3, G1, F2, F1, T1, T3, S2, D, T4, M1 was either finished or is recorded
+below as blocked with the numbers that blocked it. Tests went from 1084 to
+1195. The working tree is clean and `main` is pushed.
 
-**R3 and G1 are done.** R3 is in report 17.7: `eval.zone --orientation`
-prints the tables from the committed audit labels, and the refutation now says
-it holds for side on bystanders only. G1 is report 18: the window has the
-check and the gate, on by default. Run from the window over two sample files,
-**both copies were held back for a face and neither would have been delivered
-yesterday**, and the check cost 2.0 to 2.1 times the rest of the run.
+| Commit | Package | Report |
+|---|---|---|
+| `e785147` | R3, the orientation table made re-runnable | 17.7 |
+| `c94dfa7` | G1, the gate in the window | 18 |
+| `8b22836` | F2, recall outside the zone | 19 |
+| `457b2a4` | F1, a second chance for missed faces | 20 |
+| `8e92e45` | T1, the text detector | 21 |
+| `a80aac8` | S2, screens outside the zone | 22 |
+| `ba4ebc4` | M1, the metadata line | 23 |
 
-**F2 is done and the answer was no.** Report 19. Every setting section 10
-rejected is still refused, and by the one gate that is not a trade: with
-verification off, or with the second detector scanning the whole frame,
-masks land on 0.39 percent of the wearer's hand pixels on `004100` and 1.41
-percent on `005035`, against a gate of 0.1. The zone protects a face only
-where a hand is on it and it only knows the hands its own palm detector
-found, so an unconfirmed box on a hand it missed is still a mask on the
-wearer's hand. The 2560 scan buys 0.5 to 2.9 points of pasted face recall,
-costs 59 ms a frame against 125, and moves the exposure proxy the wrong way
-on the longest file. **Nothing moved.**
+**Read section 19.5 first.** It is the one finding that is bigger than the
+package it came out of, and it is about the build rather than about a knob.
 
-**The finding that is bigger than the package.** Of the 54 settings measured
-on all three files, none passes every gate on every file, and that includes
-the build as it ships: on `004310` every setting with verification on is over
-the off face gate, the shipped one by 0.07 points. It is not a regression,
-it is a number nobody had looked at, because each sweep chose its own winner
-and the shipped defaults are a synthesis across three files that was never
-itself scored on all of them. The gates encode "minimum region everywhere",
-which the rule of 2026-09-11 replaced with the per frame mask budget, and
-the build sits at 0.50, 2.27 and 0.67 percent masked against a budget of 5.
-**The gates were not touched.** See the open questions.
+#### What the owner should look at first
 
-**F1 is done.** Report 20. `--second-chance N`, off by default: the faces
-the output side check found in the copy go back in as detections, the file is
-written again from the source and checked again. On `004100` the faces still
-visible went from 8 to 1; on `004310` from 13 to 9, because most of what is
-left there is a face a mask already partly covers and putting the same box
-back cannot help. It costs another write and another check, 110 s of a 298 s
-run. Both copies are still held back.
+**1. The off face gates have no feasible point, and the shipped build fails
+one of them.** Report 19.5. F2 measured all 54 settings on all three files
+with consensus labels, and none of them passes every gate on every file,
+including the combination the build ships today: on `004310` every setting
+that keeps verification on is over `off_face_mean` 0.7 percent, the shipped
+one at 0.77. Verification cannot come off, because two of the three files
+refuse that at the hand gate, so the feasible set is empty. This is not a
+regression. Each sweep chose its own winner and the shipped defaults are a
+synthesis across three files that had never been scored on all of them.
 
-Two things in it are worth knowing before touching it. **The tracker throws
-most of the seeds away**: `min_track` is 2 and a seed that stands alone on
-one frame makes a track of one, so eight seeds made three tracks. A seed no
-track picks up is now masked on its own frame, with the run's own `tail`
-either side, and that is the difference between 8 to 6 and 8 to 1. And
-**every leak `eval/reid` finds, in all four copies measured, is on a box the
-mask reached**. The faces the check finds and the sightings the recogniser
-matches are almost disjoint populations here, so F1 moved identifiability
-barely at all: 46 leaks to 43 on one file, 323 to 327 on the other. What is
-left is the mask, which is section 12's question.
+The gates encode "hands untouched, minimum region everywhere". The rule of
+2026-09-11 replaced that with "outside the zone a miss is the leak and over
+masking is the cheaper error, subject to a per frame mask budget", and the
+build sits at 0.50, 2.27 and 0.67 percent masked against `mask_budget` 5
+percent. **Either the gates move to the budget the rule names, or the build
+is over its limit on one file in three.** This session did not decide it on
+purpose: changing the measure in the same pass that needs it changed is the
+move a reader should trust least, and the verdict did not depend on it.
 
-**T1 is done and it blocks T3.** Report 21. The detector is PP-OCRv3 from
-OpenCV's model zoo, Apache 2.0, committed with its hash; the build plan asked
-for v4 converted here with `paddle2onnx` and `models/README.md` records why
-the zoo's file is the better of the two. It runs at 1920 and 2560, not the
-960 and 1920 the plan proposed, because at 960 this footage returns almost
-nothing and what it returns is one huge false quad a frame.
+**2. Text is blocked, and the reason is measurable.** Report 21.3. 124 quads
+from the text detector were rendered as crops and labelled by eye: five are
+on writing, eight contain writing, and 111 have no words in them at all. The
+labels are committed. Nothing separates the two groups, the highest scoring
+quad in the set is a ceiling light, and raising the threshold throws the real
+ones away first. T3 and D are blocked behind it and T4 with them.
 
-**Then 124 of its quads were rendered as crops and labelled by eye. Five are
-on writing, eight contain writing, and 111 have no words in them at all.**
-The labels are committed at `docs/audits/text_quads_2026-09-12.csv` and
-`eval.text --audit` prints the tables from them. Nothing separates the two
-groups: the highest scoring quad in the set is a ceiling light, raising
-`text_box_thresh` throws the real ones away first, and the areas are the
-same. The false ones are lights, railings, window frames, a hand on a mop
-and twice a face.
+**3. Two copies that would have shipped yesterday did not.** Report 18. The
+window never set `check_output`, so no run started from it was ever checked.
+It is on by default now, and the first two sample files run through it were
+both held back for a face.
 
-So **T3 is blocked, not skipped**, and the block is about the footage and the
-model rather than the policy. What would unblock it:
+#### Package by package
 
-- footage with words in it. These four files hold about a dozen readable
-  words between them, and the same model finds four lines of four on a drawn
-  card, so the detector is not broken. A collector's desk of card labels and
-  prices is the scene this tool is for and it is not in the sample;
-- a second model to agree with, which is what section 10 settled for faces.
-  One detector at one threshold is exactly what was rejected there, and the
-  score alone does not separate a sign from a strip light.
+**R3.** `eval.zone --orientation` prints report 17.7's tables from the
+committed audit labels, so the numbers come from a command rather than from a
+throwaway script. The refutation of the orientation rule was also narrowed to
+what the evidence supports: it fails on bystanders standing beside the
+wearer, and nobody in this footage faces them.
 
-**D is blocked with it**, since it turns on every ready kind and text is not
-one. S2 does not depend on either.
+**G1.** The window has the output side check and the quarantine gate, on when
+it opens, with a "Checking" status word and a summary line that names the
+kinds a copy was held back for. Run over two sample files, both copies were
+held back, 8 faces on 8 frames and 13 on 12. The check costs 2.0 to 2.1 times
+the rest of the run, which the help text says.
 
-**S2 is done and the floor did not move.** Report 22. `screen_conf` at 0.5,
-0.4, 0.3 and 0.25 against the oracle with the zone on, on all four files. The
-rule for moving it was precision over 50 percent and the masked share under 2
-percent mean on every file. The masked share was never the problem: it stays
-under 1.03 percent everywhere. Precision is what refuses it, on three files
-of four at every floor including the one that ships. The exception is
-`005035`, the table tennis hall, where the oracle finds 529 screens and
-lowering to 0.4 takes recall from 22 to 37 percent at 74 percent precision.
-That gain is real and it is not a default, because the setting would have to
-know which room it is in.
+**F2.** The answer is no and nothing moved. Every setting section 10 rejected
+is still refused by the hand gate: without verification, or with the second
+detector scanning the whole frame, masks land on 0.39 percent of the wearer's
+hand pixels on `004100` and 1.41 percent on `005035` against a limit of 0.1.
+The zone does not make verification optional, because it protects a face only
+where a hand is on it and only knows the hands its own palm detector found.
+The 2560 scan buys 0.5 to 2.9 points of pasted face recall, costs 125 ms a
+frame against 59, and moves the exposure proxy the wrong way on the longest
+file.
 
-**M1 is done.** Report 23. The record says whether the source had sound and
-lists the names of its metadata tags, never the values. The test worth having
-is the other one: a clip carrying `location=51.5007,-0.1246` goes through the
-pipeline by both the encode path and the copy path, and the string appears in
-neither copy. That was true before today by accident of which input ffmpeg
-takes its metadata from, and nobody had written it down or checked it.
+Three harness faults were fixed first, or the numbers would have described a
+build that does not ship: the evaluation harness did not know the zone
+existed, `hand_damage` had become two numbers under one name, and the pasted
+face set was answering for a detector it was not built with.
 
-**Do not lower any face threshold outside F2**, and do not build F0 or T2.
+**F1.** `--second-chance N`, off by default. The faces the check found in the
+copy go back in as detections, the file is written again from the source and
+checked again. On `004100` the faces still visible went 8 to 1; on `004310`,
+13 to 9. Both copies are still held back. The interesting part: the tracker
+threw most of the evidence away, because `min_track` is 2 and a seed that
+stands alone on one frame makes a track of one. A seed no track picks up is
+now masked on its own frame with the run's own tail, and that is the
+difference between 8 to 6 and 8 to 1.
 
-**To re-measure when card footage arrives**, because each was decided on
-footage that has no cards and no face to face bystanders:
+Worth knowing: every leak `eval/reid` finds, in all four copies measured, is
+on a box the mask reached. The faces the check finds and the sightings the
+recogniser matches are almost disjoint populations on this footage, so F1
+moved identifiability barely at all, 46 leaks to 43 on one file. What is left
+is the mask itself, which is section 12's question.
 
-- D1, a printed face on a handled card (`zone_face_needs_hand`, report 17.5).
-- The orientation rule for "whose hands" on a bystander **facing** the wearer
-  with their hands up toward the camera (report 17.7). All 20 bystander rows
-  in the audit are people beside or across from the wearer with their hands
-  turned the same way as the wearer's, so what was refuted is narrower than
-  the hypothesis. A collector handing a card across a table is the case that
-  would test it.
-- `zone_top_frac` 0.15, chosen for people holding things up to look at them
-  (report 17.7).
-- The 12 percent "whose hands" error rate, measured on a facilities worker's
-  footage.
+**T1.** The detector is built, measured and not wired to anything. See above.
+
+**S2.** The screen floor was asked again at 0.5, 0.4, 0.3 and 0.25 with the
+zone on and it did not move. Precision against the oracle clears 50 percent
+on one file of four at any floor. The masked share was never the problem: 1.03
+percent is the worst of any file at any floor. The exception is `005035`,
+where the oracle finds 529 screens and 0.4 takes recall from 22 to 37 percent
+at 74 percent precision. That gain is real and it is not a default, because
+the setting would have to know which room it is in.
+
+**M1.** The record says whether the source had sound and lists the names of
+its metadata tags, never the values. A clip carrying a location tag now goes
+through the pipeline by both paths in a test, and the value appears in
+neither copy.
+
+#### What is blocked
+
+- **T3**, text policy and gate, by T1's numbers. What would unblock it:
+  footage with words in it, and a second model to agree with. Report 21.5.
+- **D**, all three kinds on by default, because it turns on every ready kind
+  and text is not one.
+- **T4**, identifiers by pattern, which needs T3.
+
+#### What a next session should do first
+
+1. Settle the gate question in 19.5, because every package that wants recall
+   needs somewhere to stand.
+2. If the answer is that the gates move to the mask budget, re-run
+   `eval.sweep --f2` and `eval.combine` against the new ones. Both commands
+   exist and the caches are built, so it is an afternoon rather than a week.
+3. Ask the owner for footage with cards in it. Four measurements are waiting
+   on it: D1, the orientation rule, text, and what the zone costs when the
+   thing being handled is the thing that matters.
 
 ## Decisions taken by default
 
@@ -597,6 +606,13 @@ before changing anything a pass measured.
   gates move to the budget the rule names, or the build is over its limit on
   one file in three. This session did not decide it, on purpose: report 19.5
   says why.
+- **Text, and whether it is worth a second model.** T1 measured the detector
+  and 90 percent of what it finds on this footage is not text: lights,
+  railings, a hand on a mop, twice a face. The labels are committed and
+  report 21.3 has the tables. T3, D and T4 are blocked behind it. Two things
+  would change the answer and both need the owner: footage with words in it,
+  and a decision about whether a second text model is worth the time, since
+  one detector at one threshold is what section 10 rejected for faces.
 - **Card footage.** The rule no longer depends on cards, but nothing about
   card text or printed faces can be measured until there is footage with cards
   in it. One file of a collector at work would do.
@@ -626,10 +642,13 @@ before changing anything a pass measured.
 | `faceblur/verify.py` | the check that reads the copy, `held_for`, the gate |
 | `faceblur/hands.py` | palm detector and landmark model, for the output side check |
 | `faceblur/zone.py` | the handled zone: whose hands, how far, how long remembered |
+| `faceblur/text.py` | the text detector, built and measured, wired to nothing |
 | `eval/zone.py` | zone share, cost, hand damage on a copy, the audit renderer |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/common.py` | the raw cache and its fingerprint |
 | `eval/measure.py`, `eval/sweep.py` | the label free harness and the gates |
+| `eval/combine.py` | one default across every file, which is where F2's answer came from |
+| `eval/text.py` | what the text detector finds, the size sweep, the audit tables |
 | `eval/reid.py` | the recogniser: what the mask does, what is left in the copy |
 | `eval/oracle_owl.py` | the object oracle: OWLv2, pinned, never ships |
 | `eval/screens.py` | the screen class scored against the oracle |
