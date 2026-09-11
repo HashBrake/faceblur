@@ -2015,3 +2015,81 @@ One check on the premise: the highest polygon in the audit has its top edge at
 y=114, which looks like a hand at the top of the frame and is not. Its palm is
 at y=776 and the polygon is grown by nearly four palm widths. All four
 settings find that hand.
+
+## 18. The gate in the window (2026-09-12)
+
+The output side check has held copies back since 2026-09-08 and the window
+has never used it. `ui/app.py` called `run_video` without `check_output` and
+without `quarantine`, so every run started from the window shipped its copies
+whatever they still showed, and the window is the workflow the app was built
+around. The command line had the check; the app did not.
+
+### 18.1 What changed
+
+Under "Advanced settings" there is a checkbox, on when the window opens:
+
+    Check each copy and hold back any that still shows something
+
+It sets both `check_output` and `quarantine`, because holding a copy back is
+the only thing the check is for here. A checked run gains a "Checking" status
+word and a progress stage, wired to the `checking` reports `run_video`
+already emits, and the summary line names what the gate did:
+
+    2 videos done. 0 failed. 2 were held back and not delivered: face.
+    They are in the quarantine folder beside the output.
+
+The kinds come from each record's `held_back_for`, not from a guess at what
+was masked. A run that was checked and found nothing says so instead:
+
+    The check found nothing left in any of them.
+
+The help text says what it costs, because it is not free.
+
+### 18.2 What it found on two real files
+
+Two of the sample files, run from the window with the box ticked, four
+workers, output to `footage_blurred_g1`:
+
+| | `004100` | `004310` |
+|---|---|---|
+| Frames | 984 | 938 |
+| Frames checked | 984 | 938 |
+| Faces still visible | 8 | 13 |
+| Frames they are on | 8 | 12 |
+| Largest | 104 px | 187 px |
+| Set aside as handled, inside the zone | 0 | 4 |
+| Set aside as the wearer's hands | 0 | 4 |
+| Screens still visible | 0 | 0 |
+| Held back for | face | face |
+
+**Both copies were held back. Both would have been delivered by the window
+yesterday.** Neither was held for the zone: `zone_pixels_changed_max` read
+0.00099 and 0.00501 against a gate of 0.010, so the promise inside the zone
+held on both files while the masking outside it missed faces on 20 frames
+between them.
+
+### 18.3 Cost
+
+The check is a second detection pass over the finished copy, and it roughly
+doubles a run:
+
+| | Detect | Encode | Check | Wall |
+|---|---|---|---|---|
+| `004100` | 72.1 s | 22.2 s | 97.2 s | 198.2 s |
+| `004310` | 98.9 s | 32.5 s | 133.3 s | 272.3 s |
+
+The check costs 2.1 and 2.0 times the rest of the run on these two files.
+That is what the help text promises and it is why the box can be cleared.
+
+### 18.4 What this does not do
+
+The gate is the same gate as the command line's, so it inherits what section
+13 says about it: it decides on the copy with the same detectors that made
+the copy, at a lower threshold, and a face neither pass sees is a face
+nothing here can count. The window now runs it and stops the copy; it does
+not find anything the command line would not have found.
+
+Nothing in the window repairs a held back copy. A quarantined file sits in
+`quarantine` beside the output with its record next to it, and what to do
+with it is the operator's call until package F1 gives the pipeline a second
+chance at the frames the record names.

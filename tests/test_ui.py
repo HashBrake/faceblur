@@ -35,7 +35,7 @@ def source_folder(tmp_path, video_silent):
     return folder
 
 
-def make_window(app, source, output, workers=2):
+def make_window(app, source, output, workers=2, check=False):
     window = MainWindow()
     window.setAttribute(Qt.WA_DontShowOnScreen, True)
     window.show()
@@ -45,6 +45,10 @@ def make_window(app, source, output, workers=2):
     window.output_value.setText(str(output))
     window.workers_spin.setValue(workers)
     window.stride_spin.setValue(3)
+    # Off for the tests that are about the pool and the progress queue: the
+    # check is a second detection pass over every copy and doubles them. The
+    # tests that are about the check turn it back on.
+    window.check_output_check.setChecked(check)
     window._update_start_enabled()
     return window
 
@@ -112,6 +116,7 @@ def test_a_full_run_writes_every_copy(app, source_folder, tmp_path):
 
     assert state["stopped"] is False
     assert {"detecting", "writing"} <= state["stages"]
+    assert "checking" not in state["stages"], "this window was opened with it off"
     assert sorted(p.name for p in output.glob("*.mp4")) == [
         "clip1_blurred.mp4", "clip2_blurred.mp4", "clip3_blurred.mp4"]
     assert len(list(output.glob("*.mp4.json"))) == 3
@@ -222,3 +227,111 @@ def test_a_kind_with_no_detector_cannot_be_switched_on(app):
     finally:
         window.settings_store.remove("mask_text")
         window.close()
+
+
+# ------------------------------------------------------- the check and the gate
+#
+# Until 2026-09-12 the window never set `check_output` or `quarantine`, so no
+# run started from it was ever checked and every copy shipped whatever it still
+# showed. The command line had both from the start. These are about the switch
+# that closed that.
+
+
+def test_the_check_is_on_when_the_window_opens():
+    """It is the workflow most runs use, and it shipped unchecked copies for a
+    week. A gate somebody has to find and tick is a gate that stays off."""
+    from PySide6.QtCore import QSettings
+
+    from ui.app import MainWindow
+
+    # Cleared before the window is built, not after: the constructor calls
+    # `_restore`, so a value another test left behind is already applied by
+    # the time the window exists.
+    QSettings("FaceBlur", "FaceBlur").clear()
+    window = MainWindow()
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    assert window.check_output_check.isChecked()
+
+
+def test_the_checkbox_turns_on_both_the_check_and_the_gate(app, source_folder,
+                                                           tmp_path):
+    """One switch for both. A check that cannot hold a copy back is a line in
+    a record nobody reads, and the gate is the reason the check exists."""
+    window = make_window(app, source_folder, tmp_path / "out", check=True)
+    window.check_output_check.setChecked(True)
+    settings = captured_settings(window)
+    assert settings.check_output and settings.quarantine
+    window.check_output_check.setChecked(False)
+    settings = captured_settings(window)
+    assert not settings.check_output and not settings.quarantine
+
+
+def captured_settings(window):
+    """The `Settings` the window would start a run with, without running it."""
+    from faceblur.settings import Settings
+
+    checking = window.check_output_check.isChecked()
+    return Settings(mask=window._mask(), engine=window._engine(),
+                    stride=window.stride_spin.value(), mode=window._mode(),
+                    replace_existing=window.replace_check.isChecked(),
+                    check_output=checking, quarantine=checking)
+
+
+def test_a_checked_run_says_the_check_found_nothing(app, source_folder, tmp_path):
+    """The clips hold no faces, so the check runs and finds nothing, and the
+    summary says so rather than staying silent about having looked."""
+    output = tmp_path / "out"
+    window = make_window(app, source_folder, output, check=True)
+    state = run_to_end(app, window)
+
+    assert state["stopped"] is False
+    assert "checking" in state["stages"], "the status word needs a stage to show"
+    assert len(list(output.glob("*.mp4"))) == 3
+    assert window.summary_label.text().endswith(S.SUMMARY_CHECKED_CLEAN)
+
+
+def test_a_held_back_copy_is_counted_and_its_kinds_named(app, source_folder,
+                                                         tmp_path):
+    """The one outcome of a run somebody has to act on. The summary says how
+    many, what held them and where they went, from `held_back_for`."""
+    window = make_window(app, source_folder, tmp_path / "out", check=True)
+    window.records = {
+        0: {"status": "done", "checked_frames": 10, "quarantined": True,
+            "held_back_for": ["face"]},
+        1: {"status": "done", "checked_frames": 10, "quarantined": True,
+            "held_back_for": ["screen", "face"]},
+        2: {"status": "done", "checked_frames": 10, "quarantined": False},
+    }
+    line = window._held_back_line()
+    assert "2 were held back" in line
+    assert "face, screen" in line, "the kinds are named, in order, once each"
+    assert S.SUMMARY_HELD_WHERE in line
+
+
+def test_one_held_back_copy_reads_as_one(app, source_folder, tmp_path):
+    window = make_window(app, source_folder, tmp_path / "out", check=True)
+    window.records = {0: {"status": "done", "checked_frames": 10,
+                          "quarantined": True, "held_back_for": ["zone"]}}
+    assert window._held_back_line().startswith(S.SUMMARY_HELD_ONE.format(
+        held=1, kinds="zone")[:20])
+
+
+def test_a_run_that_was_not_checked_says_nothing_about_checking(app, source_folder,
+                                                                tmp_path):
+    """Silence rather than a claim either way: this run did not look."""
+    window = make_window(app, source_folder, tmp_path / "out")
+    window.records = {0: {"status": "done"}}
+    assert window._held_back_line() == ""
+
+
+def test_the_choice_is_remembered_between_runs(app, source_folder, tmp_path):
+    window = make_window(app, source_folder, tmp_path / "out", check=True)
+    window.check_output_check.setChecked(False)
+    window._remember()
+    again = MainWindow()
+    again.setAttribute(Qt.WA_DontShowOnScreen, True)
+    again._restore()
+    assert not again.check_output_check.isChecked()
+    # Put the store back, so the next test to build a window sees the default
+    # rather than what this one chose.
+    again.settings_store.clear()

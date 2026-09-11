@@ -523,6 +523,19 @@ class MainWindow(QMainWindow):
         numbers.setColumnStretch(2, 1)
         body.addLayout(numbers)
 
+        # The check, and the gate it turns into. On by default: the window
+        # is the workflow most runs use and it shipped unchecked copies until
+        # 2026-09-12, which is the one thing this tool must not do quietly.
+        check = QVBoxLayout()
+        check.setSpacing(GRID // 2)
+        self.check_output_check = QCheckBox(S.CHECK_OUTPUT)
+        self.check_output_check.setMinimumHeight(CONTROL_HEIGHT - 4)
+        self.check_output_check.setChecked(True)
+        self.check_output_check.setAccessibleName(S.ACC_CHECK_OUTPUT)
+        check.addWidget(self.check_output_check)
+        check.addWidget(help_label(S.CHECK_OUTPUT_HELP))
+        body.addLayout(check)
+
         # Replace existing
         replace = QVBoxLayout()
         replace.setSpacing(GRID // 2)
@@ -633,6 +646,8 @@ class MainWindow(QMainWindow):
             "workers", max(1, multiprocessing.cpu_count() // 2), type=int))
         self.replace_check.setChecked(
             self.settings_store.value("replace", False, type=bool))
+        self.check_output_check.setChecked(
+            self.settings_store.value("check_output", True, type=bool))
 
     def _remember(self) -> None:
         if self.output_dir:
@@ -645,6 +660,8 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("stride", self.stride_spin.value())
         self.settings_store.setValue("workers", self.workers_spin.value())
         self.settings_store.setValue("replace", self.replace_check.isChecked())
+        self.settings_store.setValue("check_output",
+                                     self.check_output_check.isChecked())
 
     def _engine(self) -> str:
         return "both" if self.engine_max.isChecked() else "yunet"
@@ -760,12 +777,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, S.ERR_OUTPUT_TITLE, S.ERR_OUTPUT_UNWRITABLE)
             return
 
+        checking = self.check_output_check.isChecked()
         settings = Settings(
             mask=self._mask(),
             engine=self._engine(),
             stride=self.stride_spin.value(),
             mode=self._mode(),
             replace_existing=self.replace_check.isChecked(),
+            # One switch for both: a check that cannot hold a copy back is a
+            # line in a record nobody reads, and the gate is the reason the
+            # check exists.
+            check_output=checking,
+            quarantine=checking,
         )
         self.jobs = [(src, output_path(src, self.output_dir, settings.suffix))
                      for src in self.inputs]
@@ -837,6 +860,24 @@ class MainWindow(QMainWindow):
         self.bytes_done += self.inputs[index].stat().st_size
         self._update_overall()
 
+    def _held_back_line(self) -> str:
+        """What the check found, for the summary. Empty when it did not run.
+
+        A held back copy is the one outcome of a run that somebody has to do
+        something about, so it says how many, which kinds held them, and where
+        the files went. The kinds come from `held_back_for` in the record.
+        """
+        checked = [r for r in self.records.values() if r.get("checked_frames")]
+        if not checked:
+            return ""
+        held = [r for r in checked if r.get("quarantined")]
+        if not held:
+            return S.SUMMARY_CHECKED_CLEAN
+        kinds = sorted({k for r in held for k in (r.get("held_back_for") or [])})
+        named = ", ".join(kinds) if kinds else "something it could not name"
+        template = S.SUMMARY_HELD_ONE if len(held) == 1 else S.SUMMARY_HELD
+        return template.format(held=len(held), kinds=named) + S.SUMMARY_HELD_WHERE
+
     def _finished_count(self) -> int:
         """Rows that reached an output. A stopped row never counts as done."""
         return sum(1 for r in self.records.values()
@@ -874,6 +915,7 @@ class MainWindow(QMainWindow):
             text += S.SUMMARY_SKIPPED_ONE
         elif skipped:
             text += S.SUMMARY_SKIPPED.format(skipped=skipped)
+        text += self._held_back_line()
         self.summary_label.setText(text)
         self.summary_label.setVisible(True)
 

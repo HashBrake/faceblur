@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1084 passing, about four minutes
+tree is clean. Tests: `tests/`, 1141 passing, about four minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -102,9 +102,9 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 | R2 | Fixes from the review of that pass | Done, report 16.6 |
 | H1 | The handled zone | Done, report 17 |
 | H2 | Zone follow ups | Done, report 17.3 and 17.7 |
-| **R3** | **The orientation table made re-runnable; 17.7 narrowed to what was measured** | **Next, an hour** |
-| G1 | The gate in the window | After R3 |
-| F2 | Recall outside the zone | Not started. Needs its two harness prerequisites |
+| R3 | The orientation table made re-runnable; 17.7 narrowed to what was measured | Done, report 17.7 |
+| G1 | The gate in the window | Done, report 18 |
+| **F2** | **Recall outside the zone** | **Next. Its two harness prerequisites are built** |
 | F1 | Second chance for missed faces | Not started |
 | T1 | Text detector | Not started |
 | T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
@@ -122,55 +122,34 @@ the session must stop, this section is rewritten as "what happened", with
 the packages done, the numbers, and the decisions taken by default at the
 top, so the owner can read it in five minutes on Monday.
 
-**First, R3, an hour.** Two things the review of H2 found:
+**R3 and G1 are done.** R3 is in report 17.7: `eval.zone --orientation`
+prints the tables from the committed audit labels, and the refutation now says
+it holds for side on bystanders only. G1 is report 18: the window has the
+check and the gate, on by default. Run from the window over two sample files,
+**both copies were held back for a face and neither would have been delivered
+yesterday**, and the check cost 2.0 to 2.1 times the rest of the run.
 
-- The orientation table in report 17.7 was produced by code that was never
-  committed, so nobody can re-run it. Add `eval/zone.py --orientation`,
-  which reads `docs/audits/zone_hands_*.csv`, recovers the wrist to knuckle
-  angle from each committed quad, and prints the two tables in 17.7. Cite
-  the command there.
-- 17.7 says the orientation "does not separate them". The 20 bystander rows
-  are a counter worker reaching in from the right, a man bending over at the
-  left and a man at a sink, all side on to the wearer. A bystander *facing*
-  the wearer, whose hands point down the frame, is not in the sample. Change
-  the sentence to say the rule fails on side on bystanders and is untested on
-  face to face ones, and add it to the list below of things to re-measure
-  when card footage arrives.
+**F2 is the point of H1.** Every setting section 10 rejected was rejected for
+masking the wearer's hand, and the zone subtracts the hand from the mask
+whatever the threshold says. Re-measure `conf` 0.4 to 0.6, `engine both`,
+`verify` off, the mirror view at 0.3, `third_conf` down to 0.1 and a 2560
+scan, with the zone on. **Both harness prerequisites are built**:
 
-**Then G1**, the gate in the window. A day or two, and it closes the oldest
-gap in the project: `ui/app.py` never sets `check_output` or `quarantine`, so
-nobody who uses the window gets the check or the gate, and the window is the
-workflow this tool was built around. Every hook the spec names was confirmed
-to exist on 2026-09-11:
+- `eval/zone.py --cache-hands` writes a hands cache per video, fingerprinted
+  on `faceblur/zone.py` and on the settings that decide what is cached, and
+  `eval/measure.py` builds the zone from it and subtracts it exactly as
+  `redact` does. A sweep with no hands cache says so in `zone_note` rather
+  than scoring a zone of nothing.
+- `hand_damage` is now `hand_damage_wearer`, hulls that the live zone
+  touches, gated at 0.1 percent, beside `hand_damage_other`, which is every
+  other hand in the frame and is reported without a gate. The rename is
+  deliberate: a stale reader of `hand_damage` would have silently got the
+  wearer's number and thought it was everybody's.
 
-- `ui/app.py` `_build_advanced` is where the checkbox goes, beside
-  `replace_check`, which is the pattern to copy.
-- `run_video` already emits a `checking` progress stage, and `ui/strings.py`
-  already has `STATUS_CHECKING` and its mark. Nothing new is needed in the
-  worker to make the status word appear.
-- The record carries `held_back_for`, so the summary line can name the kinds a
-  copy was held back for rather than just counting them.
-- `tests/manual_ui.md` exists and is the file to update beside
-  `tests/test_ui.py`.
-
-Say in the help text that the check costs a second detection pass, because it
-roughly doubles a run and the person ticking it should know before they start
-a batch overnight.
-
-**F2 is the point of H1.** Every setting section 10
-rejected was rejected for masking the wearer's hand, and the zone subtracts
-the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
-0.6, `engine both`, `verify` off, the mirror view at 0.3, `third_conf` down to
-0.1 and a 2560 scan, with the zone on. Two things to fix in the harness first:
-
-- `eval/measure.py` does not know the zone exists, so a sweep measures masks
-  the pipeline would not apply. F2 has to apply the zone there or its numbers
-  are about a build that does not ship.
-- **`hand_damage` has changed meaning** and is no longer expected to be zero.
-  MediaPipe's hulls are every hand in the frame and the rule protects only the
-  wearer's, so a mask on a bystander's hand is permitted now. Score hulls that
-  intersect the zone separately from those that do not before leaning on that
-  gate. Section 17.4.
+`eval/synthetic.py` still builds its masks without the zone, so the pasted
+face recall number is the one place F2 measures something the build does not
+quite ship. It is common to every setting, so the comparison holds; the size
+of the bias is measured in the F2 section rather than assumed small.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 

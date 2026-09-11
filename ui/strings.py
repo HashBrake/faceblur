@@ -87,6 +87,15 @@ MODE_SOLID = "Black box"
 MODE_SOLID_HELP = "The app paints the face area black."
 WORKERS_LABEL = "Videos at the same time"
 WORKERS_HELP = "Process this many videos at once. Higher uses more of the CPU."
+# The output side check, and the gate. Off means a copy ships whatever it
+# still shows, which is what every run from this window did before 2026-09-12.
+CHECK_OUTPUT = "Check each copy and hold back any that still shows something"
+CHECK_OUTPUT_HELP = (
+    "The app looks at each finished copy and finds what it missed. A copy that "
+    "still shows something goes to a quarantine folder instead of the output "
+    "folder. Its record names the frames. This doubles the time a run takes."
+)
+ACC_CHECK_OUTPUT = "Check each copy and hold back any that still shows something"
 REPLACE_EXISTING = "Replace existing files"
 REPLACE_EXISTING_HELP = "Blur a video again even when its blurred copy exists."
 
@@ -119,6 +128,13 @@ TIME_LEFT_SECONDS = "Less than a minute left."
 
 # Finish
 SUMMARY = "{done} videos done. {failed} failed."
+# What the check found, added to the summary when it ran. A copy held back is
+# the one outcome a person has to act on, so it says which kinds held it and
+# where the file went, not just how many.
+SUMMARY_HELD_ONE = " 1 was held back and not delivered: {kinds}."
+SUMMARY_HELD = " {held} were held back and not delivered: {kinds}."
+SUMMARY_HELD_WHERE = " They are in the quarantine folder beside the output."
+SUMMARY_CHECKED_CLEAN = " The check found nothing left in any of them."
 SUMMARY_STOPPED = "You stopped the run. {done} videos done. {failed} failed."
 # Added when a run skipped copies that already existed. Without it a second run
 # over the same output folder reports zero videos done, which reads as a failure.

@@ -35,8 +35,8 @@ automated version never draws the window on a screen.
 
 ## Running
 
-- [x] Press Start. Rows move from Waiting to Detecting to Writing to Done.
-      (also automated)
+- [x] Press Start. Rows move from Waiting to Detecting to Writing to Checking
+      to Done. (also automated)
 - [x] Drag the window while the batch runs. The window keeps drawing.
 - [x] The overall bar and the count move as files finish. (also automated)
 - [x] The time estimate says "Estimating time left." until the first file
@@ -44,6 +44,22 @@ automated version never draws the window on a screen.
 - [x] The Start button reads Stop while the batch runs. (also automated)
 - [x] Choose files, Choose a folder and the advanced controls are off while the
       batch runs.
+
+## The check and the gate
+
+- [ ] Open Advanced settings. "Check each copy and hold back any that still
+      shows something" is ticked when the window is opened for the first time.
+- [ ] Run a batch with it ticked. Rows show Checking after Writing, and the
+      run takes about twice as long. (also automated)
+- [ ] The summary says the check found nothing, on footage that has nothing
+      left in it. (also automated)
+- [ ] Run a batch of the real sample footage with it ticked. Copies are held
+      back, the summary names the kinds, and the files are in a quarantine
+      folder beside the output folder with their records.
+- [ ] Untick it and run again. No row reads Checking and the summary says
+      nothing about the check. (also automated)
+- [ ] Untick it, close the window, open it again. It is still unticked.
+      (also automated)
 
 ## Stopping
 
