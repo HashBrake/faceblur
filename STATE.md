@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1141 passing, about four minutes
+tree is clean. Tests: `tests/`, 1145 passing, about four minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -104,8 +104,8 @@ tree is clean. Tests: `tests/`, 1141 passing, about four minutes
 | H2 | Zone follow ups | Done, report 17.3 and 17.7 |
 | R3 | The orientation table made re-runnable; 17.7 narrowed to what was measured | Done, report 17.7 |
 | G1 | The gate in the window | Done, report 18 |
-| **F2** | **Recall outside the zone** | **Next. Its two harness prerequisites are built** |
-| F1 | Second chance for missed faces | Not started |
+| F2 | Recall outside the zone | Done, report 19. Nothing moved, and the gates are the finding |
+| **F1** | **Second chance for missed faces** | **Next** |
 | T1 | Text detector | Not started |
 | T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
 | S2 | Screens outside the zone | Not started |
@@ -129,27 +129,35 @@ check and the gate, on by default. Run from the window over two sample files,
 **both copies were held back for a face and neither would have been delivered
 yesterday**, and the check cost 2.0 to 2.1 times the rest of the run.
 
-**F2 is the point of H1.** Every setting section 10 rejected was rejected for
-masking the wearer's hand, and the zone subtracts the hand from the mask
-whatever the threshold says. Re-measure `conf` 0.4 to 0.6, `engine both`,
-`verify` off, the mirror view at 0.3, `third_conf` down to 0.1 and a 2560
-scan, with the zone on. **Both harness prerequisites are built**:
+**F2 is done and the answer was no.** Report 19. Every setting section 10
+rejected is still refused, and by the one gate that is not a trade: with
+verification off, or with the second detector scanning the whole frame,
+masks land on 0.39 percent of the wearer's hand pixels on `004100` and 1.41
+percent on `005035`, against a gate of 0.1. The zone protects a face only
+where a hand is on it and it only knows the hands its own palm detector
+found, so an unconfirmed box on a hand it missed is still a mask on the
+wearer's hand. The 2560 scan buys 0.5 to 2.9 points of pasted face recall,
+costs 59 ms a frame against 125, and moves the exposure proxy the wrong way
+on the longest file. **Nothing moved.**
 
-- `eval/zone.py --cache-hands` writes a hands cache per video, fingerprinted
-  on `faceblur/zone.py` and on the settings that decide what is cached, and
-  `eval/measure.py` builds the zone from it and subtracts it exactly as
-  `redact` does. A sweep with no hands cache says so in `zone_note` rather
-  than scoring a zone of nothing.
-- `hand_damage` is now `hand_damage_wearer`, hulls that the live zone
-  touches, gated at 0.1 percent, beside `hand_damage_other`, which is every
-  other hand in the frame and is reported without a gate. The rename is
-  deliberate: a stale reader of `hand_damage` would have silently got the
-  wearer's number and thought it was everybody's.
+**The finding that is bigger than the package.** Of the 54 settings measured
+on all three files, none passes every gate on every file, and that includes
+the build as it ships: on `004310` every setting with verification on is over
+the off face gate, the shipped one by 0.07 points. It is not a regression,
+it is a number nobody had looked at, because each sweep chose its own winner
+and the shipped defaults are a synthesis across three files that was never
+itself scored on all of them. The gates encode "minimum region everywhere",
+which the rule of 2026-09-11 replaced with the per frame mask budget, and
+the build sits at 0.50, 2.27 and 0.67 percent masked against a budget of 5.
+**The gates were not touched.** See the open questions.
 
-`eval/synthetic.py` still builds its masks without the zone, so the pasted
-face recall number is the one place F2 measures something the build does not
-quite ship. It is common to every setting, so the comparison holds; the size
-of the bias is measured in the F2 section rather than assumed small.
+**Then F1**, the second chance. The output side check already names the
+frames a copy still shows a face on, with the hand rows and the zone rows
+marked so they can be left out, and F2 says plainly that no threshold is
+going to find those faces on the first pass. Seeds come from
+`report["residual_list"]`, the rows with neither a `hand` nor a `zone` key.
+Spec section F1 for the rest; it is unchanged and every hook it names was
+confirmed to exist on 2026-09-12.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 
@@ -210,6 +218,27 @@ lives:
   Nothing on this footage holds anything up to look at it and the collector
   footage this tool is for is people doing exactly that, so the blind region
   was worth more than the extra 18 percent. Report 17.7 has the table.
+
+- **F2: the defaults do not move**, and the gates were not touched to make
+  them. Verification is refused by the hand gate on two files of three and
+  2560 costs more than it returns, so the verdict holds under any reading of
+  the off face gate. Changing the measure in the same pass that needs it
+  changed is the move a reader should trust least. Report 19.5.
+- **F2: `hand_damage` was renamed `hand_damage_wearer`.** A reader who kept
+  using the old name would have got the wearer's number and thought it was
+  everybody's, and on `004310` that is the difference between refusing a
+  setting and permitting it: the settings that leave the wearer's hands alone
+  put masks on 8.4 percent of everybody else's.
+- **F2: the raw cache and the pasted face set are named by the detection
+  fingerprint.** Four caches per video, sitting beside each other instead of
+  overwriting each other, so a grid that compares `engine both` against a
+  2560 scan does not re-detect the video on every step of itself. The legacy
+  `<stem>.raw.pkl` is adopted by rename when its own fingerprint matches, so
+  nothing was re-detected to change a file name.
+- **F2: the sweep keeps what it has measured.** Four caches over the long
+  file is hours and this PC killed the run three times for memory; the part
+  file means a kill costs one cache and not the run. Detector processes
+  default to two and the last cache needs one.
 
 - **R2: the oracle's weight hash is a constant in `eval/oracle_owl.py`, with a
   test tying it to `models/README.md`.** The spec said to verify against the
@@ -463,6 +492,20 @@ before changing anything a pass measured.
 
 ## Open questions for the owner
 
+- **The off face gates against the rule, and this is the first thing to look
+  at.** F2 measured all 54 settings on all three files and none passes every
+  gate on every file, the shipped build included: on `004310` every setting
+  that keeps verification on is over `off_face_mean` 0.7 percent, the shipped
+  one at 0.77. Verification cannot come off, because two of the three files
+  refuse that at the hand gate. So the feasible set is empty and the next
+  package that wants recall has nowhere to stand. The gates encode "hands
+  untouched, minimum region everywhere"; the rule of 2026-09-11 replaced that
+  with "outside the zone a miss is the leak and over masking is the cheaper
+  error, subject to a per frame mask budget", and the build sits at 0.50,
+  2.27 and 0.67 percent masked against `mask_budget` 5 percent. Either the
+  gates move to the budget the rule names, or the build is over its limit on
+  one file in three. This session did not decide it, on purpose: report 19.5
+  says why.
 - **Card footage.** The rule no longer depends on cards, but nothing about
   card text or printed faces can be measured until there is footage with cards
   in it. One file of a collector at work would do.

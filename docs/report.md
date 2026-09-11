@@ -254,12 +254,15 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 1084 tests
+.venv\Scripts\python.exe -m pytest tests                      # 1141 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # section 15
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
 .venv\Scripts\python.exe -m eval.consensus VIDEO --stride 10
 .venv\Scripts\python.exe -m eval.sweep VIDEO                  # writes docs/precision_report.md
+.venv\Scripts\python.exe -m eval.zone --cache-hands VIDEO     # the zone the sweep subtracts
+.venv\Scripts\python.exe -m eval.sweep VIDEO --f2             # section 19, the grid with the zone on
+.venv\Scripts\python.exe -m eval.synthetic VIDEO --zone-bias  # section 19
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED           # section 12
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # sections 13 and 14
 ```
@@ -2093,3 +2096,215 @@ Nothing in the window repairs a held back copy. A quarantined file sits in
 `quarantine` beside the output with its record next to it, and what to do
 with it is the operator's call until package F1 gives the pipeline a second
 chance at the frames the record names.
+
+## 19. Recall outside the zone (2026-09-12)
+
+Section 10 rejected every setting that would have raised face recall, and it
+rejected them all for the same reason: they masked the wearer's hand. The
+zone of section 17 takes the wearer's hand out of every mask whatever the
+threshold says, so this package asks those settings again, and asks whether
+the defaults should move.
+
+    .venv\Scripts\python.exe -m eval.zone --cache-hands VIDEO
+    .venv\Scripts\python.exe -m eval.sweep VIDEO --f2 --workers 4 --gpu-workers 1
+    .venv\Scripts\python.exe -m eval.combine VIDEO VIDEO VIDEO
+
+**The answer is no. Nothing moves.** What follows is what each setting cost,
+and one thing the pass found that is larger than the question it was asked.
+
+### 19.1 Three things the harness had to learn first
+
+**The harness did not know the zone existed.** `eval/measure.py` built its
+masks from the raw cache and the tracker and never subtracted the zone, so
+every number it produced was about a build that does not ship. Section 17.4
+found that and F2 could not start until it was fixed. `eval/zone.py
+--cache-hands` now writes a hands cache per video, every qualifying hand of
+every frame as quads, fingerprinted on `faceblur/zone.py` and on the settings
+that decide what is cached; `eval/measure.py` builds the zone from it and
+subtracts it exactly as `redact.alpha_with_zone` does. A sweep with no hands
+cache does not quietly score a zone of nothing: it says so in `zone_note`,
+and every row of every table below carries an empty one.
+
+**Hand damage had become two numbers wearing one name.** MediaPipe's hulls
+are every hand in the frame and the rule protects only the wearer's, so a
+mask on a bystander's hand is over masking rather than a broken promise. It
+is now `hand_damage_wearer`, hulls that the live zone touches, gated at 0.1
+percent, beside `hand_damage_other`, which is reported and not gated. The
+rename is deliberate rather than tidy: a reader who kept using the old name
+would have got the wearer's number and thought it was everybody's. It
+matters here. On `004310` the settings that look cleanest on the wearer's
+hands put masks on 8.4 percent of everybody else's, and under the old single
+number they would have been refused for keeping the rule the owner wrote.
+
+**The pasted face set is built by a detector, so it belongs to that
+detector.** `eval/synthetic.py` stores the detector's answers on every pasted
+frame, and its file was named by the video alone. Asking it about `engine
+both` or a 2560 scan would have returned the answer of the detector it was
+built with, quietly. Both the raw cache and the pasted face set are now named
+by the detection fingerprint, so the four caches this grid needs sit beside
+each other instead of overwriting each other.
+
+**And the pasted face set still builds its masks without the zone**, which is
+the one place F2 measures something the build does not quite ship. Rather
+than assume the difference is small, it is measured. For every pasted face
+that counts, how much of its identity ellipse lies under the polygons that
+protect a face:
+
+    .venv\Scripts\python.exe -m eval.synthetic VIDEO --zone-bias
+
+| File | Pasted faces | Touch the zone | The zone would take back |
+|---|---|---|---|
+| `004100` | 2139 | 36, 1.68% | 17, 0.79% |
+| `004310` | 2139 | 45, 2.10% | 14, 0.65% |
+| `005035` | 2137 | 46, 2.15% | 35, 1.64% |
+
+So the pasted face recall below is an upper bound by at most 0.65 to 1.64
+points, against differences between settings of up to 6. It is an upper bound
+on an artefact rather than on the footage: a pasted face lands on the
+wearer's hands as often as chance puts it there, and a real one rarely does.
+
+### 19.2 The grid
+
+`conf` 0.4, 0.5 and 0.6; `engine` `yunet` and `both`; `verify` on and off;
+`verify_conf_sure` 0.5 and 0.3; `third_conf` 0.5 and 0.1; `det_sizes` with
+and without 2560. Everything not named stays at what the build ships, so the
+first row is the build itself. 54 settings per file over four raw caches,
+three files, the zone on throughout.
+
+`verify` and the view rule do nothing when `engine` is `both`, because
+`filter_candidates` skips confirmation entirely there, so those rows are
+three rather than twenty four and the grid is 54 and not 72.
+
+### 19.3 What each setting cost
+
+The five rows that carry the argument, per file. The full 54 are in
+`docs/f2_004100.md`, `docs/f2_004310.md` and `docs/f2_005035.md`.
+
+#### 004100
+
+| Setting | Pasted face recall | Off face mean | Off face from boxes | Exposed 40+ | Wearer hand damage | Other hands | Masked mean | Gates |
+|---|---|---|---|---|---|---|---|---|
+| The build as it ships | 87.8% | 0.18% | 0.036% | 91 | 0.00% | 0.00% | 0.50% | pass |
+| and with a 2560 scan | 90.6% | 0.23% | 0.051% | 79 | 0.00% | 0.00% | 0.55% | pass |
+| 2560 and conf 0.5 | 90.7% | 0.22% | 0.049% | 66 | 0.00% | 0.00% | 0.56% | pass |
+| verify off, conf 0.6 | 85.4% | 0.01% | 0.002% | 181 | 0.39% | 0.00% | 0.36% | refused |
+| engine both, conf 0.6 | 85.9% | 0.01% | 0.003% | 131 | 0.39% | 0.00% | 0.36% | refused |
+
+#### 004310
+
+| Setting | Pasted face recall | Off face mean | Off face from boxes | Exposed 40+ | Wearer hand damage | Other hands | Masked mean | Gates |
+|---|---|---|---|---|---|---|---|---|
+| The build as it ships | 78.7% | 0.77% | 0.294% | 62 | 0.00% | 0.00% | 2.27% | refused |
+| and with a 2560 scan | 81.0% | 0.86% | 0.324% | 62 | 0.00% | 0.00% | 2.44% | refused |
+| 2560 and conf 0.5 | 81.8% | 0.88% | 0.332% | 67 | 0.00% | 0.00% | 2.53% | refused |
+| verify off, conf 0.6 | 74.3% | 0.08% | 0.032% | 271 | 0.00% | 8.43% | 1.48% | pass |
+| engine both, conf 0.6 | 75.3% | 0.08% | 0.028% | 282 | 0.00% | 8.43% | 1.48% | pass |
+
+#### 005035
+
+| Setting | Pasted face recall | Off face mean | Off face from boxes | Exposed 40+ | Wearer hand damage | Other hands | Masked mean | Gates |
+|---|---|---|---|---|---|---|---|---|
+| The build as it ships | 86.2% | 0.43% | 0.129% | 435 | 0.00% | 0.21% | 0.67% | pass |
+| and with a 2560 scan | 86.7% | 0.43% | 0.138% | 527 | 0.00% | 0.21% | 0.70% | pass |
+| 2560 and conf 0.5 | 87.1% | 0.44% | 0.139% | 539 | 0.00% | 0.21% | 0.72% | pass |
+| verify off, conf 0.6 | 82.9% | 0.07% | 0.036% | 585 | 1.41% | 2.67% | 0.34% | refused |
+| engine both, conf 0.6 | 83.2% | 0.08% | 0.037% | 676 | 1.41% | 2.67% | 0.35% | refused |
+
+**Verification is not optional, and the zone does not make it so.** Turning
+it off, or letting the second detector scan the whole frame instead of
+confirming, masks 0.39 percent of the wearer's hand pixels on `004100` and
+1.41 percent on `005035`, against a gate of 0.1 percent. The zone protects a
+face only where a hand is on it, and it only knows the hands its own palm
+detector found; an unconfirmed box on a hand the palm detector missed is
+still a mask on the wearer's hand. Section 10's finding stands for `verify`
+and for `engine both`, and the zone changed nothing about it.
+
+**The 2560 scan is not the win it looked like.** It buys 2.9 points of pasted
+face recall on `004100`, 2.3 on `004310` and 0.5 on `005035`, and it costs a
+third whole frame scan:
+
+| `det_sizes` | Detection |
+|---|---|
+| 1280, 1920 | 59.0 ms a frame |
+| 1280, 1920, 2560 | 125.3 ms a frame |
+
+More than double, on 60 frames of `004100` in one process. And the frames
+where a known face is left visible, which is the number the hard gate reads,
+move the wrong way on the longest file: 435 to 527 on `005035`. The proxy is
+not monotone, because more detections mean more tracks and every track is
+another face that can be counted as exposed. A setting that doubles the cost
+of every run for a gain that one file reverses is not a default.
+
+**`third_conf` at 0.1 and `verify_conf_sure` at 0.3 do nothing measurable.**
+Over all three files they move pasted face recall by at most 0.6 points and
+usually by less than 0.1, and they move no gate. Neither is worth a knob.
+
+### 19.4 Three files, three winners, and nothing that passes everywhere
+
+`eval/sweep.py` picks a winner for one video. Run on each of the three it
+picks a different one: `004100` wants 2560 at `conf` 0.5 with verification
+on, `004310` wants 2560 at `conf` 0.5 with verification **off**, and `005035`
+wants `conf` 0.4 with the shipped scan and `third_conf` 0.1. A default has to
+hold on all of them, so `eval/combine.py` asks the question that way round:
+
+    .venv\Scripts\python.exe -m eval.combine VIDEO VIDEO VIDEO
+
+**Of the 54 settings measured on all three files, none passes every gate on
+every file.** The shipped build does not either. The table is
+`docs/f2_combined.md`.
+
+### 19.5 The gates have no feasible point once verification is on
+
+This is the finding that is larger than the question the package was asked.
+
+Verification has to stay on: two of the three files refuse to let it off, at
+the one gate that is not a trade. But on `004310` **every** setting with
+verification on exceeds the off face gate, by 0.07 points at the shipped
+settings and more everywhere else, and its detector box part sits at 0.294
+percent against a gate of 0.3. So the feasible set is empty, and it is empty
+for the build that ships today.
+
+This is not a regression. It is a number that had not been looked at. Each
+per file sweep chose its own winner and the shipped defaults were a synthesis
+across the three, so the combination the build actually carries was never
+scored on every file until now. On `004310` that file's own old winner used
+`conf_agree` 0.6 and read 0.65 percent; the shipped `conf_agree` 0.35 with
+`agree_max_px` 48 reads 0.77.
+
+The mechanism is not a mistake in the mask. `verify` does two things under
+one name: it drops primary boxes that nothing confirms, and it **adds**
+YuNet boxes below threshold that CenterFace is sure about. On `004310` that
+second half turns 62 exposed frames into 271 when removed, and it is what
+lifts off face masking, because each added box is another track and a track's
+entry tail is drawn before the face is visible. The sweep's own comment says
+that is where the gate went from 0.3 to 0.7 percent in the first place.
+
+**Which leaves a conflict worth the owner's first five minutes on Monday.**
+These gates encode "hands untouched, minimum region everywhere". The rule of
+2026-09-11 replaced that with "inside the zone precision is absolute; outside
+it a miss is the leak and over masking of non handled things is the cheaper
+error, subject to a per frame mask budget". The pipeline already carries that
+budget, `mask_budget` at 5 percent of a frame, and the shipped build sits at
+0.50, 2.27 and 0.67 percent masked on the three files. Measured against the
+rule the owner wrote, the build is well inside its budget on every file.
+Measured against gates written before that rule, it fails on one.
+
+The gates were not touched in this pass. Changing the measure in the same
+pass that needs it changed is the move a reader should trust least, and the
+verdict does not depend on it: nothing here earns a default change under
+either reading, because verification is refused on the hands and 2560 is
+refused on its cost. What the gates decide is whether the **next** package
+that wants recall has anywhere to stand.
+
+### 19.6 What this does not do
+
+`eval/reid` was not re-run. It is a measurement of the copy a setting
+produces, and no setting moved, so it would re-measure the build section 12
+already measured.
+
+Nothing here says the recall the build has is enough. It says the four ways
+this grid had of raising it are each refused by something that is not
+negotiable, or cost more than they return. The honest next moves are a second
+detector view that does not add tracks, which is package F1's second chance
+at the frames the output side check already names, and footage from a second
+venue: every number above comes from one building.

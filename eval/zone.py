@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -40,12 +42,111 @@ sys.path.insert(0, str(REPO))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
+from faceblur.hands import Hand  # noqa: E402
 from faceblur.settings import Settings  # noqa: E402
 from faceblur.verify import detection_from_row, of_kind  # noqa: E402
 from faceblur.zone import (HandFinder, alpha_for, build, polygon_for,  # noqa: E402
                            qualifies, share)
 
 AUDIT_DIR = REPO / "docs" / "audits"
+CACHE_DIR = REPO / "eval" / "cache"
+
+# Bump when what the hands cache holds changes.
+HANDS_CACHE_VERSION = 1
+# What the hands cache depends on, beyond the module's own source.
+HANDS_SETTINGS = ("zone_window", "zone_stride", "zone_nms", "zone_top_frac",
+                  "hand_conf", "hand_presence", "zone_min_hand_px",
+                  "zone_edge_frac", "zone_device")
+
+
+def hands_fingerprint(settings: Settings) -> str:
+    """What the hands cache depends on. A mismatch rebuilds rather than misleads.
+
+    `faceblur/zone.py` is hashed into it, so an edit to the geometry or the
+    qualification rule invalidates every cache built from the old one. That is
+    the rule `eval/common.py` learned on 2026-09-08, when a stale cache made a
+    week of numbers describe a build that no longer existed.
+    """
+    src = (REPO / "faceblur" / "zone.py").read_bytes()
+    key = json.dumps({"version": HANDS_CACHE_VERSION,
+                      "source": hashlib.sha256(src).hexdigest(),
+                      "settings": {k: getattr(settings, k) for k in HANDS_SETTINGS}},
+                     sort_keys=True, default=str)
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def hands_cache_path(video: Path) -> Path:
+    return CACHE_DIR / f"{Path(video).stem}.hands.json"
+
+
+def load_hands(video: Path, settings: Settings) -> dict | None:
+    """The hands cache for this video, or None when there is none that fits."""
+    path = hands_cache_path(video)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if data.get("fingerprint") == hands_fingerprint(settings) else None
+
+
+def build_hands_cache(video: Path, settings: Settings | None = None,
+                      quiet: bool = False) -> dict:
+    """Every qualifying hand of every frame, cached as quads.
+
+    The evaluation harness builds its masks from a cache rather than from the
+    pipeline, so without this it scores masks the pipeline would never apply:
+    it has no zone, and the zone is subtracted from every mask that ships.
+    Report 17.4 found that and package F2 could not start until it was fixed.
+
+    Boxes and quads only, as with every cache here. No crops, no frames.
+    """
+    from faceblur.segments import decode_range, frame_times
+    from faceblur.video import probe
+
+    settings = settings or Settings(mask=("face", "screen"))
+    found = load_hands(video, settings)
+    if found is not None:
+        return found
+    finder = HandFinder(settings)
+    info, times = probe(video), frame_times(video)
+    n = len(times)
+    frames: dict[str, list] = {}
+    started = time.time()
+    for i, frame in enumerate(decode_range(video, times, 0, n, info, settings.hwaccel)):
+        if i % max(1, settings.zone_stride):
+            continue
+        hands = [h for h in finder.detect(frame)
+                 if qualifies(h, frame.shape[:2], settings)]
+        if hands:
+            frames[str(i)] = [h.to_dict() for h in hands]
+        if not quiet and i and i % 500 == 0:
+            rate = (time.time() - started) / i
+            print(f"  {i}/{n} frames, {1000 * rate:.0f} ms each, "
+                  f"{rate * (n - i) / 60:.0f} min left", flush=True)
+    data = {"version": HANDS_CACHE_VERSION,
+            "fingerprint": hands_fingerprint(settings),
+            "video": video.name, "frames_total": n,
+            "shape": [info.height, info.width],
+            "seconds": round(time.time() - started, 1), "frames": frames}
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    part = hands_cache_path(video).with_suffix(".part")
+    part.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(part, hands_cache_path(video))
+    return data
+
+
+def zone_from_cache(data: dict, settings: Settings, frames: int,
+                    fps: float, shifts=None) -> list:
+    """`zone.build`'s answer, from a cache rather than from the models."""
+    hands = {}
+    for key, rows in data.get("frames", {}).items():
+        hands[int(key)] = [
+            Hand(tuple(tuple(p) for p in row["quad"]), row["score"],
+                 tuple(row["palm"]), row.get("presence", 1.0))
+            for row in rows]
+    return build(hands, shifts, settings, frames, fps, tuple(data["shape"]))
 
 
 # The angles the orientation table is printed at. Wide, because the question
@@ -328,6 +429,10 @@ def render_audit(video: Path, settings: Settings, count: int, out_dir: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("video", nargs="*")
+    ap.add_argument("--cache-hands", action="store_true",
+                    help="find every qualifying hand of every frame and cache the "
+                         "quads, so the evaluation harness can subtract the zone "
+                         "the way the pipeline does")
     ap.add_argument("--orientation", action="store_true",
                     help="print the wrist to knuckle tables of report 17.7 from the "
                          "committed audit labels, and exit. Needs no video and no "
@@ -353,6 +458,14 @@ def main() -> int:
         ap.error("name a video, or pass --orientation")
 
     settings = Settings(mask=("face", "screen"))
+    if args.cache_hands:
+        for name in args.video:
+            data = build_hands_cache(Path(name), settings)
+            hands = sum(len(v) for v in data["frames"].values())
+            print(f"{data['video']}: {hands} hands over {len(data['frames'])} of "
+                  f"{data['frames_total']} frames, {data['seconds']}s "
+                  f"-> {hands_cache_path(Path(name)).name}", flush=True)
+        return 0
     if args.stride:
         settings = settings.with_changes(zone_stride=args.stride)
     results = []

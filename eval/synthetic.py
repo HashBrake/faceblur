@@ -22,6 +22,7 @@ import hashlib
 import json
 import math
 import multiprocessing
+import os
 import pickle
 import random
 import sys
@@ -31,8 +32,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from eval.common import (CACHE_DIR, REFERENCE, det_from_dict, ellipse_mask, load_json,
-                         read_frames, size_bucket)
+from eval.common import (CACHE_DIR, REFERENCE, det_from_dict, ellipse_mask,
+                         fingerprint, load_json, read_frames, size_bucket)
 from faceblur.detect import Detection, DetectorBank, filter_candidates, weak_candidates
 from faceblur.motion import downscale, estimate_shift
 from faceblur.pipeline import tracker_for
@@ -49,17 +50,26 @@ KINDS = [("interior", 36), ("edge", 18), ("pan", 18)]
 VERSION = 3
 
 
-def data_path(video: Path) -> Path:
-    return CACHE_DIR / f"{video.stem}.synthetic.v{VERSION}.pkl"
+def data_path(video: Path, settings: Settings | None = None) -> Path:
+    """Where the pasted face set for these detection settings lives.
+
+    The name carries the detection fingerprint because the set holds the
+    detector's answers on every pasted frame and not only the pastes. A set
+    built with `engine yunet` at 1280 and 1920 cannot score `engine both` or
+    a 2560 scan: it would quietly report the answer of the detector it was
+    built with, and package F2 sweeps exactly those settings.
+    """
+    stamp = fingerprint(settings or Settings())
+    return CACHE_DIR / f"{video.stem}.synthetic.v{VERSION}.{stamp}.pkl"
 
 
 def stamp_of(consensus: dict) -> str:
     return hashlib.sha256(json.dumps(consensus, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def load(video: Path) -> list:
+def load(video: Path, settings: Settings | None = None) -> list:
     """The sequences on disk, whatever they were built from."""
-    return pickle.loads(data_path(video).read_bytes())["data"]
+    return pickle.loads(data_path(video, settings).read_bytes())["data"]
 
 
 def face_bank(video: Path, consensus: dict, limit: int = 24) -> list[dict]:
@@ -152,9 +162,9 @@ _FACES = None
 _VIDEO = None
 
 
-def _init(video, faces):
+def _init(video, faces, settings=None):
     global _BANK, _FACES, _VIDEO
-    _BANK = DetectorBank(Settings())
+    _BANK = DetectorBank(settings or Settings())
     _FACES = faces
     _VIDEO = video
 
@@ -213,19 +223,14 @@ def _sequence(task):
             "shape": (H, W), "frames": out, "shifts": shifts, "pan": pan}
 
 
-def generate(video: Path, consensus: dict, workers: int | None = None) -> list:
-    from faceblur.detect import default_workers
-    workers = workers or default_workers()
-    path = data_path(video)
-    stamp = stamp_of(consensus)
-    if path.exists():
-        held = pickle.loads(path.read_bytes())
-        if held.get("stamp") == stamp:
-            return held["data"]
-        path.unlink()          # the pseudo-labels these were cut from have moved
-    faces = face_bank(video, consensus)
-    if not faces:
-        raise SystemExit("no confident faces to build a bank from")
+def task_list(consensus: dict) -> list[tuple]:
+    """One task per sequence: seed, background frame, size, blur, kind.
+
+    Its own function because the sequences on disk carry their seed and not
+    the frame they were pasted into, and `zone_bias` needs that frame to ask
+    where the wearer's hands were. The generator is seeded, so replaying this
+    recovers the mapping exactly rather than approximately.
+    """
     consensus_frames = [int(k) for k in consensus["frames"]]
     rng = random.Random(7)
     tasks = []
@@ -235,11 +240,31 @@ def generate(video: Path, consensus: dict, workers: int | None = None) -> list:
             tasks.append((seed, rng.choice(consensus_frames), SIZES[s % len(SIZES)],
                           BLURS[(s // len(SIZES)) % len(BLURS)], kind))
             seed += 1
+    return tasks
+
+
+def generate(video: Path, consensus: dict, workers: int | None = None,
+             settings: Settings | None = None) -> list:
+    from faceblur.detect import default_workers
+    workers = workers or default_workers()
+    path = data_path(video, settings)
+    stamp = stamp_of(consensus)
+    if path.exists():
+        held = pickle.loads(path.read_bytes())
+        if held.get("stamp") == stamp:
+            return held["data"]
+        path.unlink()          # the pseudo-labels these were cut from have moved
+    faces = face_bank(video, consensus)
+    if not faces:
+        raise SystemExit("no confident faces to build a bank from")
+    tasks = task_list(consensus)
     ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(workers, initializer=_init, initargs=(str(video), faces)) as pool:
+    with ctx.Pool(workers, initializer=_init, initargs=(str(video), faces, settings)) as pool:
         result = list(pool.imap_unordered(_sequence, tasks))
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(pickle.dumps({"version": VERSION, "stamp": stamp, "data": result}))
+    part = path.with_suffix(".part")
+    part.write_bytes(pickle.dumps({"version": VERSION, "stamp": stamp, "data": result}))
+    os.replace(part, path)
     return result
 
 
@@ -306,16 +331,87 @@ def evaluate(settings: Settings, data: list, cover: float = 0.9) -> dict:
     }
 
 
+def zone_bias(video: Path, data: list, consensus: dict,
+              settings: Settings | None = None) -> dict:
+    """How much of the pasted face recall the handled zone would take back.
+
+    This set pastes faces wherever the sequence puts them, and it builds its
+    masks without the zone, so its recall is the recall of a build that does
+    not subtract the wearer's hands. Every other number in package F2 does
+    subtract them. The difference cannot be assumed small, so it is measured:
+    for every pasted face that counts, how much of its identity ellipse lies
+    under the polygons that protect a face, which are the strict hand quads
+    when `zone_face_needs_hand` is on.
+
+    A face is counted as taken back when more than a tenth of its ellipse is
+    protected, because recall wants the mask's alpha to average 0.9 over the
+    ellipse and the zone multiplies that alpha by what it protects.
+
+    The number is an upper bound on an artefact rather than a property of the
+    footage. A pasted face lands on the wearer's hands as often as chance puts
+    it there; a real one rarely does.
+    """
+    from eval.zone import load_hands
+    from faceblur.hands import Hand
+    from faceblur.zone import alpha_for, build, moved
+
+    settings = settings or Settings()
+    held = load_hands(Path(video), settings)
+    if held is None:
+        return {"faces": 0, "taken_back": 0, "share": None,
+                "note": "no hands cache; run eval.zone --cache-hands"}
+    backgrounds = {t[0]: t[1] for t in task_list(consensus)}
+    rows_for = held.get("frames", {})
+    faces = taken = touched = 0
+    for seq in data:
+        shape = tuple(seq["shape"])
+        rows = rows_for.get(str(backgrounds.get(seq["seed"])), [])
+        found = [Hand(tuple(tuple(q) for q in r["quad"]), r["score"],
+                      tuple(r["palm"]), r.get("presence", 1.0)) for r in rows]
+        zone = build({0: found}, None, settings, 1, 30.0, shape)[0] if found else None
+        protects = tuple(zone.hands) if zone and settings.zone_face_needs_hand else (
+            tuple(zone.live) if zone else ())
+        pan = seq.get("pan") or (0.0, 0.0)
+        for i, (_, truth) in enumerate(seq["frames"]):
+            here = tuple(moved(p, pan[0] * i, pan[1] * i) for p in protects) \
+                if seq.get("kind") == "pan" else protects
+            zalpha = alpha_for(shape, here, settings.feather) if here else None
+            for d in truth:
+                ident = ellipse_mask(shape, d, REFERENCE)
+                if not ident.any() or _inside_share(shape, d) < 0.5:
+                    continue
+                faces += 1
+                if zalpha is None:
+                    continue
+                share = float(zalpha[ident].mean())
+                touched += share > 0.0
+                taken += share > 0.1
+    return {"faces": faces, "taken_back": taken, "touched": touched,
+            "share": taken / faces if faces else None,
+            "touched_share": touched / faces if faces else None, "note": ""}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--json", default=None)
+    ap.add_argument("--zone-bias", action="store_true",
+                    help="how much of the pasted face recall the zone takes back")
     args = ap.parse_args()
     video = Path(args.video)
     consensus = load_json(CACHE_DIR / f"{video.stem}.consensus.json")
-    data = generate(video, consensus)
-    settings = Settings(**(json.loads(args.json) if args.json else {}))
-    r = evaluate(settings, data)
+    settings_in = Settings(**(json.loads(args.json) if args.json else {}))
+    data = generate(video, consensus, settings=settings_in)
+    if args.zone_bias:
+        b = zone_bias(video, data, consensus, settings_in)
+        if b["share"] is None:
+            print(b["note"])
+            return 1
+        print(f"{video.name}: {b['faces']} pasted faces counted, "
+              f"{b['touched']} touch the zone ({100*b['touched_share']:.2f}%), "
+              f"{b['taken_back']} taken back ({100*b['share']:.2f}%)")
+        return 0
+    r = evaluate(settings_in, data)
     for k, (h, t, rate) in r["recall"].items():
         print(f"  {k:14s} {h:4d}/{t:4d} = {100*rate:5.1f}%")
     print(f"  mask area / identity ellipse area: {r['mask_over_target_area']:.2f}")

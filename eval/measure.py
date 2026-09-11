@@ -13,7 +13,7 @@ Numbers per settings:
   produced, as against tails and gap fills the tracker drew. A tail before a
   face enters the picture is off-face by construction; a detection box off a
   face is the thing the gate exists to catch.
-- hand_damage: share of hand pixels the mask touches
+- hand_damage_wearer: share of hand pixels the mask touches
 - exposed_40, exposed_24_40: frames in which a face a confirmed track knew
   about is still visible (YuNet at 0.3 or more within a box size of where the
   track's motion and the camera put it, up to 30 frames from a sighting) and
@@ -40,7 +40,7 @@ from eval.common import (CACHE_DIR, REFERENCE, build_cache, det_from_dict,
                          ellipse_mask, load_json, polygon_mask, shifts_list, size_bucket)
 from faceblur.detect import confirmation, filter_candidates, iou, weak_candidates
 from faceblur.pipeline import tracker_for
-from faceblur.redact import build_alpha
+from faceblur.redact import alpha_with_zone
 from faceblur.settings import Settings
 
 
@@ -156,18 +156,54 @@ def exposure(cache: dict, settings: Settings, per_frame, tracks, gap: int = 45,
     return {"exposed_40": len(big), "exposed_24_40": len(mid)}
 
 
-def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> dict:
+def zones_for(video, settings: Settings, cache: dict, frames: int):
+    """The handled zone per frame, from the hands cache, or none at all.
+
+    The harness builds its masks from a cache rather than from the pipeline,
+    so without this it scores masks the pipeline would never apply: the zone
+    is subtracted from every mask that ships. Report 17.4 found that, and
+    package F2's numbers would have described a build that does not exist.
+
+    A missing hands cache is not silently a zone of nothing. Every gate here
+    is about what reaches the frame, and scoring with no zone at all reads as
+    more off face masking than the build produces, so it says so and the
+    caller decides.
+    """
+    from eval.zone import load_hands, zone_from_cache
+    from faceblur.zone import ZoneFrame
+
+    if not settings.zone:
+        return [ZoneFrame() for _ in range(frames)], "the zone is off"
+    data = load_hands(Path(video), settings) if video else None
+    if data is None:
+        return ([ZoneFrame() for _ in range(frames)],
+                "no hands cache; run eval.zone --cache-hands")
+    shifts = shifts_list(cache, frames) if settings.camera_comp else None
+    return zone_from_cache(data, settings, frames, 30.0, shifts), ""
+
+
+def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict,
+             video=None) -> dict:
     shape = tuple(cache["shape"])
     H, W = shape
     per_frame, tracks = tracked(cache, settings)
+    zones, zone_note = zones_for(video, settings, cache, len(per_frame))
 
     covered = total = 0
     by_size = defaultdict(lambda: [0, 0])
     off, off_loose, off_det, masked = [], [], [], []
+    # Split, because the rule of 2026-09-11 protects the wearer's hands and
+    # not everybody's. MediaPipe's hulls are every hand in the frame, so a
+    # mask landing on a bystander's hand is permitted now and counting it
+    # against the build measures the scope rather than a fault. Report 17.4.
     hand_hit = hand_area = 0.0
+    other_hit = other_area = 0.0
+    hulls_mine = hulls_other = 0
     for key, faces in consensus["frames"].items():
         i = int(key)
-        alpha = build_alpha(shape, per_frame[i], settings) if per_frame[i] else None
+        zone = zones[i] if i < len(zones) else None
+        alpha = (alpha_with_zone(shape, per_frame[i], settings, zone)
+                 if per_frame[i] else None)
         hard = (alpha >= 0.5) if alpha is not None else np.zeros(shape, bool)
         masked.append(float(hard.mean()))
 
@@ -202,15 +238,39 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
                                     1.5 * b[2], 1.5 * b[3]), W, H)
         off_loose.append(float((hard & ~loose_zone).mean()))
         dets_only = [d for d in per_frame[i] if d.source != "track"]
-        hard_det = (build_alpha(shape, dets_only, settings) >= 0.5) if dets_only \
-            else np.zeros(shape, bool)
+        hard_det = (alpha_with_zone(shape, dets_only, settings, zone) >= 0.5) \
+            if dets_only else np.zeros(shape, bool)
         off_det.append(float((hard_det & ~loose_zone).mean()))
 
         hands = oracle["frames"].get(key, {}).get("hands", [])
         if hands:
-            hm = polygon_mask(shape, hands)
-            hand_area += float(hm.sum())
-            hand_hit += float((hm & hard).sum())
+            # One hull at a time, so each can be asked whether it is the
+            # wearer's. A hull the zone touches is theirs; the rest are other
+            # people's and are reported without a gate.
+            # Live polygons and the strict quads, not the remembered ones:
+            # memory protects text and screens only, so a face mask may land
+            # in a remembered polygon without breaking any promise, and
+            # charging it to the wearer would gate on a rule that does not
+            # exist.
+            in_zone = None
+            if zone is not None and (zone.live or zone.hands):
+                from faceblur.zone import alpha_for
+                in_zone = alpha_for(shape, tuple(zone.live) + tuple(zone.hands),
+                                    0.0) >= 0.5
+            for hull in hands:
+                hm = polygon_mask(shape, [hull])
+                area = float(hm.sum())
+                if not area:
+                    continue
+                mine = in_zone is not None and bool((hm & in_zone).any())
+                if mine:
+                    hulls_mine += 1
+                    hand_area += area
+                    hand_hit += float((hm & hard).sum())
+                else:
+                    hulls_other += 1
+                    other_area += area
+                    other_hit += float((hm & hard).sum())
 
     off_a, off_l, m_a = np.asarray(off), np.asarray(off_loose), np.asarray(masked)
     off_d = np.asarray(off_det)
@@ -224,7 +284,15 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
         "off_face_mean": float(off_l.mean()),
         "off_face_max": float(off_l.max()),
         "off_face_detections_mean": float(off_d.mean()),
-        "hand_damage": hand_hit / hand_area if hand_area else None,
+        # The wearer's hands, which the zone protects and the gate reads.
+        "hand_damage_wearer": hand_hit / hand_area if hand_area else None,
+        # Everybody else's, reported and not gated: the rule does not protect
+        # them, and masking a bystander's hand is over masking rather than a
+        # broken promise.
+        "hand_damage_other": other_hit / other_area if other_area else None,
+        "hand_hulls_wearer": hulls_mine,
+        "hand_hulls_other": hulls_other,
+        "zone_note": zone_note,
         "masked_mean": float(m_a.mean()),
         "masked_p95": float(np.percentile(m_a, 95)),
         "masked_max": float(m_a.max()),
@@ -236,8 +304,14 @@ def evaluate(settings: Settings, cache: dict, consensus: dict, oracle: dict) -> 
     }
 
 
-def load_inputs(video: Path):
-    cache = build_cache(video)
+def load_inputs(video: Path, settings: Settings | None = None):
+    """The raw cache, the pseudo-labels and the oracle.
+
+    `settings` chooses which raw cache, because package F2 sweeps settings
+    that change what is detected: the cache for `engine both` holds boxes the
+    cache for `engine yunet` was never asked for.
+    """
+    cache = build_cache(video, settings)
     consensus = load_json(CACHE_DIR / f"{video.stem}.consensus.json")
     oracle = load_json(CACHE_DIR / f"{video.stem}.oracle.json")
     return cache, consensus, oracle
@@ -245,7 +319,7 @@ def load_inputs(video: Path):
 
 def describe(r: dict) -> str:
     rb = "  ".join(f"{k}: {v[0]}/{v[1]}" for k, v in r["recall_by_size"].items())
-    hd = "n/a" if r["hand_damage"] is None else f"{100*r['hand_damage']:.2f}%"
+    hd = "n/a" if r["hand_damage_wearer"] is None else f"{100*r['hand_damage_wearer']:.2f}%"
     return (f"recall {100*(r['recall'] or 0):5.1f}%  off-face mean {100*r['off_face_mean']:.2f}% "
             f"max {100*r['off_face_max']:.2f}% (strict {100*r['off_face_strict_mean']:.2f}%, "
             f"detections {100*r['off_face_detections_mean']:.2f}%)  "
@@ -262,8 +336,11 @@ def main() -> int:
     args = ap.parse_args()
     video = Path(args.video)
     settings = Settings(**(json.loads(args.json) if args.json else {}))
-    cache, consensus, oracle = load_inputs(video)
-    r = evaluate(settings, cache, consensus, oracle)
+    # The settings choose the cache as well as what is done with it: a
+    # `--json` that names `engine` or `det_sizes` needs the cache built for
+    # them, not the default one.
+    cache, consensus, oracle = load_inputs(video, settings)
+    r = evaluate(settings, cache, consensus, oracle, video)
     print(describe(r))
     return 0
 

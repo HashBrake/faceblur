@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import os
 import pickle
 import sys
 from pathlib import Path
@@ -118,8 +119,42 @@ def shifts_list(cache: dict, n: int) -> list[tuple[float, float]]:
     return [tuple(have.get(i, (0.0, 0.0))) for i in range(n)]
 
 
-def cache_path(video: Path) -> Path:
-    return CACHE_DIR / f"{video.stem}.raw.pkl"
+def cache_path(video: Path, settings: Settings | None = None) -> Path:
+    """Where the raw cache for these detection settings lives.
+
+    The name carries the fingerprint because package F2 compares settings
+    that change what is detected and not only what is done with it: `engine
+    both` scans the whole frame with the second detector, and a 2560 scan
+    adds a size, and neither can be filtered out of a cache that was built
+    without it. With one file per video each of those comparisons would
+    silently re-detect the video it had just detected, and a sweep that
+    walked them in a loop would never finish.
+    """
+    if settings is None:
+        settings = Settings(verify=True)
+    return CACHE_DIR / f"{video.stem}.raw.{fingerprint(settings)}.pkl"
+
+
+def adopt_legacy_cache(video: Path, settings: Settings) -> None:
+    """Give the old single name to its fingerprint, once.
+
+    Every raw cache before 2026-09-12 was `<stem>.raw.pkl` whatever it held,
+    and the fingerprint was inside it. Re-detecting four videos to change a
+    file name would be an hour of GPU time for nothing, so a legacy file
+    whose own fingerprint matches is renamed instead. One that does not match
+    is left alone: `build_cache` will not read it, and deleting a file this
+    function was not asked about is not its business.
+    """
+    legacy = CACHE_DIR / f"{video.stem}.raw.pkl"
+    wanted = cache_path(video, settings)
+    if not legacy.is_file() or wanted.exists():
+        return
+    try:
+        held = pickle.loads(legacy.read_bytes())
+    except (OSError, ValueError, pickle.UnpicklingError):
+        return
+    if held.get("version") == CACHE_VERSION and held.get("fingerprint") == fingerprint(settings):
+        os.replace(legacy, wanted)
 
 
 def fingerprint(settings: Settings) -> str:
@@ -137,8 +172,9 @@ def build_cache(video: Path, settings: Settings | None = None,
     Runs across worker processes. Each decodes the whole video, which is cheap,
     and detects on its share of the frames.
     """
-    path = cache_path(video)
     settings = settings or Settings(verify=True)
+    adopt_legacy_cache(video, settings)
+    path = cache_path(video, settings)
     stamp = fingerprint(settings)
     if path.exists():
         cache = pickle.loads(path.read_bytes())
@@ -163,7 +199,12 @@ def build_cache(video: Path, settings: Settings | None = None,
     cache = {"version": CACHE_VERSION, "fingerprint": stamp, "video": video.name,
              "shape": shape, "det_sizes": list(settings.det_sizes),
              "frames": frames, "shifts": shifts}
-    path.write_bytes(pickle.dumps(cache))
+    # Through a part file, because this is an hour of detection on the long
+    # video and a run that is killed halfway through the write would leave a
+    # truncated pickle where a cache should be.
+    part = path.with_suffix(".part")
+    part.write_bytes(pickle.dumps(cache))
+    os.replace(part, path)
     return cache
 
 

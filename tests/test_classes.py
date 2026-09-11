@@ -352,4 +352,4 @@ def test_the_sweep_measures_faces_and_never_sees_a_screen():
     from eval import sweep
 
     assert set(sweep.GATES) == {"off_face_mean", "off_face_max",
-                                "off_face_detections_mean", "hand_damage"}
+                                "off_face_detections_mean", "hand_damage_wearer"}

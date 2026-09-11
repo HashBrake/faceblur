@@ -433,3 +433,72 @@ def test_the_angle_is_recovered_from_the_quad_the_audit_committed():
     down = "100,300 200,300 200,100 100,100"
     assert abs(abs(pointing(down)) - 180) < 1e-6
     assert pointing("1,2 3,4") is None
+
+
+# ------------------------------------------- the harness measures what ships
+
+def test_the_hands_cache_is_rebuilt_when_the_zone_code_moves(tmp_path, monkeypatch):
+    """The fingerprint carries `faceblur/zone.py` itself.
+
+    The lesson of 2026-09-08: a cache that outlives the code that filled it
+    makes every number after it describe a build that no longer exists. The
+    hands cache decides what the zone protects in every F2 number, so it gets
+    the same rule as the face cache.
+    """
+    import eval.zone as ez
+
+    settings = Settings(mask=("face",))
+    first = ez.hands_fingerprint(settings)
+    fake = tmp_path / "faceblur"
+    fake.mkdir()
+    (fake / "zone.py").write_bytes(b"# a zone module that says something else\n")
+    monkeypatch.setattr(ez, "REPO", tmp_path)
+    assert ez.hands_fingerprint(settings) != first
+
+
+def test_the_hands_cache_follows_the_settings_that_decide_what_is_cached():
+    """And only those. A rebuild is an hour of GPU time on the long file, so
+    a setting that is applied after the hands are found must not force one."""
+    import eval.zone as ez
+
+    base = Settings(mask=("face",))
+    assert ez.hands_fingerprint(base) == ez.hands_fingerprint(Settings(mask=("face",)))
+    narrower = Settings(mask=("face",), zone_window=384)
+    assert ez.hands_fingerprint(narrower) != ez.hands_fingerprint(base)
+    grown = Settings(mask=("face",), zone_scale=2.0)
+    assert ez.hands_fingerprint(grown) == ez.hands_fingerprint(base)
+
+
+def test_a_cached_hand_rebuilds_the_same_zone_as_the_hand_itself():
+    """`zone_from_cache` is `build` with the models replaced by a file.
+
+    If these two ever disagree the sweep scores a zone the pipeline would not
+    draw, which is the fault report 17.4 found in the first place.
+    """
+    import eval.zone as ez
+
+    settings = Settings(mask=("face",))
+    h = hand()
+    live = build({4: [h]}, None, settings, 8, 30.0, SHAPE)
+    data = {"shape": list(SHAPE), "frames": {"4": [h.to_dict()]}}
+    from_file = ez.zone_from_cache(data, settings, 8, 30.0, None)
+    assert len(from_file) == len(live) == 8
+    assert any(z.live for z in from_file)
+    for a, b in zip(live, from_file):
+        assert np.allclose(np.asarray(a.live, float),
+                           np.asarray(b.live, float), atol=0.1)
+        assert np.allclose(np.asarray(a.hands, float),
+                           np.asarray(b.hands, float), atol=0.1)
+
+
+def test_the_harness_says_so_when_it_has_no_hands_cache():
+    """Silence would read as a zone of nothing, which scores more off face
+    masking than the build produces. The note travels with the numbers."""
+    from eval.measure import zones_for
+
+    cache = {"shape": list(SHAPE), "frames": {}}
+    zones, note = zones_for(None, Settings(mask=("face",)), cache, 3)
+    assert len(zones) == 3 and not any(z.live for z in zones)
+    assert "cache" in note
+    off = Settings(mask=("face",), zone=False)
+    assert zones_for(None, off, cache, 3)[1] == "the zone is off"
