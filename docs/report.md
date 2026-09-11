@@ -1738,17 +1738,30 @@ The three populations the gate separates, on `004310`:
 |---|---|---|
 | Made with `--no-zone` | 32 | 17.692 % |
 | Made with the zone fading inwards | 13 | 1.881 % |
-| Made with the zone as it ships | 1 | 0.501 % |
+| Made with the zone as it ships | 0 | 0.501 % |
 
 An order of magnitude between a copy that broke the rule and one that keeps
 it, which is what makes the gate worth having.
 
-The first guess of 0.5 percent sits between them, and on the shipped build
-`004310` reads 0.501 on one frame, which holds that copy back for `zone` by a
-thousandth. The other three files read 0.097 to 0.299. That threshold is a
-first guess sitting almost exactly on a real reading, which is the worst place
-for one to sit, and the next pass to touch the zone should set it from a
-distribution rather than leave it here.
+**`zone_gate_changed` is 1.0 percent, and the first guess of 0.5 was a
+shipping defect.** At 0.5 the clean `004310` read 0.501 on one frame and was
+quarantined for `zone` by a thousandth: a gate that fires on a good copy is
+worse than no gate, because the next person turns it off. The four clean
+readings and a broken one, which is the distribution the threshold should have
+been set from in the first place:
+
+| Copy | Worst frame |
+|---|---|
+| `003939`, clean | 0.097 % |
+| `004100`, clean | 0.099 % |
+| `005035`, clean | 0.299 % |
+| `004310`, clean | 0.501 % |
+| `004310` made with `--no-zone` | 17.692 % |
+
+There is a factor of thirty between the worst clean reading and a copy that
+actually broke the rule, and nothing at all in between. 1.0 percent sits in
+that gap with a two times margin over the worst clean file and seventeen times
+under the broken one. All four files now hold back for nothing.
 
 ### 17.4 Is the zone on the right thing
 
@@ -1756,11 +1769,20 @@ The output side check sorts what it finds into the wearer's hands and faces
 the run missed, using MediaPipe's two hand models and three face detectors,
 none of which know the zone exists. So it can mark the zone's homework.
 
-**The zone contains 44 of the 52 boxes the hand rule calls hands.** The eight
-it misses are mostly on `005035`, where 11 of 17 land inside: the table tennis
-file, where a fist gripping a bat is the case section 14.5 already records both
-hand models failing on. The two mechanisms fail on the same thing, which is
-worth knowing before either is trusted alone.
+**The zone contains 44 of the 52 boxes the hand rule calls hands**, on copies
+made before the face region was tightened. The eight it misses are mostly on
+`005035`, where 11 of 17 land inside: the table tennis file, where a fist
+gripping a bat is the case section 14.5 already records both hand models
+failing on. The two mechanisms fail on the same thing, which is worth knowing
+before either is trusted alone.
+
+On the copies that actually ship, with `zone_face_scale` at 1.6, the same
+comparison reads **13 of 21**. The two are not the same measurement and should
+not be quoted against each other: tightening the face region masks more of the
+wearer's hands, so fewer hand shaped boxes survive in the copy for the hand
+rule to find at all, and the denominator falls from 52 to 21 with the
+numerator. The agreement rate falls from 85 to 62 percent, and what that says
+is that the boxes which survive are the harder ones.
 
 The build plan asked for the 20 hands and 52 faces of section 14.1 to be
 checked against the zone by frame number. **That run's record was never
@@ -1786,10 +1808,14 @@ separately from those that do not before it leans on that gate.
 ### 17.5 The audit, and the leak it found
 
 One hundred frames were rendered with the zone drawn on them and looked at
-once, by one person. **The labels are committed**, in
+once, by one person, and every one of the 179 polygons on them carries a
+verdict. **The labels are committed**, in
 `docs/audits/zone_faces_set_aside_2026-09-11.csv` and
 `docs/audits/zone_hands_*.csv`, which is the standing rule that the two
 earlier audits in this project broke and the reason neither can be re-scored.
+
+The `zone_hands` files were committed empty by the first pass and filled in by
+the second, which is why section 17.7 has a number this section does not.
 
 The informative frames are not the uniform sample. They are the ones where the
 check set a **face** aside as handled, because that is the zone declining to
@@ -1886,9 +1912,94 @@ wearer's own hands the same tightening now leaves masked.
   off its object. The memory is three seconds for that reason, and the drift
   is not separately measured.
 - **Whose hands is a size and position rule**, not an understanding of who is
-  doing what. It is wrong 3 times in 27 labelled cases after the fix and was
-  wrong 20 times before it.
+  doing what. On a uniform sample it is wrong 12 percent of the time, section
+  17.7; on the pre-selected set of faces the zone protected it was wrong 20
+  times in 27 before the fix and once after it. Those two numbers measure
+  different populations and the uniform one is the one to quote.
 - **29 of the 56 faces the zone set aside were not examined.** They are in the
   CSV marked as such.
 - **One venue each.** Every number here comes from a washroom, a corridor, a
   canteen and a table tennis hall.
+
+### 17.7 Follow ups (2026-09-11)
+
+Four things the review of section 17 asked for. One was a shipping defect and
+is folded into 17.3; the rest are here.
+
+**Whose hands, on frames nobody chose.** Section 17.5 measured the rule on the
+faces the zone set aside, which is a set selected for being failures, and 17.6
+admitted the unbiased number did not exist. It does now. All 179 polygons on
+the 100 uniformly sampled frames were labelled and committed:
+
+| Verdict | Rows |
+|---|---|
+| The wearer's hand | 153 |
+| A bystander's hand | 20 |
+| Could not be called | 6 |
+
+**"Whose hands" is wrong on 20 of the 173 rows that could be called, 12
+percent**, against 74 percent on the pre-selected set. Both numbers are real
+and they are not comparable. Two things in the breakdown are worth keeping:
+`004100` contributes three bystander polygons from a single frame, in which a
+man bends over at the left and the wearer's own hand on the mop is not covered
+at all; and `005035` contributes none, because nobody else comes close enough.
+
+**The wrist to knuckle direction does not separate them.** `hands.rect_for`
+already computes the angle that puts the wrist to middle knuckle line upright,
+and the idea was that the wearer's hands point up the frame while a bystander
+facing them points down. Scored against the 179 labels, by recovering the
+angle from each committed quad:
+
+| | n | min | median | p90 | max |
+|---|---|---|---|---|---|
+| The wearer's hands | 153 | 1 deg | 23 deg | 66 deg | 96 deg |
+| A bystander's hands | 20 | 7 deg | 35 deg | 78 deg | 105 deg |
+
+The two ranges lie on top of each other.
+
+| `zone_orientation` | The wearer's hands kept | A bystander's dropped |
+|---|---|---|
+| 60 deg | 135 of 153 | 6 of 20 |
+| 80 deg | 147 of 153 | 1 of 20 |
+| 100 deg | 153 of 153 | 1 of 20 |
+| 120 deg and up | 153 of 153 | 0 of 20 |
+
+At the 100 degrees that was proposed the rule does nothing; at 60 it buys six
+bystanders for eighteen of the wearer's own hands, which is the wrong trade
+for a promise that is absolute. **The setting is not shipped.** The
+measurement refutes the hypothesis rather than the threshold, so a value that
+had no effect would be a knob with nothing behind it. `zone_face_needs_hand`
+stays as it is, and the re-sweep that was conditional on this table was not
+run.
+
+**The window grid is cut by a fifth, and the first attempt at it was wrong.**
+Thirty windows of 512 px at half overlap cover the frame; the wearer's arms
+come up from below, so the top rows can go. Cutting them by laying a smaller
+grid over what is left moved hands per frame by 44 percent on `005035` while
+saving the same time, because every window lands somewhere new and what the
+palm model makes of a crop depends on where the hand sits inside it. Skipping
+rows and leaving the rest where they were:
+
+| File | 30 windows | 24 windows (0.15) | 18 windows (0.2) |
+|---|---|---|---|
+| `003939` | 57 ms | 46 ms | 36 ms |
+| `004100` | 66 ms | 52 ms | 41 ms |
+| `004310` | 69 ms | 52 ms | 40 ms |
+| `005035` | 66 ms | 46 ms | 35 ms |
+
+Hands per frame and zone share are identical to two decimal places at every
+setting on every file, and re-running the output side check with the cut on
+reproduces the previous run exactly: the same faces, screens, set aside counts,
+hand agreement and gate readings.
+
+`zone_top_frac` ships at **0.15**, not the 0.2 the numbers allow. At 0.2 the
+topmost window starts at y=512 and no palm in the top 39 percent of the frame
+can be found at all; at 0.15 it is the top 20 percent. Nothing on this footage
+holds anything up to look at it, and the collector footage this tool is for is
+people doing exactly that, so the blind region is worth more than the extra 18
+percent. The table is here for whoever wants to take it.
+
+One check on the premise: the highest polygon in the audit has its top edge at
+y=114, which looks like a hand at the top of the frame and is not. Its palm is
+at y=776 and the polygon is grown by nearly four palm widths. All four
+settings find that hand.

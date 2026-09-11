@@ -104,6 +104,24 @@ class Settings:
     # Run the hand pass on every Nth frame. The zone has memory, so the frames
     # between are covered; 1 until section 17 says what 2 costs.
     zone_stride: int = 1
+    # Skip the window rows that start in the top of the frame. The camera sits
+    # on the chest and the wearer's arms come up from below, so the top of the
+    # picture is the room.
+    #
+    # Rows are skipped, never re-tiled: laying a smaller grid over what is
+    # left moves every window, and what the palm model makes of a crop depends
+    # on where the hand sits in it, so the zone changes rather than shrinks.
+    # Measured that way, 0.15 and 0.2 both leave hands per frame and zone
+    # share identical to two decimal places on all four files while cutting
+    # the hand pass by 22 and 40 percent.
+    #
+    # 0.15 rather than the 0.2 the numbers allow. At 0.2 the topmost window
+    # starts at y=512, so no palm above the top 39 percent of the frame can be
+    # found at all; at 0.15 it is the top 20 percent. Nothing on this footage
+    # holds anything up to look at it, and the collector footage this tool is
+    # for is people doing exactly that, so the blind region is worth more than
+    # the extra 18 percent. Section 17.7 has the table for anyone who wants it.
+    zone_top_frac: float = 0.15
     # Suppression over palm boxes pooled from overlapping windows. One hand
     # lands in four windows and has to come out as one hand.
     zone_nms: float = 0.5
@@ -124,9 +142,17 @@ class Settings:
     # space where a card was put down is still a person.
     zone_memory: float = 3.0
     # The precision gate. A copy in which more than this share of the zone's
-    # pixels moved is held back, whatever else the check found. First guess,
-    # section 17 measures what a clean run reads.
-    zone_gate_changed: float = 0.005
+    # pixels moved is held back, whatever else the check found.
+    #
+    # Set from the distribution rather than guessed, because the first guess
+    # of 0.5 percent landed on a real reading: a clean `004310` read 0.501 and
+    # was quarantined by a thousandth. A clean copy reads 0.10 to 0.50 percent
+    # across the four sample files and one made with `--no-zone`, where masks
+    # really do land in the zone, reads 17.7. There is a factor of thirty
+    # between the two populations and nothing in between, so 1.0 sits in the
+    # gap with a two times margin over the worst clean reading and seventeen
+    # times under the broken one. Report section 17.3.
+    zone_gate_changed: float = 0.010
     # A face is protected by the zone only where a hand is actually on it,
     # not merely inside the grown reach of one. The audit of 2026-09-11 found
     # the zone covering a canteen worker's face at 144 px: their own hand
@@ -493,6 +519,9 @@ class Settings:
         if self.zone_stride < 1:
             raise SettingsError(
                 f"zone_stride must be at least 1, got {self.zone_stride}")
+        if not 0.0 <= self.zone_top_frac < 1.0:
+            raise SettingsError(
+                f"zone_top_frac must be at least 0 and below 1, got {self.zone_top_frac}")
         if not 0.0 < self.zone_nms <= 1.0:
             raise SettingsError(
                 f"zone_nms must be above 0 and at most 1, got {self.zone_nms}")
@@ -618,7 +647,8 @@ class Settings:
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",
             "screen_max_area", "screen_min_run", "screen_tail", "screen_gap",
             "screen_gate_min_px", "screen_gate_min_run",
-            "zone", "zone_window", "zone_stride", "zone_nms", "zone_min_hand_px",
+            "zone", "zone_window", "zone_stride", "zone_nms", "zone_top_frac",
+            "zone_min_hand_px",
             "zone_edge_frac", "zone_scale", "zone_memory", "zone_gate_changed",
             "zone_cover", "zone_face_needs_hand", "zone_face_scale", "zone_device",
             "nms_detect", "nms_yunet")}

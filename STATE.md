@@ -1,10 +1,9 @@
 # STATE, handover notes
 
-Last updated 2026-09-11, after work package H1 of `FACEBLUR_BUILD_PLAN_V2.md`.
-Packages R1, S1, 4.3, E1, R2 and **H1 (the handled zone)** are done, committed
-and pushed. **H2, the zone follow ups, is next**, then G1. F2, F1, T3 and S2
-all have the zone to measure with, and H2 is what makes its "whose hands"
-rule safe to lean on.
+Last updated 2026-09-11, after work package H2 of `FACEBLUR_BUILD_PLAN_V2.md`.
+Packages R1, S1, 4.3, E1, R2, H1 (the handled zone) and **H2 (its follow ups)**
+are done, committed and pushed. **G1, the gate in the window, is next.** F2,
+F1, T3 and S2 all have the zone to measure with.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -102,13 +101,13 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 | E1 | Object oracle for evaluation | Done, report 16.2 |
 | R2 | Fixes from the review of that pass | Done, report 16.6 |
 | H1 | The handled zone | Done, report 17 |
-| **H2** | **Zone follow ups: the gate threshold, whose hands, the uniform audit, the window grid** | **Next. Spec section 5, H2** |
-| G1 | The gate in the window | After H2 |
-| F2 | Recall outside the zone | Not started. Needs H2 and its two harness prerequisites |
-| F1 | Second chance for missed faces | Not started. Needs H2 |
+| H2 | Zone follow ups | Done, report 17.3 and 17.7 |
+| **G1** | **The gate in the window** | **Next** |
+| F2 | Recall outside the zone | Not started. Needs its two harness prerequisites |
+| F1 | Second chance for missed faces | Not started |
 | T1 | Text detector | Not started |
 | T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
-| S2 | Screens outside the zone | Not started. Needs H2 |
+| S2 | Screens outside the zone | Not started |
 | D | Defaults: all three kinds on | Not started, needs T3 |
 | T4, M1 | Identifiers, metadata line | Optional |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
@@ -175,6 +174,24 @@ lives:
 - **H1: `zone_stride` stays 1.** Stride 2 saves 18 percent of the detect phase
   and halves the hand evidence. That is a bad trade for the one promise that
   is absolute.
+- **H2: `zone_orientation` was measured and not shipped.** The build plan asked
+  for the wrist to knuckle direction as a third "whose hands" condition. Scored
+  against the 179 committed labels the two distributions lie on top of each
+  other: the wearer's hands run 1 to 96 degrees from straight up and a
+  bystander's 7 to 105. At the proposed 100 degrees it drops 1 bystander of 20
+  and nothing else; at 60 it drops 6 and costs 18 of the wearer's own hands.
+  That refutes the hypothesis rather than the threshold, so no setting was
+  added: a knob whose only honest default is "no effect" is worse than a note
+  saying it was tried. `zone_face_needs_hand` is unchanged and the re-sweep
+  that was conditional on this table was not run. Report 17.7.
+- **H2: `zone_top_frac` ships at 0.15, not the 0.2 the numbers allow.** Both
+  leave hands per frame and zone share identical on all four files and both
+  reproduce the check exactly; 0.2 saves 40 percent of the hand pass and 0.15
+  saves 22. At 0.2 the topmost window starts at y=512, so no palm in the top 39
+  percent of the frame can be found at all, against the top 20 percent at 0.15.
+  Nothing on this footage holds anything up to look at it and the collector
+  footage this tool is for is people doing exactly that, so the blind region
+  was worth more than the extra 18 percent. Report 17.7 has the table.
 
 - **R2: the oracle's weight hash is a constant in `eval/oracle_owl.py`, with a
   test tying it to `models/README.md`.** The spec said to verify against the
@@ -231,8 +248,9 @@ With the handled zone on, from the H1 run of 2026-09-11:
 | ... max | 36.41 % | 34.13 % | 17.66 % | 34.84 % |
 | Hands per frame | 1.62 | 1.59 | 2.62 | 1.15 |
 | Mask the zone took back | 0.036 % | 0.008 % | 0.015 % | 0.035 % |
-| Frames over the zone gate | 0 | 0 | 1 | 0 |
+| Frames over the zone gate | 0 | 0 | 0 | 0 |
 | Worst zone frame | 0.10 % | 0.10 % | 0.50 % | 0.30 % |
+| Whose hands, wrong on a uniform sample | \\ | 12 percent of 173 rows | \\ | \\ |
 
 The zone takes almost nothing back because the track level hand rules were
 already keeping masks off hands. What it changes is that the protection is
@@ -308,11 +326,15 @@ records and `docs/report.md` are what an auditor actually asks for.
   and **three of seven of the wearer's own hands are now masked** where the
   zone used to protect them. Both are the same hard case from opposite sides:
   a face and a hand close enough together that no region separates them.
-- **`zone_gate_changed` is a first guess sitting on a real reading.** The
-  shipped build reads 0.501 percent on one frame of `004310` against a gate of
-  0.500, so that copy is held back for `zone` by a thousandth, while the other
-  three files read 0.097 to 0.299. Set it from a distribution before trusting
-  it.
+- **"Whose hands" is wrong 12 percent of the time** on a uniform sample of 179
+  polygons, 20 of the 173 that could be called. The 74 percent figure from H1
+  came from the faces the zone protected, a set selected for being failures.
+  Quote the 12. Report 17.7.
+- **The 44 of 52 hand rule agreement in 17.4 is not from the copies that
+  ship.** On the shipped copies the same comparison reads 13 of 21, because
+  tightening the face region masks more of the wearer's hands and fewer
+  survive in the copy to be compared at all. Both are in 17.4; do not quote
+  one against the other.
 - **29 of the 56 faces the zone set aside were never examined.** They are in
   `docs/audits/zone_faces_set_aside_2026-09-11.csv` marked as such.
 - **The remembered zone drifts** under camera rotation or zoom, because
@@ -321,8 +343,15 @@ records and `docs/report.md` are what an auditor actually asks for.
 - **The check cannot rebuild the remembered zone**, because memory crosses
   frame range boundaries and each range runs in its own worker. Only the live
   half is checked.
-- **The zone costs about 60 ms a frame**, roughly doubling the detect phase,
-  966 s against 556 s on the four files.
+- **The zone costs about 45 ms a frame** since H2 cut the window grid from 30
+  to 24, down from about 60. It still roughly doubles the detect phase. A
+  further cut to 18 windows is measured and available at `zone_top_frac` 0.2,
+  and was not taken; see decisions taken by default.
+- **Do not re-tile the window grid to make it smaller.** Skip rows and leave
+  the rest where they are. Laying a smaller grid over what is left moves every
+  window, and what the palm model makes of a crop depends on where the hand
+  sits in it, so the zone changes rather than shrinks: the first attempt moved
+  hands per frame by 44 percent on one file while saving the same time.
 
 **About what is not built.**
 
@@ -407,6 +436,7 @@ before changing anything a pass measured.
 | 2026-09-11 | The owner restated the goal as one rule. The spec was rewritten around it; F0 and T2 dropped | spec section 3 |
 | 2026-09-11 | R2: review fixes, exit code follows the gate, rows carry their box, imports checked by `ast` | 16.6 |
 | 2026-09-11 | H1: the handled zone. Three defects found by measurement, including the zone protecting bystanders' faces | 17 |
+| 2026-09-11 | H2: the gate threshold fixed, the uniform sample labelled, the orientation rule refuted, the window grid cut | 17.3, 17.7 |
 
 ## Open questions for the owner
 

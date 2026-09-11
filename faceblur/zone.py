@@ -93,8 +93,8 @@ class ZoneFrame:
                           for poly in self.hands]}
 
 
-def windows(shape: tuple[int, int], side: int, overlap: float = 0.5
-            ) -> list[tuple[int, int, int, int]]:
+def windows(shape: tuple[int, int], side: int, overlap: float = 0.5,
+            top_frac: float = 0.0) -> list[tuple[int, int, int, int]]:
     """Sliding windows covering the frame, as (x0, y0, x1, y1).
 
     The palm model takes 192 px and the wearer's hands on this camera run 150
@@ -118,8 +118,18 @@ def windows(shape: tuple[int, int], side: int, overlap: float = 0.5
             out.append(extent - side)
         return out
 
+    # The camera is on the chest and the arms come up from below, so the top
+    # of the picture is the room, and those window rows can be skipped.
+    #
+    # Skipped, not re-tiled. Laying a smaller grid over what is left moves
+    # every window, and what the palm model makes of a crop depends on where
+    # the hand sits inside it, so the zone changes rather than shrinking: the
+    # first attempt at this moved hands per frame by 44 percent on one file
+    # while saving the same time. Section 17.7.
+    top = h * min(max(top_frac, 0.0), 0.9)
     return [(x, y, min(w, x + side), min(h, y + side))
-            for y in starts(h) for x in starts(w)]
+            for y in starts(h) if y >= top
+            for x in starts(w)]
 
 
 def qualifies(hand: Hand, shape: tuple[int, int], settings: Settings) -> bool:
@@ -238,7 +248,8 @@ class HandFinder:
 
         h, w = frame.shape[:2]
         found: list[Hand] = []
-        for x0, y0, x1, y1 in windows((h, w), self.settings.zone_window):
+        for x0, y0, x1, y1 in windows((h, w), self.settings.zone_window,
+                                      top_frac=self.settings.zone_top_frac):
             crop = frame[y0:y1, x0:x1]
             if crop.size == 0:
                 continue
