@@ -70,6 +70,21 @@ class AuditRecord:
     masked_mean_by_kind: dict = field(default_factory=dict)
     masked_max_by_kind: dict = field(default_factory=dict)
     frames_over_budget_by_kind: dict = field(default_factory=dict)
+    # The handled zone: the region nothing is ever masked in. Zero on a run
+    # with --no-zone. `masked_in_zone_prevented` is the share of the frame the
+    # zone took back out of the mask, averaged over the video, and it is the
+    # number that says the zone is doing something rather than the detectors
+    # finding nothing where the hands are. See faceblur/zone.py, report 17.
+    zone_frames: int = 0
+    zone_share_mean: float = 0.0
+    zone_share_max: float = 0.0
+    hands_per_frame_mean: float = 0.0
+    masked_in_zone_prevented: float = 0.0
+    # From the output side check: what the copy destroyed inside the zone,
+    # which should be nothing. `zone_list` names the worst frames.
+    zone_pixels_changed_max: float = 0.0
+    zone_frames_over: int = 0
+    zone_list: list = field(default_factory=list)
     engine: str = ""
     model_sha256: dict = field(default_factory=dict)
     compute: dict = field(default_factory=dict)   # provider each model ran on
@@ -93,6 +108,9 @@ class AuditRecord:
     # Boxes the check found that MediaPipe's hand models say are the wearer's
     # own hand. They are in residual_list, marked, and in no other count.
     residual_hands: int = 0
+    # Finds the handled zone set aside: not misses, the rule working. They are
+    # in residual_list marked with the coverage, and in no count the gate reads.
+    residual_in_zone: int = 0
     # The largest face still visible, over every row, not just the 200 the
     # record carries. This is what the quarantine gate reads.
     residual_max_px: int = 0

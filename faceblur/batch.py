@@ -29,7 +29,7 @@ from .detect import Detection, DetectorBank, filter_candidates, iou, weak_candid
 from .motion import downscale, estimate_shift
 from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED,
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
-from .redact import masked_shares, redact
+from .redact import build_alpha, masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
@@ -113,6 +113,30 @@ def _screens(settings: Settings):
     return found
 
 
+_ZONES: dict = {}
+
+
+def _zone(settings: Settings):
+    """The worker's cached hand finder for the handled zone.
+
+    Its own cache rather than `_hand_rule`'s, because the two ask different
+    questions of the same two models: the rule asks whether one flagged box is
+    a hand, this asks where every hand in the frame is, and they are keyed by
+    different settings.
+    """
+    from .zone import HandFinder
+
+    key = (settings.zone_device, settings.zone_window, settings.zone_nms,
+           settings.hand_conf, settings.hand_presence,
+           settings.zone_min_hand_px, settings.zone_edge_frac)
+    found = _ZONES.get(key)
+    if found is None:
+        found = HandFinder(settings, threads=_THREADS)
+        _ZONES.clear()
+        _ZONES[key] = found
+    return found
+
+
 _HAND_RULES: dict = {}
 
 
@@ -140,7 +164,10 @@ def detect_job(job: dict) -> dict:
     start, end = job["start"], job["end"]
     bank = _bank(settings)
     screens = _screens(settings) if settings.wants("screen") else None
-    strong, weak, shifts, found_screens = {}, {}, {}, {}
+    # The zone is not a kind and does not depend on what is being masked: it
+    # is the region nothing is masked in, so it runs whenever it is on.
+    finder = _zone(settings) if settings.zone else None
+    strong, weak, shifts, found_screens, found_hands = {}, {}, {}, {}, {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -154,6 +181,10 @@ def detect_job(job: dict) -> dict:
             small = downscale(frame)
             shifts[i] = estimate_shift(prev_small, small, max(info.width, info.height))
             prev_small = small
+        if finder is not None and i % settings.zone_stride == 0:
+            hands = finder.detect(frame)
+            if hands:
+                found_hands[i] = hands
         if i % settings.stride:
             continue
         if screens is not None:
@@ -170,8 +201,12 @@ def detect_job(job: dict) -> dict:
     if screens is not None:
         compute.update(screens.compute)
         hashes.update(screens.model_hashes)
+    if finder is not None:
+        compute.update(finder.compute)
+        hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
-            "screens": found_screens, "compute": compute, "hashes": hashes}
+            "screens": found_screens, "hands": found_hands,
+            "compute": compute, "hashes": hashes}
 
 
 def encode_job(job: dict) -> dict:
@@ -180,6 +215,7 @@ def encode_job(job: dict) -> dict:
     settings: Settings = job["settings"]
     seg: Segment = job["segment"]
     dets: dict[int, list[Detection]] = job["dets"]
+    zones: dict = job.get("zones") or {}
     out = Path(job["out"])
     progress = job.get("progress")
     encoders = [settings.encoder]
@@ -194,15 +230,26 @@ def encode_job(job: dict) -> dict:
         # first appears part way through the segment is padded back to zero,
         # so every list is as long as `masked`.
         by_kind: dict[str, list[float]] = {}
+        # What the zone took back out of the mask, per frame. This is the
+        # number that says the zone is doing something rather than the
+        # detectors finding nothing where the hands are.
+        prevented: list[float] = []
         try:
             for offset, frame in enumerate(decode_range(src, times, seg.start, seg.end,
                                                         info, settings.hwaccel)):
                 if progress is not None and offset % 5 == 0:
                     progress(offset)
                 d = dets.get(seg.start + offset, [])
-                frame_out, alpha = redact(frame, d, settings)
+                z = zones.get(seg.start + offset)
+                frame_out, alpha = redact(frame, d, settings, zone=z)
                 masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
-                shares = masked_shares(frame.shape[:2], d, settings, alpha) if d else {}
+                if d and z:
+                    plain = build_alpha(frame.shape[:2], d, settings) >= 0.5
+                    prevented.append(float((plain & ~(alpha >= 0.5)).mean()))
+                else:
+                    prevented.append(0.0)
+                shares = (masked_shares(frame.shape[:2], d, settings, alpha, z)
+                          if d else {})
                 for name in set(by_kind) | set(shares):
                     row = by_kind.setdefault(name, [0.0] * (len(masked) - 1))
                     row.append(shares.get(name, 0.0))
@@ -216,7 +263,7 @@ def encode_job(job: dict) -> dict:
             raise
         if not error and len(masked) == seg.frames:
             return {"segment": seg, "masked": masked, "masked_by_kind": by_kind,
-                    "out": str(out), "encoder": encoder_name}
+                    "prevented": prevented, "out": str(out), "encoder": encoder_name}
         last_error = error or (f"decoded {len(masked)} frames, expected {seg.frames}")
         out.unlink(missing_ok=True)
     raise VideoError(f"Could not write the blurred copy. Segment {seg.start}-{seg.end}: "
@@ -314,6 +361,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
     strong: list[list[Detection]] = [[] for _ in range(n)]
     weak: list[list[Detection]] = [[] for _ in range(n)]
     screens_found: dict[int, list[Detection]] = {}
+    hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
     compute, hashes = {}, {}
@@ -334,6 +382,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         for i, sh in result.get("shifts", {}).items():
             shifts[i] = sh
         screens_found.update(result.get("screens") or {})
+        hands_found.update(result.get("hands") or {})
         compute, hashes = result["compute"], result["hashes"]
         done_frames += result["end"] - result["start"]
         report("detecting", done_frames, n)
@@ -370,6 +419,15 @@ def run_video(src: Path, dst: Path, settings: Settings,
         for i, dets in held.items():
             if 0 <= i < n:
                 per_frame[i] = list(per_frame[i]) + list(dets)
+    # ---- 2d. the handled zone, built once over the whole timeline because
+    # its memory runs across frame range boundaries the way the tracker does.
+    from .zone import build as build_zone, describe as describe_zone
+
+    zones = build_zone(hands_found, shifts if settings.camera_comp else None,
+                       settings, n, info.fps, (info.height, info.width))
+    if settings.zone:
+        for key, value in describe_zone(zones, (info.height, info.width)).items():
+            setattr(record, key, value)
     if settings.camera_comp:
         mag = np.hypot(*np.asarray(shifts, dtype=np.float64).T) if n else np.zeros(1)
         record.camera_shift_p95 = round(float(np.percentile(mag, 95)), 2)
@@ -405,14 +463,15 @@ def run_video(src: Path, dst: Path, settings: Settings,
         work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
         try:
             outcome = _write_and_join(src, dst, info, times, settings, segments, per_frame,
-                                      submit, workers, Path(work), report, cancelled)
+                                      submit, workers, Path(work), report, cancelled,
+                                      zones)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         if outcome is None:
             record.status = STATUS_STOPPED
             dst.unlink(missing_ok=True)
             return record
-        masked, masked_by_kind, problem, copied = outcome
+        masked, masked_by_kind, prevented, problem, copied = outcome
         record.join_attempts = attempt + 1
         record.error = problem
         if not problem:
@@ -441,6 +500,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
     record.frames_over_budget_by_kind = {
         k: sum(1 for x in v if x > settings.mask_budget)
         for k, v in sorted(masked_by_kind.items())}
+    if prevented:
+        record.masked_in_zone_prevented = round(float(np.mean(prevented)), 5)
     record.encode_seconds = round(time.time() - t1, 2)
     record.status = STATUS_DONE
 
@@ -457,6 +518,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.checked_frames = found["frames_checked"]
         record.residual_faces = found["residual_faces"]
         record.residual_hands = found["residual_hands"]
+        record.residual_in_zone = found["residual_in_zone"]
         record.residual_max_px = found["residual_max_px"]
         record.model_sha256 = {**record.model_sha256, **found["hand_models"]}
         record.compute = {**record.compute, **found["hand_compute"]}
@@ -470,6 +532,9 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.residual_screen_frames = found["residual_screen_frames"]
         record.residual_screen_max_px = found["residual_screen_max_px"]
         record.residual_screen_runs = found["residual_screen_runs"]
+        record.zone_pixels_changed_max = found["zone_pixels_changed_max"]
+        record.zone_frames_over = found["zone_frames_over"]
+        record.zone_list = found["zone_list"]
         record.check_seconds = round(time.time() - t2, 2)
         report("checking", n, n)
         # Hands do not hold a copy back. They are in the record either way.
@@ -507,11 +572,12 @@ def quarantine_output(dst: Path) -> Path:
 
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
-                    work: Path, report, cancelled):
-    """Returns (masked, masked by kind, problem text, frames copied), or None if stopped.
+                    work: Path, report, cancelled, zones=None):
+    """Returns (masked, by kind, prevented, problem text, frames copied), or None.
 
     `masked` is the union share of each frame and `masked by kind` splits it.
-    Copied stretches carry no mask at all, so they are zero in both.
+    `prevented` is what the handled zone took back out of the mask. Copied
+    stretches carry no mask at all, so they are zero in all three.
     """
     parts = [work / f"seg{k:05d}.mp4" for k in range(len(segments))]
     encode_jobs, copy_jobs = [], []
@@ -520,11 +586,14 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             copy_jobs.append({"src": str(src), "times": times, "segment": seg, "out": str(part)})
         else:
             dets = {i: per_frame[i] for i in range(seg.start, seg.end) if per_frame[i]}
+            in_zone = {i: zones[i] for i in range(seg.start, seg.end)
+                       if zones is not None and i < len(zones) and zones[i]}
             encode_jobs.append({"src": str(src), "info": info, "times": times,
                                 "settings": settings, "segment": seg, "dets": dets,
-                                "out": str(part)})
+                                "zones": in_zone, "out": str(part)})
     masked = [0.0] * len(per_frame)
     by_kind: dict[str, list[float]] = {}
+    prevented = [0.0] * len(per_frame)
     done = 0
     total = sum(s.frames for s in segments)
     if submit is serial_submit:
@@ -542,6 +611,8 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             for name, values in (result.get("masked_by_kind") or {}).items():
                 row = by_kind.setdefault(name, [0.0] * len(per_frame))
                 row[seg.start:seg.end] = values
+            if result.get("prevented"):
+                prevented[seg.start:seg.end] = result["prevented"]
             done += seg.frames
             report("writing", done, total)
         for result in submit(copy_job, copy_jobs, workers):
@@ -550,18 +621,18 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             done += result["segment"].frames
             report("writing", done, total)
     except VideoError as exc:
-        return masked, by_kind, str(exc), 0
+        return masked, by_kind, prevented, str(exc), 0
 
     part = part_path(dst)
     error = concat(parts, src, part, work / "list.txt")
     if error:
         part.unlink(missing_ok=True)
-        return (masked, by_kind,
+        return (masked, by_kind, prevented,
                 f"Could not write the blurred copy. ffmpeg said: {error[:300]}", 0)
     problem = verify(part, len(per_frame), times[-1] - times[0])
     if problem:
         part.unlink(missing_ok=True)
-        return masked, by_kind, f"The joined file did not verify: {problem}", 0
+        return masked, by_kind, prevented, f"The joined file did not verify: {problem}", 0
     import os
     os.replace(part, dst)
-    return masked, by_kind, "", sum(s.frames for s in segments if s.copy)
+    return masked, by_kind, prevented, "", sum(s.frames for s in segments if s.copy)

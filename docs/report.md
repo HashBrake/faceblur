@@ -254,7 +254,7 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 1046 tests
+.venv\Scripts\python.exe -m pytest tests                      # 1084 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # section 15
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
@@ -1631,3 +1631,264 @@ rather than a miss: the pipeline decided not to mask it, and a gate that held
 a copy back for something the run was never going to mask would hold back
 every file with a table in it. It does mean the check is silent about the one
 screen the cap is most likely to be wrong about, and section 16.4 now says so.
+
+## 17. The handled zone (2026-09-11)
+
+The owner's rule of 2026-09-11: *anything the collector is interacting with or
+handling is not blurred at all; everything else that carries information is
+blurred.* Work package H1 is the first half of that sentence. Every other part
+of this pipeline finds things to destroy; `faceblur/zone.py` finds the one
+region that is never destroyed, and `redact.redact` subtracts it from every
+mask at the last step.
+
+Applying it last is deliberate. Detectors, tracker and holds run exactly as
+they did, so the record can say both what would have been masked and what was,
+turning the zone off reproduces the old alpha array for array, and a face half
+behind a hand loses the half that is behind the hand rather than being dropped
+whole.
+
+### 17.1 How the zone is built
+
+MediaPipe's palm detector takes 192 px and the wearer's hands on this camera
+run 150 to 500 px, so the whole frame downscaled to 192 puts a hand at 20 px
+where the model sees nothing. The frame is covered by 30 sliding windows of
+512 px at half overlap, palm boxes are pooled across windows and suppressed at
+an IoU of 0.5, and only then does the landmark model confirm each survivor at
+`hand_presence` 0.7, the plateau section 14.2 measured. Suppressing before
+confirming matters: a palm proposal costs about 2 ms and a confirmation about
+7 ms, and a hand lands in four overlapping windows.
+
+A hand qualifies as the wearer's when its palm box is at least
+`zone_min_hand_px` (120) across **or** its rectangle reaches the bottom
+`zone_edge_frac` (0.25) of the frame. In egocentric footage the wearer's hands
+are the closest of their kind and enter from below. Section 17.5 is what that
+rule gets wrong.
+
+### 17.2 What it covers, and what it costs
+
+Measured over the four sample files with `--mask face,screen`:
+
+| File | Frames with a zone | Zone share, mean | max | Hands per frame | Mask the zone took back |
+|---|---|---|---|---|---|
+| `003939` | 2033 of 2033 | 8.98 % | 36.41 % | 1.62 | 0.036 % |
+| `004100` | 982 of 984 | 7.17 % | 34.13 % | 1.59 | 0.008 % |
+| `004310` | 938 of 938 | 10.12 % | 17.66 % | 2.62 | 0.015 % |
+| `005035` | 3971 of 3971 | 10.68 % | 34.84 % | 1.15 | 0.035 % |
+
+**The zone is on every frame of every file.** In egocentric footage the
+wearer's hands are essentially never out of shot.
+
+**And it takes almost nothing back out of the masks**: 0.008 to 0.036 percent
+of the frame. The face mask share barely moves, from 0.85 to 0.83 percent on
+`003939` and not at all on `005035`. Read carelessly that says the zone does
+nothing, and it is worth saying plainly what it does say: the track level hand
+rules were already keeping masks off hands, which is what section 14 measured
+at 0.00 to 0.09 percent of hand pixels. There was almost nothing inside the
+zone to take back.
+
+What the zone changes is not how much is protected today but what kind of
+statement the protection is. It was three tuned thresholds holding; it is now
+structural, and that is what makes package F2 possible at all: every setting
+section 10 rejected was rejected for masking the wearer's hand, and the zone
+subtracts the hand from the mask whatever the threshold says.
+
+The cost is real. The detect phase roughly doubles, 966 s against 556 s for
+the same four files, about 60 ms a frame. `zone_stride` 2 was measured on
+`004310`:
+
+| | Detect | Wall | Hands per frame | Zone share | Took back |
+|---|---|---|---|---|---|
+| `zone_stride` 1 | 108.6 s | 149.4 s | 2.62 | 10.12 % | 0.007 % |
+| `zone_stride` 2 | 89.4 s | 130.1 s | 1.30 | 9.41 % | 0.005 % |
+
+Eighteen percent off the detect phase for half the hand evidence, with the
+zone share barely moving because memory fills the gaps. That is a bad trade
+for the one promise that is absolute, so the default stays at 1.
+
+### 17.3 The precision gate, and two defects it found
+
+The output side check gained a second question: **was anything destroyed
+inside the handled zone?** It rebuilds the zone from the source frames, hands
+being unmasked in both and the source sharper, and counts pixels that moved
+further than the encoder's own noise plus `FLAT_DIFF`. Over
+`zone_gate_changed` holds the copy back, for `zone`.
+
+It earned its keep twice before anybody looked at a frame.
+
+**The zone was fading the wrong way.** A shape drawn at its true size and then
+blurred is half covered at its own boundary, so masks are drawn grown by the
+feather and blurred. The zone was drawn **shrunk** and faded inwards: two
+pixels inside the edge of a 200 px square the alpha read 0.137, so 86 percent
+of a mask survived in a band about twelve pixels wide all the way around every
+hand. That band is the worst place to lose the promise, because it is exactly
+where a hand meets the thing it is holding. The gate reported it on three of
+the four files. Drawn grown, the smallest alpha anywhere inside a polygon went
+from 0.004 to 0.992.
+
+**The check counted the rule working as the rule failing.** Residual faces
+went *up* with the zone on, from 7 to 13 on `003939`, because a face the zone
+protects stays in the copy and the check called it a miss. A find inside the
+zone is now set aside exactly as a hand is: it stays in `residual_list` marked
+with the coverage that decided it, and leaves every count the gate reads.
+`residual_in_zone` is the count.
+
+The three populations the gate separates, on `004310`:
+
+| Copy | Frames over the gate | Worst frame |
+|---|---|---|
+| Made with `--no-zone` | 32 | 17.692 % |
+| Made with the zone fading inwards | 13 | 1.881 % |
+| Made with the zone as it ships | 1 | 0.501 % |
+
+An order of magnitude between a copy that broke the rule and one that keeps
+it, which is what makes the gate worth having.
+
+The first guess of 0.5 percent sits between them, and on the shipped build
+`004310` reads 0.501 on one frame, which holds that copy back for `zone` by a
+thousandth. The other three files read 0.097 to 0.299. That threshold is a
+first guess sitting almost exactly on a real reading, which is the worst place
+for one to sit, and the next pass to touch the zone should set it from a
+distribution rather than leave it here.
+
+### 17.4 Is the zone on the right thing
+
+The output side check sorts what it finds into the wearer's hands and faces
+the run missed, using MediaPipe's two hand models and three face detectors,
+none of which know the zone exists. So it can mark the zone's homework.
+
+**The zone contains 44 of the 52 boxes the hand rule calls hands.** The eight
+it misses are mostly on `005035`, where 11 of 17 land inside: the table tennis
+file, where a fist gripping a bat is the case section 14.5 already records both
+hand models failing on. The two mechanisms fail on the same thing, which is
+worth knowing before either is trusted alone.
+
+The build plan asked for the 20 hands and 52 faces of section 14.1 to be
+checked against the zone by frame number. **That run's record was never
+committed**, as section 16.2 records of its labels, so the comparison above is
+rebuilt from a check anybody can re-run instead.
+
+Masked pixels inside MediaPipe's own hand regions, on the copies that actually
+shipped, from `eval/zone.py --copy`:
+
+| File | Frames with hands | Hand damage | Worst frame |
+|---|---|---|---|
+| `004100` | 117 | 0.021 % | 0.209 % |
+| `004310` | 183 | 0.078 % | 0.224 % |
+
+Under the sweep's 0.1 percent gate, and **not zero, which the build plan
+expected**. The expectation was wrong rather than the code: MediaPipe's hulls
+are every hand in the frame and the rule protects the wearer's handled zone,
+so a mask landing on a bystander's hand is permitted now where it was not
+before. `hand_damage` has therefore changed meaning and is measuring two
+things at once. Package F2 should score hulls that intersect the zone
+separately from those that do not before it leans on that gate.
+
+### 17.5 The audit, and the leak it found
+
+One hundred frames were rendered with the zone drawn on them and looked at
+once, by one person. **The labels are committed**, in
+`docs/audits/zone_faces_set_aside_2026-09-11.csv` and
+`docs/audits/zone_hands_*.csv`, which is the standing rule that the two
+earlier audits in this project broke and the reason neither can be re-scored.
+
+The informative frames are not the uniform sample. They are the ones where the
+check set a **face** aside as handled, because that is the zone declining to
+redact somebody. There are 56 of those across the four files; 27 were looked
+at, in eight distinct situations.
+
+| Verdict | Cases |
+|---|---|
+| A bystander's face | 20 |
+| The wearer's own hand, called a face by the detectors | 7 |
+| Not examined | 29 |
+
+**Twenty of twenty-seven were the zone protecting a stranger's face**, which
+is the worst failure this tool can have. Three situations:
+
+- `004310` frames 830 to 836: a canteen worker in a green apron. Their own hand
+  rests low in the frame, a 56 px palm whose rectangle dips to y=1016 past the
+  edge rule's y=975, so it qualifies as the wearer's. Grown by `zone_scale`, it
+  reached 40 px upward and covered their face at 144 px, zone cover 1.0.
+- `004310` frame 577: the same worker, another moment, 124 px, fully covered.
+- `003939` frames 1083 to 1100: a man washing his hands at a sink. His face is
+  beside his own hand, 132 px, 90 percent covered.
+
+The seven correct cases are all the wearer's own open hand being called a face
+by the detectors, where the zone and the hand rule agree.
+
+**The fix separates two promises that were never the same.** What the wearer
+reaches *over* is what they are holding, so text and screens in it are part of
+the task. But a face inside somebody's reach is usually their own face. A face
+is therefore protected only where a hand is actually on it, and text and
+screens keep the full reach and its memory. `zone_face_needs_hand` reverses it.
+
+That left a second question, because MediaPipe's hand rectangle is already 2.6
+palm boxes, which is the crop its landmark model wants rather than the hand's
+silhouette: at 2.6 a 56 px palm still makes a 146 px quad that covers a 144 px
+face standing beside it. Swept against the 27 labelled cases:
+
+| Palm multiple | Bystander faces still protected | The wearer's hands kept |
+|---|---|---|
+| 1.0 | 1 of 20 | 4 of 7 |
+| 1.3 | 1 of 20 | 6 of 7 |
+| **1.6** | **3 of 20** | **7 of 7** |
+| 2.0 | 5 of 20 | 7 of 7 |
+| 2.6 | 14 of 20 | 7 of 7 |
+
+`zone_face_scale` ships at 1.6, the knee of that table.
+
+**What it actually did, on the copies that ship.** The sweep above scores
+coverage on the source frames; running the whole pipeline and the check at 1.6
+gives the answer including every other rule:
+
+| | Before the fix | After |
+|---|---|---|
+| Audited bystander faces the zone protects | 20 of 20 | **1 of 20** |
+| Audited hands of the wearer's own the zone protects | 7 of 7 | **4 of 7** |
+
+The leak is closed to one case. It cost three of the wearer's own hands, which
+the face detectors call faces and which are now masked because a 1.6 palm box
+region does not cover enough of the box to set it aside. That is the same
+trade running the other way and it is not free. Masking the wearer's hand is a
+precision failure against the rule; it is a smaller one than declining to
+redact a stranger, and the track level hand rules and `hand_damage` both say
+it stays small in pixels: 0.021 and 0.078 percent of hand pixels.
+
+The one bystander face still protected, and the three hands now masked, are
+the same hard case from opposite sides: a face and a hand close enough
+together that no region separates them.
+
+**What it costs.** A printed face on a card held in the hand is now masked,
+because the card sits in the reach and not under the hand. That reverses
+decision D1 of the build plan. It cannot be tested here, because there are no
+cards in this footage (section 16.2.1), and the trade was taken deliberately:
+masking a mass produced photograph on a card is a smaller harm than leaving a
+bystander's real face in a copy. `zone_face_needs_hand=False` gives D1 back.
+
+**One of the twenty is still protected** at 1.6, on the copies that ship, and
+it is the hardest case: a face directly beside its owner's own hand, where any
+region that covers the hand covers part of the face. Nothing here fixes that,
+and it is the honest residual of this package, together with the three of the
+wearer's own hands the same tightening now leaves masked.
+
+### 17.6 What this does not do
+
+- **The check tests only the region where the promise is absolute**, which
+  since the face fix is the hand itself rather than its reach. A face may now
+  be masked inside the reach on purpose, so measuring the reach would report
+  the rule working as the rule broken. The reach still protects text and
+  screens, and the check cannot rebuild the remembered half of it, because
+  memory crosses frame range boundaries and each range runs in its own worker
+  with no memory of the one before. What the reach prevented is reported by
+  the pipeline instead, as `masked_in_zone_prevented`.
+- **The remembered zone drifts.** `motion.estimate_shift` measures a
+  translation, so under camera rotation or zoom a remembered polygon slides
+  off its object. The memory is three seconds for that reason, and the drift
+  is not separately measured.
+- **Whose hands is a size and position rule**, not an understanding of who is
+  doing what. It is wrong 3 times in 27 labelled cases after the fix and was
+  wrong 20 times before it.
+- **29 of the 56 faces the zone set aside were not examined.** They are in the
+  CSV marked as such.
+- **One venue each.** Every number here comes from a washroom, a corridor, a
+  canteen and a table tennis hall.

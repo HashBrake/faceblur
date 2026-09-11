@@ -32,6 +32,21 @@ left out of every count a decision hangs on.
 The check covers the kinds in `KINDS_CHECKED`, and only the ones this run was
 asked to mask. A run that never asked for screens is not held back for one.
 
+The check asks one more question, and it is the only one about precision
+rather than recall: **was anything destroyed inside the handled zone?** The
+zone is the region the owner's rule says is never masked, so a single pixel
+moved inside it is a broken promise, where a face left in the copy is a missed
+one. The zone is rebuilt from the source frames, because hands are unmasked in
+both and the source is the sharper of the two, and the comparison uses the
+same encoder noise floor everything else here uses.
+
+Only the **live** zone is checked, the polygons around hands seen in that
+frame. The remembered zone runs on memory that crosses frame range
+boundaries, and the check runs each range in its own worker with no memory of
+the range before it; rebuilding that faithfully would mean making the check
+sequential for a softer promise. What the remembered zone prevented is
+measured end to end instead, as `masked_in_zone_prevented` in the record.
+
 Screens are asked a question faces are not: **how long was it there?** The
 screen detector calls a table a laptop for a frame and then stops, and 14 of
 the 29 false runs on the sample footage last a single frame while no real
@@ -43,7 +58,7 @@ is a face.
 
     .venv\\Scripts\\python.exe -m faceblur.verify SOURCE OUTPUT [--stride N]
                                                   [--workers N] [--no-hand-rule]
-                                                  [--mask face,screen]
+                                                  [--mask face,screen] [--no-zone]
 """
 from __future__ import annotations
 
@@ -57,6 +72,7 @@ import numpy as np
 
 from .detect import Detection
 from .redact import redact, region_for
+from .zone import alpha_for
 from .segments import decode_range, frame_times
 from .settings import Settings
 from .video import VideoError, probe
@@ -78,6 +94,44 @@ FLAT_DIFF = 4.0
 # otherwise be reading. Sampling every fourth row and column is enough for a
 # median and keeps the check off the critical path.
 NOISE_SAMPLE = 4
+
+
+def covered_by_zone(det: Detection, zone_mask) -> float:
+    """Share of a box that lies inside the handled zone, 0 to 1.
+
+    A find inside the zone is not a miss. The rule says nothing handled is
+    ever masked, so a face the wearer is holding something in front of, or a
+    screen in their hand, is left in the copy deliberately and the check must
+    not call that a leak. It stays in the record marked with the coverage that
+    decided it, the way a hand does, and stays out of every count the gate
+    reads.
+    """
+    if zone_mask is None:
+        return 0.0
+    h, w = zone_mask.shape[:2]
+    x0, y0 = max(0, int(det.x)), max(0, int(det.y))
+    x1, y1 = min(w, int(det.x + det.w)), min(h, int(det.y + det.h))
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return float(zone_mask[y0:y1, x0:x1].mean())
+
+
+def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
+                 noise: float) -> tuple[float, int]:
+    """(share of the zone's pixels that moved, pixels in the zone).
+
+    A pixel counts as moved when it differs by more than the encoder's own
+    noise plus `FLAT_DIFF`, the same floor `classify` uses, because a copy is
+    re-encoded and every pixel differs a little. Inside the zone nothing
+    should have been touched at all, so this reads zero on a clean run and the
+    gate holds the copy back when it does not.
+    """
+    mask = alpha_for(before.shape[:2], polygons, 0.0) >= 0.5
+    total = int(mask.sum())
+    if not total:
+        return 0.0, 0
+    diff = np.abs(before.astype(np.float32) - after.astype(np.float32)).mean(axis=2)
+    return float(((diff > noise + FLAT_DIFF) & mask).sum()) / total, total
 
 
 def box_diff(a: np.ndarray, b: np.ndarray, det: Detection) -> float:
@@ -225,7 +279,7 @@ def detection_from_row(row: dict) -> Detection:
 
 def residual_job(job: dict) -> dict:
     """Detect on the copy's frames start to end and say what was never masked."""
-    from .batch import _bank, _hand_rule, _screens    # the worker's cached models
+    from .batch import _bank, _hand_rule, _screens, _zone   # the worker's cached models
 
     src, out = Path(job["src"]), Path(job["out"])
     settings: Settings = job["settings"]
@@ -235,7 +289,9 @@ def residual_job(job: dict) -> dict:
     bank = _bank(settings) if "face" in wanted else None
     screens = _screens(settings) if "screen" in wanted else None
     rule = _hand_rule(settings) if bank is not None and settings.hand_rule else None
-    found, hands, checked = [], 0, 0
+    finder = _zone(settings) if settings.zone else None
+    zone_rows: list[dict] = []
+    found, hands, checked, in_zone = [], 0, 0, 0
     flat = {name: 0 for name in wanted}
     source_frames = decode_range(src, job["times"], start, end, job["info"], settings.hwaccel)
     copy_frames = decode_range(out, job["out_times"], start, end, job["out_info"],
@@ -247,6 +303,38 @@ def residual_job(job: dict) -> dict:
         checked += 1
         faces = bank.detect(after) if bank is not None else []
         glass = screens.detect(after) if screens is not None else []
+        zone_mask = face_zone = None
+        if finder is not None:
+            # The zone is rebuilt from the source: hands are unmasked in both
+            # and the source is sharper. Live polygons only; see the module
+            # docstring for why the remembered ones are not checked here.
+            from .zone import polygon_for, qualifies
+
+            mine = [hand for hand in finder.detect(before)
+                    if qualifies(hand, before.shape[:2], settings)]
+            live = [polygon_for(hand, settings, before.shape[:2]) for hand in mine]
+            quads = [tuple(hand.grown(settings.zone_face_scale).quad) for hand in mine]
+            if live:
+                zone_mask = alpha_for(before.shape[:2], live, 0.0) >= 0.5
+                # Faces are asked about the hands themselves, not the reach.
+                face_zone = ((alpha_for(before.shape[:2], quads, 0.0) >= 0.5)
+                             if settings.zone_face_needs_hand and quads
+                             else zone_mask)
+                # The gate measures where the promise is **absolute**, which
+                # since `zone_face_needs_hand` is the hand itself rather than
+                # its reach. A face may now be masked inside the reach, on
+                # purpose, so measuring the reach would report the rule working
+                # as the rule broken. What the reach still protects is text and
+                # screens, and the check cannot rebuild the remembered half of
+                # that, so it is reported by the pipeline instead as
+                # `masked_in_zone_prevented`. Section 17 says so.
+                strict = quads if settings.zone_face_needs_hand else live
+                if strict:
+                    moved, pixels = zone_changed(before, after, strict,
+                                                 frame_noise(before, after))
+                    if moved:
+                        zone_rows.append({"frame": i, "changed": round(moved, 5),
+                                          "zone_px": pixels})
         if not faces and not glass:
             continue
         noise = frame_noise(before, after)
@@ -257,6 +345,20 @@ def residual_job(job: dict) -> dict:
                 flat["face"] += 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
+                cover = covered_by_zone(det, face_zone)
+                if cover >= settings.zone_cover:
+                    # Not a miss. The owner's rule says nothing handled is ever
+                    # masked, so a face under the wearer's own hand is left
+                    # there on purpose.
+                    row["zone"] = round(cover, 3)
+                    in_zone += 1
+                # The hand rule is asked as well, not instead. They are two
+                # mechanisms answering two questions, and how often they agree
+                # is worth knowing: on the sample footage the zone contains 30
+                # of the 31 boxes the hand rule calls hands, which is the zone
+                # marked by somebody else's homework. Asking only one would
+                # throw that away and would leave `residual_hands` meaning
+                # something different from what section 14 measured.
                 if rule is not None:
                     # The hand rule reads the source, not the copy. Nothing
                     # masked a hand, so it looks the same in both, and the
@@ -281,10 +383,14 @@ def residual_job(job: dict) -> dict:
                 # phone rather than television. The box itself is in the row
                 # already, and `summarise` groups the runs from it.
                 row["label"] = det.source
+                cover = covered_by_zone(det, zone_mask)
+                if cover >= settings.zone_cover:
+                    row["zone"] = round(cover, 3)
+                    in_zone += 1
                 found.append(row)
     return {"start": start, "end": end, "checked": checked,
             "flat": sum(flat.values()), "flat_by_kind": flat,
-            "hands": hands, "found": found,
+            "hands": hands, "in_zone": in_zone, "found": found, "zone": zone_rows,
             "hand_models": {} if rule is None else rule.model_hashes,
             "hand_compute": {} if rule is None else rule.compute}
 
@@ -304,8 +410,16 @@ def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
 
 
 def not_hands(rows: list[dict]) -> list[dict]:
-    """The rows that decide anything: what is left once the hands are out."""
-    return [row for row in rows if "hand" not in row]
+    """The rows that decide anything: what is left once the set aside are out.
+
+    Two things are set aside and both stay in the record, marked. A **hand**
+    the face detectors called a face is not a face. A find inside the
+    **handled zone** is not a miss: the rule says nothing handled is ever
+    masked, so it was left there on purpose. A rule that quietly dropped
+    either would be worth nothing to an auditor, so the rows stay and only the
+    counts leave them out.
+    """
+    return [row for row in rows if "hand" not in row and "zone" not in row]
 
 
 def of_kind(rows: list[dict], name: str) -> list[dict]:
@@ -364,7 +478,7 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     found = [row for r in results for row in r["found"]]
     found.sort(key=lambda row: (row["frame"], -row["px"]))
     faces = not_hands(of_kind(found, "face"))
-    glass = of_kind(found, "screen")
+    glass = [row for row in of_kind(found, "screen") if "zone" not in row]
     checked = sum(r["checked"] for r in results)
     by_size = {"40+ px": 0, "24-40 px": 0, "under 24 px": 0}
     for row in faces:
@@ -388,6 +502,9 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     # that an auditor reads. Every count above is over every row either way.
     kept = of_kind(found, "face")[:200] + of_kind(found, "screen")[:200]
     kept.sort(key=lambda row: (row["frame"], -row["px"]))
+    zone_rows = sorted((row for r in results for row in (r.get("zone") or [])),
+                       key=lambda row: -row["changed"])
+    over = [row for row in zone_rows if row["changed"] > settings.zone_gate_changed]
     return {"frames_checked": checked,
             "hand_models": models,
             "hand_compute": compute,
@@ -395,6 +512,7 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "flat_by_kind": flat_by_kind,
             "residual_faces": len(faces),
             "residual_hands": sum(r.get("hands", 0) for r in results),
+            "residual_in_zone": sum(r.get("in_zone", 0) for r in results),
             "residual_frames": len({row["frame"] for row in faces}),
             "residual_by_size": by_size,
             # The largest face left, over every row rather than the 200 the
@@ -406,6 +524,11 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "residual_screen_frames": len({row["frame"] for row in glass}),
             "residual_screen_max_px": max((row["px"] for row in glass), default=0),
             "residual_screen_runs": screen_runs(big, settings),
+            # The precision side. Nothing should have been destroyed inside the
+            # handled zone, so these read zero on a clean run.
+            "zone_pixels_changed_max": zone_rows[0]["changed"] if zone_rows else 0.0,
+            "zone_frames_over": len(over),
+            "zone_list": over[:50],
             "residual_list": kept}
 
 
@@ -417,8 +540,16 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
     run of `screen_gate_min_run` checked frames among the finds that clear
     `screen_gate_min_px`. Hands hold nothing back; they are not in these
     numbers at all.
+
+    `zone` is the precision condition and it is different in kind from the
+    others: those say the copy still shows something it should have hidden,
+    this says the copy destroyed something it should have kept.
     """
     kinds = []
+    # Precision first: the zone is the one promise that is absolute, so a copy
+    # that broke it is held back whatever else the check found.
+    if settings.zone and report.get("zone_frames_over"):
+        kinds.append("zone")
     if (settings.wants("face") and report.get("residual_faces")
             and report.get("residual_max_px", 0) >= settings.quarantine_min_px):
         kinds.append("face")
@@ -453,6 +584,9 @@ def describe(report: dict, settings: Optional[Settings] = None) -> str:
                 f"flat to say")
         if hands:
             text += f"; {hands} more set aside as the wearer's hands"
+        if report.get("residual_in_zone"):
+            text += (f"; {report['residual_in_zone']} set aside as handled, inside "
+                     f"the zone")
     if settings.wants("screen"):
         runs = report.get("residual_screen_runs") or []
         long_enough = [r for r in runs if r["hits"] >= settings.screen_gate_min_run]
@@ -462,6 +596,13 @@ def describe(report: dict, settings: Optional[Settings] = None) -> str:
                  f"{report.get('residual_screen_max_px', 0)} px; {len(runs)} runs clear the "
                  f"{settings.screen_gate_min_px} px floor and {len(long_enough)} of those "
                  f"last {settings.screen_gate_min_run} checked frames or more")
+    if settings.zone:
+        worst = report.get("zone_pixels_changed_max", 0.0)
+        over = report.get("zone_frames_over", 0)
+        joiner = ". " if text else ""
+        text += (f"{joiner}the handled zone: {over} frames over "
+                 f"{100 * settings.zone_gate_changed:.2f} percent of its pixels moved, "
+                 f"worst {100 * worst:.3f} percent")
     return text or f"nothing to check over {report['frames_checked']} frames"
 
 
@@ -479,11 +620,15 @@ def main() -> int:
                          f"face). This check can look for {', '.join(KINDS_CHECKED)}, and "
                          "looks only for what was asked: a copy nobody asked to have "
                          "screens masked in is not missing one")
+    ap.add_argument("--no-zone", dest="zone", action="store_false",
+                    help="do not check whether anything was destroyed inside the "
+                         "handled zone. For measuring what the zone costs, not for "
+                         "a copy that ships")
     ap.add_argument("--json", default=None, help="write the full report here")
     args = ap.parse_args()
     from .classes import parse
 
-    settings = Settings(hand_rule=args.hand_rule, mask=parse(args.mask))
+    settings = Settings(hand_rule=args.hand_rule, mask=parse(args.mask), zone=args.zone)
     workers = max(1, args.workers)
     if workers == 1:
         report = check(Path(args.source), Path(args.output), settings, args.stride)

@@ -1,9 +1,9 @@
 # STATE, handover notes
 
-Last updated 2026-09-11, after work package R2 of `FACEBLUR_BUILD_PLAN_V2.md`.
-Packages R1, S1, 4.3, E1 and R2 are done, committed and pushed. **H1, the
-handled zone, is next and has not been started.** It is the critical path:
-F2, F1, T3 and S2 all measure with the zone on.
+Last updated 2026-09-11, after work package H1 of `FACEBLUR_BUILD_PLAN_V2.md`.
+Packages R1, S1, 4.3, E1, R2 and **H1 (the handled zone)** are done, committed
+and pushed. **G1, the gate in the window, is next.** F2, F1, T3 and S2 now all
+have the zone to measure with.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -39,6 +39,13 @@ region everywhere". Two consequences are easy to miss:
 Inside the zone, precision is absolute: nothing is ever masked there. Outside
 it, a miss is the leak and over masking of non informational things is the
 cheaper error.
+
+H1 built the zone and found that "inside the zone" needs two definitions, not
+one. What the wearer **reaches over** is what they are holding, so text and
+screens there are part of the task. A face inside somebody's reach is usually
+**their own face**, so a face is protected only where a hand is actually on
+it. Before that split the zone was protecting bystanders' faces from
+redaction, measured on 20 of 27 labelled cases. Report section 17.5.
 
 ## What this is
 
@@ -83,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1046 passing, about four minutes
+tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -93,51 +100,64 @@ tree is clean. Tests: `tests/`, 1046 passing, about four minutes
 | 4.3 | Per kind mask accounting | Done, report 16.3 |
 | E1 | Object oracle for evaluation | Done, report 16.2 |
 | R2 | Fixes from the review of that pass | Done, report 16.6 |
-| **H1** | **The handled zone** | **Next. Critical path** |
-| G1 | The gate in the window | Not started |
-| F2 | Recall outside the zone | Not started, needs H1 |
-| F1 | Second chance for missed faces | Not started, needs R2 and H1 |
+| H1 | The handled zone | Done, report 17 |
+| **G1** | **The gate in the window** | **Next** |
+| F2 | Recall outside the zone | Not started. H1 is in, so this is unblocked |
+| F1 | Second chance for missed faces | Not started. R2 and H1 are in |
 | T1 | Text detector | Not started |
-| T3 | Text policy, gate, ready | Not started, needs T1 and H1 |
-| S2 | Screens outside the zone | Not started, needs H1 |
+| T3 | Text policy, gate, ready | Not started, needs T1 |
+| S2 | Screens outside the zone | Not started. H1 is in |
 | D | Defaults: all three kinds on | Not started, needs T3 |
 | T4, M1 | Identifiers, metadata line | Optional |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
 ### What to do next
 
-**Start H1.** A per frame region nothing is ever masked in, built from the
-wearer's hands with the palm and landmark models that already ship, applied to
-every kind at the last step in `redact.redact`, and checked on the copy. The
-spec has the geometry, the memory rule and the settings. Four things to know
-before starting:
+**Start G1, the gate in the window**, or **F2**. G1 is a day or two and closes
+the oldest gap in the project: `ui/app.py` never sets `check_output` or
+`quarantine`, so nobody who uses the window gets the check or the gate, and
+the window is the workflow the tool was built around. F2 is three days and is
+what H1 was on the critical path for.
 
-- There is **no `docs/audits/` folder yet**. H1's by eye audit of the zone on
-  100 sampled frames is the first time the "commit the labels" rule is
-  exercised, and it creates that folder. The format is CSV of frame numbers
-  and boxes, never pixels.
-- `faceblur/hands.py` already has the palm detector, the landmark model and a
-  `hand_cover` helper, built for the output side check. H1 needs the hands
-  themselves rather than a yes or no about one box, so read what is there
-  before writing `faceblur/zone.py`.
-- The zone is **not** a kind and not a `Detection`. It is a per frame list of
-  polygons carried beside `per_frame` and applied as `alpha *= 1 - zone_alpha`
-  after `build_alpha`. Keep it that way: the audit can then report both what
-  would have been masked and what was.
-- `zone=False` must reproduce today's alpha exactly. That is the test that
-  says the zone is subtractive and nothing else changed.
+**F2 is now unblocked and this is the point of H1.** Every setting section 10
+rejected was rejected for masking the wearer's hand, and the zone subtracts
+the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
+0.6, `engine both`, `verify` off, the mirror view at 0.3, `third_conf` down to
+0.1 and a 2560 scan, with the zone on. Two things to fix in the harness first:
 
-**Do not lower any face threshold before H1 lands.** Until the zone exists,
-section 10's finding stands: those settings mask the wearer's hand. After H1
-they are package F2 and they are measured.
+- `eval/measure.py` does not know the zone exists, so a sweep measures masks
+  the pipeline would not apply. F2 has to apply the zone there or its numbers
+  are about a build that does not ship.
+- **`hand_damage` has changed meaning** and is no longer expected to be zero.
+  MediaPipe's hulls are every hand in the frame and the rule protects only the
+  wearer's, so a mask on a bystander's hand is permitted now. Score hulls that
+  intersect the zone separately from those that do not before leaning on that
+  gate. Section 17.4.
 
-**Do not build F0 or T2.** There is nothing to measure and the rule answers
-both by construction.
+**Do not lower any face threshold outside F2**, and do not build F0 or T2.
 
 ## Decisions taken by default
 
 Judgement calls made without asking, each reversible, each recorded where it
 lives:
+
+- **H1: a face is protected only where a hand is on it** (`zone_face_needs_hand`,
+  on), at 1.6 times the palm box (`zone_face_scale`). The audit found the zone
+  protecting bystanders' faces from redaction in 20 of 27 labelled cases, and
+  this is the fix. **It reverses the owner's D1**: a printed face on a card
+  held in the hand is now masked, because the card sits in the reach and not
+  under the hand. That cannot be tested here, because there are no cards in
+  this footage, and the trade was taken deliberately: masking a mass produced
+  photograph on a card is a smaller harm than leaving a stranger's real face
+  in a copy. `zone_face_needs_hand=False` gives D1 back. Report section 17.5.
+- **H1: the precision gate tests the hand, not the reach.** Once a face may be
+  masked inside the reach on purpose, a gate measuring the reach reports the
+  rule working as the rule broken. The gate measures where the promise is
+  absolute. What the reach prevented is reported by the pipeline instead, as
+  `masked_in_zone_prevented`. Section 17.6.
+- **H1: `zone_stride` stays 1.** Stride 2 saves 18 percent of the detect phase
+  and halves the hand evidence. That is a bad trade for the one promise that
+  is absolute.
 
 - **R2: the oracle's weight hash is a constant in `eval/oracle_owl.py`, with a
   test tying it to `models/README.md`.** The spec said to verify against the
@@ -184,6 +204,22 @@ With screens on as well, measured 2026-09-10 to 11, output folders
 | Runs of those long enough to hold the copy back | 1 | 3 | 0 | 7 |
 | Held back for | face, screen | face, screen | face | face, screen |
 | Screen recall against the oracle | 0 % | 2 % | 0 % | 23 % |
+
+With the handled zone on, from the H1 run of 2026-09-11:
+
+| Measure | `003939` | `004100` | `004310` | `005035` |
+|---|---|---|---|---|
+| Frames with a zone | 2033/2033 | 982/984 | 938/938 | 3971/3971 |
+| Zone share of the frame, mean | 8.98 % | 7.17 % | 10.12 % | 10.68 % |
+| ... max | 36.41 % | 34.13 % | 17.66 % | 34.84 % |
+| Hands per frame | 1.62 | 1.59 | 2.62 | 1.15 |
+| Mask the zone took back | 0.036 % | 0.008 % | 0.015 % | 0.035 % |
+| Frames over the zone gate | 0 | 0 | 1 | 0 |
+| Worst zone frame | 0.10 % | 0.10 % | 0.50 % | 0.30 % |
+
+The zone takes almost nothing back because the track level hand rules were
+already keeping masks off hands. What it changes is that the protection is
+structural rather than three thresholds holding, which is what unblocks F2.
 
 If someone asks how good it is in one percentage, there is not one, and the
 honest answer is three numbers: **99.7 to 100 percent** of the faces the
@@ -248,6 +284,28 @@ records and `docs/report.md` are what an auditor actually asks for.
 - **The exposure proxy brackets pairs of different faces too.** Read
   `exposed_40` and `exposed_24_40` as a difference between settings, not as a
   count of exposed faces.
+
+**About the zone.**
+
+- **One of twenty audited bystander faces is still protected** after the fix,
+  and **three of seven of the wearer's own hands are now masked** where the
+  zone used to protect them. Both are the same hard case from opposite sides:
+  a face and a hand close enough together that no region separates them.
+- **`zone_gate_changed` is a first guess sitting on a real reading.** The
+  shipped build reads 0.501 percent on one frame of `004310` against a gate of
+  0.500, so that copy is held back for `zone` by a thousandth, while the other
+  three files read 0.097 to 0.299. Set it from a distribution before trusting
+  it.
+- **29 of the 56 faces the zone set aside were never examined.** They are in
+  `docs/audits/zone_faces_set_aside_2026-09-11.csv` marked as such.
+- **The remembered zone drifts** under camera rotation or zoom, because
+  `motion.estimate_shift` measures a translation only. The memory is three
+  seconds for that reason and the drift is not separately measured.
+- **The check cannot rebuild the remembered zone**, because memory crosses
+  frame range boundaries and each range runs in its own worker. Only the live
+  half is checked.
+- **The zone costs about 60 ms a frame**, roughly doubling the detect phase,
+  966 s against 556 s on the four files.
 
 **About what is not built.**
 
@@ -321,6 +379,7 @@ before changing anything a pass measured.
 | 2026-09-10 to 11 | R1, S1, 4.3, E1: documents and build caught up, screens in the gate, per kind accounting, the object oracle | 16.1 to 16.3 |
 | 2026-09-11 | The owner restated the goal as one rule. The spec was rewritten around it; F0 and T2 dropped | spec section 3 |
 | 2026-09-11 | R2: review fixes, exit code follows the gate, rows carry their box, imports checked by `ast` | 16.6 |
+| 2026-09-11 | H1: the handled zone. Three defects found by measurement, including the zone protecting bystanders' faces | 17 |
 
 ## Open questions for the owner
 
@@ -351,7 +410,9 @@ before changing anything a pass measured.
 | `faceblur/classes.py` | the kinds, and which are ready |
 | `faceblur/screens.py` | YOLOX, the size cap, the persistence rule |
 | `faceblur/verify.py` | the check that reads the copy, `held_for`, the gate |
-| `faceblur/hands.py` | palm detector and landmark model. H1 builds on this |
+| `faceblur/hands.py` | palm detector and landmark model, for the output side check |
+| `faceblur/zone.py` | the handled zone: whose hands, how far, how long remembered |
+| `eval/zone.py` | zone share, cost, hand damage on a copy, the audit renderer |
 | `cli.py`, `ui/app.py` | the two front ends |
 | `eval/common.py` | the raw cache and its fingerprint |
 | `eval/measure.py`, `eval/sweep.py` | the label free harness and the gates |
@@ -360,4 +421,4 @@ before changing anything a pass measured.
 | `eval/screens.py` | the screen class scored against the oracle |
 | `models/README.md` | every model: source, sha256, input layout, output layout |
 | `docs/report.md` | every measurement, one section per pass |
-| `docs/audits/` | by eye labels. Does not exist yet; H1 creates it |
+| `docs/audits/` | by eye labels, committed. H1's are the first that can be re-scored |

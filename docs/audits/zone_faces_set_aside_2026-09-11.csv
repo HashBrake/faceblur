@@ -1,0 +1,57 @@
+video,frame,px,x,y,w,h,score,zone_cover,hand_cover,verdict,note
+003939,694,83,143,871,56.8,83.1,0.832,1.0,0.923,not examined,
+003939,695,85,136,882,54.8,85.3,0.814,0.999,0.77,not examined,
+003939,696,81,128,889,54.5,81.0,0.796,1.0,0.927,not examined,
+003939,697,87,119,898,54.6,86.7,0.816,1.0,0.979,not examined,
+003939,698,83,113,903,52.5,83.3,0.816,1.0,0.951,not examined,
+003939,699,83,103,902,55.3,83.3,0.847,1.0,0.753,not examined,
+003939,700,83,100,905,56.4,83.4,0.843,1.0,0.803,not examined,
+003939,701,83,101,906,56.2,83.3,0.845,1.0,0.72,not examined,
+003939,702,82,102,909,54.7,81.9,0.836,1.0,0.662,not examined,
+003939,703,87,101,910,56.2,87.5,0.859,0.982,0.619,not examined,
+003939,704,77,105,916,51.3,77.0,0.871,1.0,0.761,not examined,
+003939,705,80,104,916,49.9,80.1,0.87,0.993,0.654,not examined,
+003939,706,83,98,920,49.8,82.6,0.863,0.791,,not examined,
+003939,1081,119,265,1030,82.6,119.5,0.811,0.974,0.696,not examined,
+003939,1082,122,253,1020,88.0,121.8,0.849,0.947,0.589,not examined,
+003939,1086,126,263,1002,87.3,126.2,0.836,0.901,0.6,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1087,132,264,993,85.5,132.5,0.808,0.904,0.624,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1088,124,271,989,88.9,123.9,0.843,0.946,0.62,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1089,130,279,981,85.8,130.4,0.849,0.916,0.623,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1090,121,281,975,80.1,120.9,0.841,0.829,0.627,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1091,131,283,971,82.9,130.9,0.829,0.866,0.545,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1092,122,291,968,80.3,121.9,0.843,0.971,0.602,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1093,127,293,958,77.9,126.8,0.863,0.963,0.608,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1094,127,298,952,82.2,126.8,0.857,0.97,0.619,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1095,123,300,939,77.0,122.6,0.856,0.965,0.633,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1096,126,311,930,72.6,126.2,0.844,0.947,0.678,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1097,132,319,918,81.2,132.4,0.853,0.798,0.765,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1098,130,328,908,74.1,130.5,0.826,0.985,0.528,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1099,131,337,891,78.8,130.8,0.846,0.87,0.811,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1100,132,344,880,78.2,131.6,0.797,0.984,0.54,bystander face,a man washing his hands at the sink; his face is beside his own hand and the zone grown from that hand covers 80 to 98 percent of it
+003939,1101,123,359,866,75.7,123.4,0.812,0.975,0.887,not examined,
+003939,1400,53,80,889,36.5,53.3,0.828,0.997,,not examined,
+003939,1404,52,63,910,38.3,51.9,0.73,0.96,,not examined,
+004310,118,43,744,1078,30.4,43.2,0.51,1.0,1.0,not examined,
+004310,119,44,746,1074,30.5,43.6,0.455,1.0,1.0,not examined,
+004310,334,136,743,976,91.7,135.6,0.716,1.0,1.0,the wearer's hand,the face detector called the wearer's own hand a face; the hand rule agrees at 1.0
+004310,577,124,1382,919,78.9,124.4,0.863,1.0,,bystander face,"the same worker, another moment, face at 124 px fully inside the reach"
+004310,830,132,1483,937,97.8,131.7,0.692,1.0,,bystander face,"a canteen worker in a green apron; their own hand rests low in the frame at 56 px, qualifies on the edge rule, and the grown reach covers their face at 144 px"
+004310,834,135,1475,929,113.7,135.1,0.61,1.0,,bystander face,"a canteen worker in a green apron; their own hand rests low in the frame at 56 px, qualifies on the edge rule, and the grown reach covers their face at 144 px"
+004310,835,140,1472,924,110.5,140.5,0.647,1.0,,bystander face,"a canteen worker in a green apron; their own hand rests low in the frame at 56 px, qualifies on the edge rule, and the grown reach covers their face at 144 px"
+004310,836,144,1472,924,110.1,143.7,0.709,1.0,,bystander face,"a canteen worker in a green apron; their own hand rests low in the frame at 56 px, qualifies on the edge rule, and the grown reach covers their face at 144 px"
+005035,311,57,661,1279,44.4,56.5,0.614,1.0,1.0,the wearer's hand,"hand rule 1.0, low in the frame"
+005035,316,48,254,506,34.7,48.0,0.826,1.0,,not examined,
+005035,450,45,321,557,31.3,45.3,0.689,1.0,,not examined,
+005035,1614,40,95,843,29.2,40.2,0.605,1.0,,not examined,
+005035,1619,32,91,862,23.6,32.2,0.845,1.0,1.0,not examined,
+005035,1630,118,1022,1193,92.4,118.3,0.603,1.0,1.0,the wearer's hand,"the hand gripping the bat, hand rule 1.0"
+005035,2328,75,708,934,55.8,75.0,0.783,1.0,1.0,the wearer's hand,hand rule 1.0
+005035,2340,41,717,1173,27.4,41.4,0.544,1.0,1.0,not examined,
+005035,2828,39,314,806,28.1,38.7,0.691,1.0,0.63,not examined,
+005035,3047,50,975,1148,27.5,49.5,0.618,1.0,1.0,not examined,
+005035,3360,49,741,1281,34.3,48.7,0.609,1.0,1.0,not examined,
+005035,3487,174,667,992,132.8,173.9,0.723,1.0,1.0,the wearer's hand,"the wearer's open hand at 154 to 174 px, called a face by the detectors; the bare hand quad covers it, so the fix keeps it set aside"
+005035,3488,158,698,1002,125.8,157.6,0.754,1.0,1.0,the wearer's hand,"the wearer's open hand at 154 to 174 px, called a face by the detectors; the bare hand quad covers it, so the fix keeps it set aside"
+005035,3500,154,622,1013,108.6,153.6,0.685,1.0,1.0,the wearer's hand,"the wearer's open hand at 154 to 174 px, called a face by the detectors; the bare hand quad covers it, so the fix keeps it set aside"
+005035,3926,20,713,528,15.8,20.1,0.777,1.0,,not examined,

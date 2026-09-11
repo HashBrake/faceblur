@@ -287,6 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="what to hide, comma separated (default: %(default)s). "
                              + "; ".join(f"{k.name}: {k.summary}" for k in available_kinds())
                              + _not_yet_help())
+    parser.add_argument("--no-zone", dest="zone", action="store_false",
+                        help="mask inside the handled zone as well. The zone is the "
+                             "region around the wearer's hands and what they are "
+                             "holding, which nothing is ever masked in; this is for "
+                             "measuring what it costs, not for a run that ships")
     parser.add_argument("--no-hand-rule", dest="hand_rule", action="store_false",
                         help="let the check report the wearer's hands as missed faces. "
                              "By default MediaPipe's hand models are asked about every "
@@ -342,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             chunk_seconds=args.chunk_seconds,
             copy_clean=args.copy_clean,
             hwaccel=args.hwaccel,
+            zone=args.zone,
             check_output=args.check_output or args.quarantine,
             check_stride=args.check_stride,
             quarantine=args.quarantine,

@@ -89,6 +89,71 @@ class Settings:
     # frames, so at check_stride 2 a run of 3 spans six source frames.
     screen_gate_min_run: int = 3
 
+    # --- the handled zone ----------------------------------------------------
+    # The region nothing is ever masked in: the wearer's hands and what they
+    # are holding. This is the owner's rule of 2026-09-11 and it is the one
+    # precision constraint that is absolute, so it is on by default and
+    # --no-zone exists for measurement only. See faceblur/zone.py and report
+    # section 17.
+    zone: bool = True
+    # Sliding window the palm model sees, before it is downscaled to its own
+    # 192. The wearer's hands run 150 to 500 px on this camera, and the whole
+    # frame at 192 puts a hand at 20 px where the model sees nothing. Same
+    # reasoning as hand_windows, measured in section 14.2.
+    zone_window: int = 512
+    # Run the hand pass on every Nth frame. The zone has memory, so the frames
+    # between are covered; 1 until section 17 says what 2 costs.
+    zone_stride: int = 1
+    # Suppression over palm boxes pooled from overlapping windows. One hand
+    # lands in four windows and has to come out as one hand.
+    zone_nms: float = 0.5
+    # A hand qualifies as the wearer's at this palm size or when it reaches
+    # the bottom zone_edge_frac of the frame. In egocentric footage the
+    # wearer's hands are the closest thing of their kind and enter from below.
+    # Both are first guesses; section 17 measures how often a bystander's hand
+    # qualifies.
+    zone_min_hand_px: int = 120
+    zone_edge_frac: float = 0.25
+    # How far the protected polygon reaches past MediaPipe's own hand
+    # rectangle, which is already 2.6 times the palm box. A card or a phone
+    # held in the hand extends about one hand's width past the fingers. First
+    # guess, section 17 measures it.
+    zone_scale: float = 1.5
+    # Seconds a handled thing stays protected after the hand leaves it. Only
+    # text and screens are protected by memory: a person who walks into the
+    # space where a card was put down is still a person.
+    zone_memory: float = 3.0
+    # The precision gate. A copy in which more than this share of the zone's
+    # pixels moved is held back, whatever else the check found. First guess,
+    # section 17 measures what a clean run reads.
+    zone_gate_changed: float = 0.005
+    # A face is protected by the zone only where a hand is actually on it,
+    # not merely inside the grown reach of one. The audit of 2026-09-11 found
+    # the zone covering a canteen worker's face at 144 px: their own hand
+    # rested near the bottom of the frame, qualified on the edge rule at 56 px,
+    # and the grown polygon reached 40 px up and over their face. Protecting a
+    # stranger's face from redaction is the worst failure this tool has, and
+    # it is worse than masking a printed face on a card in somebody's hand,
+    # which is what this costs. Set False to go back to the reach.
+    # Report section 17, docs/audits/zone_hands_004310.csv.
+    zone_face_needs_hand: bool = True
+    # How far the face protecting region reaches, as a multiple of the palm
+    # box. MediaPipe's own hand rectangle is 2.6 palm boxes, which is the crop
+    # its landmark model wants rather than the hand's silhouette, and at 2.6 a
+    # 56 px palm makes a 146 px quad that covers a 144 px face standing beside
+    # it. Swept against the 27 labelled cases in
+    # docs/audits/zone_faces_set_aside_2026-09-11.csv: 1.6 keeps all 7 of the
+    # wearer's own hands and cuts the bystander faces protected from 14 to 3,
+    # where 2.0 gives 5 and 1.3 starts losing real hands. Report section 17.
+    zone_face_scale: float = 1.6
+    # Share of a box the zone has to cover before the check sets that find
+    # aside. A face inside the handled zone is not a miss, it is the rule
+    # working, so it stays in the record marked with the coverage that decided
+    # it and stays out of every count the gate reads, exactly as a hand does.
+    zone_cover: float = 0.5
+    # Where the two hand models run for the zone, like hand_device.
+    zone_device: str = "auto"
+
     # --- detection -----------------------------------------------------------
     # yunet: YuNet finds faces, CenterFace confirms them (see verify).
     # both: union of the two, no confirmation. centerface: CenterFace alone.
@@ -422,6 +487,36 @@ class Settings:
                 f"screen_min_run must be at least 1, got {self.screen_min_run}")
         if self.screen_tail < 0 or self.screen_gap < 0:
             raise SettingsError("screen_tail and screen_gap must be 0 or more")
+        if self.zone_window < 64:
+            raise SettingsError(
+                f"zone_window must be at least 64, got {self.zone_window}")
+        if self.zone_stride < 1:
+            raise SettingsError(
+                f"zone_stride must be at least 1, got {self.zone_stride}")
+        if not 0.0 < self.zone_nms <= 1.0:
+            raise SettingsError(
+                f"zone_nms must be above 0 and at most 1, got {self.zone_nms}")
+        if self.zone_min_hand_px < 0:
+            raise SettingsError("zone_min_hand_px must be 0 or more")
+        if not 0.0 <= self.zone_edge_frac <= 1.0:
+            raise SettingsError(
+                f"zone_edge_frac must be between 0 and 1, got {self.zone_edge_frac}")
+        if self.zone_scale <= 0:
+            raise SettingsError(f"zone_scale must be above 0, got {self.zone_scale}")
+        if self.zone_memory < 0:
+            raise SettingsError("zone_memory must be 0 or more seconds")
+        if not 0.0 <= self.zone_gate_changed <= 1.0:
+            raise SettingsError(
+                f"zone_gate_changed must be between 0 and 1, got {self.zone_gate_changed}")
+        if self.zone_face_scale <= 0:
+            raise SettingsError(
+                f"zone_face_scale must be above 0, got {self.zone_face_scale}")
+        if not 0.0 < self.zone_cover <= 1.0:
+            raise SettingsError(
+                f"zone_cover must be above 0 and at most 1, got {self.zone_cover}")
+        if self.zone_device not in DEVICES:
+            raise SettingsError(
+                f"zone_device must be one of {DEVICES}, got {self.zone_device!r}")
         if self.screen_gate_min_px < 0:
             raise SettingsError(
                 f"screen_gate_min_px must be 0 or more, got {self.screen_gate_min_px}")
@@ -523,6 +618,9 @@ class Settings:
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",
             "screen_max_area", "screen_min_run", "screen_tail", "screen_gap",
             "screen_gate_min_px", "screen_gate_min_run",
+            "zone", "zone_window", "zone_stride", "zone_nms", "zone_min_hand_px",
+            "zone_edge_frac", "zone_scale", "zone_memory", "zone_gate_changed",
+            "zone_cover", "zone_face_needs_hand", "zone_face_scale", "zone_device",
             "nms_detect", "nms_yunet")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.

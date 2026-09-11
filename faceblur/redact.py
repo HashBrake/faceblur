@@ -157,6 +157,53 @@ def build_alpha(shape: tuple[int, int], dets: Sequence[Detection],
     return canvas.astype(np.float32) / 255.0
 
 
+def alpha_with_zone(shape: tuple[int, int], dets: Sequence[Detection],
+                    settings: Settings, zone=None) -> np.ndarray:
+    """`build_alpha`, with the handled zone subtracted from it.
+
+    The zone is applied here, at the last step, rather than by dropping
+    detections earlier. Two reasons. The audit can then report both what would
+    have been masked and what was, which is what tells a reader the zone is
+    doing something rather than the detector finding nothing. And a partly
+    covered thing is partly masked: a face half behind the wearer's hand loses
+    the half that is behind the hand and keeps the rest, where dropping the
+    detection would have left the whole face visible.
+
+    Live polygons protect every kind. Remembered ones protect text and screens
+    only, so when both exist the two groups of detections need their own
+    canvas. With no zone, or with nothing remembered, there is one canvas and
+    the result is `build_alpha` exactly, which is what makes `zone=False`
+    reproduce the old behaviour byte for byte.
+    """
+    from .zone import REMEMBERED_PROTECTS, alpha_for
+
+    if not zone or not dets:
+        return build_alpha(shape, dets, settings)
+    # Two protections, because they are not the same promise. What the wearer
+    # is reaching over protects text and screens: that is the thing in their
+    # hand. A face is protected only where a hand is actually on it, because a
+    # face inside somebody's reach is usually their own face. See
+    # `zone_face_needs_hand` and report section 17.
+    reach = tuple(zone.live) + tuple(zone.remembered)
+    on_faces = tuple(zone.hands) if settings.zone_face_needs_hand else tuple(zone.live)
+    if not reach and not on_faces:
+        return build_alpha(shape, dets, settings)
+
+    def cut(mask, polygons):
+        if not polygons:
+            return mask
+        return mask * (1.0 - alpha_for(shape, polygons, settings.feather))
+
+    by_reach = [d for d in dets if d.kind in REMEMBERED_PROTECTS]
+    by_hand = [d for d in dets if d.kind not in REMEMBERED_PROTECTS]
+    if not by_reach:
+        return cut(build_alpha(shape, dets, settings), on_faces)
+    if not by_hand:
+        return cut(build_alpha(shape, dets, settings), reach)
+    return np.maximum(cut(build_alpha(shape, by_hand, settings), on_faces),
+                      cut(build_alpha(shape, by_reach, settings), reach))
+
+
 def build_mask(shape: tuple[int, int], dets: Sequence[Detection],
                settings: Settings) -> np.ndarray:
     """Hard uint8 mask, 255 where alpha is at least one half."""
@@ -165,7 +212,7 @@ def build_mask(shape: tuple[int, int], dets: Sequence[Detection],
 
 def masked_shares(shape: tuple[int, int], dets: Sequence[Detection],
                   settings: Settings,
-                  alpha: "np.ndarray | None" = None) -> dict[str, float]:
+                  alpha: "np.ndarray | None" = None, zone=None) -> dict[str, float]:
     """Share of the frame each kind's regions cover, at alpha one half or more.
 
     The union alpha cannot answer this and the difference is not small. A
@@ -184,8 +231,10 @@ def masked_shares(shape: tuple[int, int], dets: Sequence[Detection],
         return {}
     if len(kinds) == 1 and alpha is not None:
         return {kinds.pop(): float((alpha >= 0.5).mean())}
-    return {name: float((build_alpha(shape, [d for d in dets if d.kind == name],
-                                     settings) >= 0.5).mean())
+    # Measured after the zone is applied, because the question the record
+    # answers is how much was destroyed, not how much was proposed.
+    return {name: float((alpha_with_zone(shape, [d for d in dets if d.kind == name],
+                                         settings, zone) >= 0.5).mean())
             for name in sorted(kinds)}
 
 
@@ -218,11 +267,18 @@ def _cover_region(frame: np.ndarray, cover: np.ndarray, e: "Region",
 
 
 def redact(frame: np.ndarray, dets: Sequence[Detection],
-           settings: Settings) -> tuple[np.ndarray, np.ndarray]:
-    """Return (frame with faces destroyed, alpha). Pixels at alpha 0 stay exact."""
+           settings: Settings, zone=None) -> tuple[np.ndarray, np.ndarray]:
+    """Return (frame with the sensitive things destroyed, alpha).
+
+    Pixels at alpha 0 stay exact, which is what makes the handled zone a
+    promise rather than a preference: inside it the alpha is zero, so the
+    source pixel is copied through untouched.
+    """
     if not dets:
         return frame, np.zeros(frame.shape[:2], np.float32)
-    alpha = build_alpha(frame.shape[:2], dets, settings)
+    alpha = alpha_with_zone(frame.shape[:2], dets, settings, zone)
+    if not alpha.any():
+        return frame, alpha
     H, W = frame.shape[:2]
     # Everything happens inside the box around the ellipses. Blending the whole
     # frame in float was most of the cost of the write pass.
