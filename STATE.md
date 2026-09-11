@@ -2,8 +2,9 @@
 
 Last updated 2026-09-11, after work package H1 of `FACEBLUR_BUILD_PLAN_V2.md`.
 Packages R1, S1, 4.3, E1, R2 and **H1 (the handled zone)** are done, committed
-and pushed. **G1, the gate in the window, is next.** F2, F1, T3 and S2 now all
-have the zone to measure with.
+and pushed. **H2, the zone follow ups, is next**, then G1. F2, F1, T3 and S2
+all have the zone to measure with, and H2 is what makes its "whose hands"
+rule safe to lean on.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -101,25 +102,39 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 | E1 | Object oracle for evaluation | Done, report 16.2 |
 | R2 | Fixes from the review of that pass | Done, report 16.6 |
 | H1 | The handled zone | Done, report 17 |
-| **G1** | **The gate in the window** | **Next** |
-| F2 | Recall outside the zone | Not started. H1 is in, so this is unblocked |
-| F1 | Second chance for missed faces | Not started. R2 and H1 are in |
+| **H2** | **Zone follow ups: the gate threshold, whose hands, the uniform audit, the window grid** | **Next. Spec section 5, H2** |
+| G1 | The gate in the window | After H2 |
+| F2 | Recall outside the zone | Not started. Needs H2 and its two harness prerequisites |
+| F1 | Second chance for missed faces | Not started. Needs H2 |
 | T1 | Text detector | Not started |
-| T3 | Text policy, gate, ready | Not started, needs T1 |
-| S2 | Screens outside the zone | Not started. H1 is in |
+| T3 | Text policy, gate, ready | Not started, needs T1 and the reach gate the spec now asks for |
+| S2 | Screens outside the zone | Not started. Needs H2 |
 | D | Defaults: all three kinds on | Not started, needs T3 |
 | T4, M1 | Identifiers, metadata line | Optional |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
 ### What to do next
 
-**Start G1, the gate in the window**, or **F2**. G1 is a day or two and closes
-the oldest gap in the project: `ui/app.py` never sets `check_output` or
-`quarantine`, so nobody who uses the window gets the check or the gate, and
-the window is the workflow the tool was built around. F2 is three days and is
-what H1 was on the critical path for.
+**Start H2**, spec section 5. Two days, four items, in this order:
 
-**F2 is now unblocked and this is the point of H1.** Every setting section 10
+1. `zone_gate_changed` is 0.5 percent and `004310` reads 0.501 on one frame,
+   so a clean copy is quarantined for `zone` by a thousandth. Set it from the
+   four readings (1.0 percent), re-run, amend section 17.3. Not optional.
+2. Measure the wrist to knuckle direction (`hands.rect_for` already computes
+   it) as a "whose hands" rule against the 27 labelled cases. If it separates
+   bystanders from the wearer on its own, re-sweep with
+   `zone_face_needs_hand=False`; that gives D1 back and stops masking the
+   three wearer hands the 1.6 palm region costs. If not, keep the rule and
+   record the table either way.
+3. Label the 179 rows of `docs/audits/zone_hands_*.csv`. They were rendered
+   and never scored, and section 17.5 says otherwise; fix the sentence.
+4. Drop the top row of hand windows if the numbers do not move.
+
+Then **G1**, the gate in the window, a day or two: `ui/app.py` never sets
+`check_output` or `quarantine`, so nobody who uses the window gets the check
+or the gate, and the window is the workflow the tool was built around.
+
+**F2 comes after H2 and is the point of H1.** Every setting section 10
 rejected was rejected for masking the wearer's hand, and the zone subtracts
 the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
 0.6, `engine both`, `verify` off, the mirror view at 0.3, `third_conf` down to
@@ -150,6 +165,8 @@ lives:
   this footage, and the trade was taken deliberately: masking a mass produced
   photograph on a card is a smaller harm than leaving a stranger's real face
   in a copy. `zone_face_needs_hand=False` gives D1 back. Report section 17.5.
+  **Ratified 2026-09-11**: the owner delegated the call and it stands, pending
+  H2 item 2, which is the only thing that may reopen it.
 - **H1: the precision gate tests the hand, not the reach.** Once a face may be
   masked inside the reach on purpose, a gate measuring the reach reports the
   rule working as the rule broken. The gate measures where the promise is

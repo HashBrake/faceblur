@@ -14,12 +14,27 @@ it hooks into so that the next session can check the hook still exists.
 
 ## 0. Where things stand and what changed
 
-Done and pushed (commits `def0abd` to `4fe7c22`, report section 16): the
-documents and packaged app caught up with the code (R1); the output side
+Done and pushed (commits `def0abd` to `18e6b82`, report sections 16 and 17):
+the documents and packaged app caught up with the code (R1); the output side
 check reads the copy for screens and can hold a copy back for one (S1); the
 audit record splits the masked share by kind (4.3); an open vocabulary oracle
-gives screens their first recall number, 0 to 23 percent (E1). All 1037 tests
-pass.
+gives screens their first recall number, 0 to 23 percent (E1); the fixes from
+the review of that pass (R2); and **the handled zone (H1)**, on every frame
+of every sample file, subtracted from every mask, with a precision gate in
+the check and the first audit in this project whose labels are committed.
+All 1084 tests pass.
+
+**Status on 2026-09-11, after H1.** Building the zone found that "inside the
+zone" needs two definitions. What the wearer reaches over is what they hold,
+so text and screens there are protected. A face inside somebody's reach is
+usually their own face: the audit found the zone protecting bystanders' faces
+in 20 of 27 labelled cases, so a face is now protected only where a hand is
+on it (`zone_face_needs_hand`, at `zone_face_scale` 1.6 palm boxes, chosen by
+sweeping against the labels). That reverses D1 for printed faces on handled
+cards. **The owner delegated the call on 2026-09-11 and it stands**: a real
+face outranks a printed one, and there is no card footage to lose anything on
+until there is. Package H2 measures a "whose hands" rule that may give D1
+back for free.
 
 Two findings from that pass change the plan:
 
@@ -33,11 +48,12 @@ Two findings from that pass change the plan:
   which reopens recall options that were rejected because they masked the
   wearer's hand.
 
-The work that remains, in order: fixes from the review of the last pass (R2),
-the handled zone (H1), the gate in the window (G1), recall outside the zone
-(F2), the second chance for missed faces (F1), the text detector and policy
-(T1, T3), screens outside the zone (S2), defaults (D), and two optional
-pieces (T4, M1). F0 and T2 are dropped; section 3 says why.
+The work that remains, in order: zone follow ups (H2), the gate in the
+window (G1), recall outside the zone (F2), the second chance for missed faces
+(F1), the text detector and policy (T1, T3), screens outside the zone (S2),
+defaults (D), and two optional pieces (T4, M1). F0 and T2 are dropped;
+section 3 says why. H2 comes before F2 because F2 loosens thresholds outside
+the zone, and every error in "whose hands" gets larger when it does.
 
 ## 1. Standing decisions
 
@@ -109,7 +125,11 @@ screens, faces) is blurred.* Three clarifications, same day:
 What the rule resolves:
 
 - A printed face on a card in hand is not blurred. The old F0 question is
-  answered by construction and F0 is dropped.
+  answered by construction and F0 is dropped. **Amended after H1:** a face is
+  protected only where a hand is on it, so a printed face on a card in the
+  reach is masked today. The owner accepted that on 2026-09-11 (delegated
+  decision, section 0); `zone_face_needs_hand=False` gives D1 back, and H2
+  measures whether a better "whose hands" rule makes the trade unnecessary.
 - Text needs no card veto. Text outside the zone is masked whatever surface
   it is on; text inside is left. T2 is dropped. Card footage is still needed
   to measure how much card text sits inside the zone in practice, but the
@@ -250,7 +270,14 @@ F2, F1, T1, T3, S2, D, then T4 and M1 if time allows.
 **Verify.** `pytest tests`; `python -m faceblur.verify` on an R1 copy with
 `--mask face,screen` exits 0 when `held_for` is empty.
 
-### H1. The handled zone (1 week)
+### H1. The handled zone (done 2026-09-11, report section 17)
+
+Built as specified below with three deviations, each measured and recorded:
+a face is protected only where a hand is on it (`zone_face_needs_hand`,
+`zone_face_scale` 1.6) rather than inside the grown reach; the precision gate
+tests the hand region, not the reach, and only the live half of the zone; and
+`zone_stride` stays at 1 because 2 halved the hand evidence for 18 percent of
+the detect phase. The design text is kept as the record of what was asked.
 
 **Goal.** A per frame region nothing is ever masked in, built from the
 wearer's hands, measured on the four files, applied to every kind, and
@@ -327,6 +354,48 @@ is not masked; `zone=False` reproduces the current alpha exactly; the check
 reports changed pixels inside a zone on a copy made with `--no-zone` and
 none on a copy made with it.
 
+### H2. Zone follow ups (2 days)
+
+Four things the H1 review found, in order. The first is a shipping default
+that holds back a clean copy and is not optional.
+
+1. **Set `zone_gate_changed` from the distribution.** The shipped 0.5 percent
+   sits on a real reading: `004310` reads 0.501 on one frame and is
+   quarantined for `zone` by a thousandth, while the other files read 0.10 to
+   0.30 and a copy made with `--no-zone` reads 17.7. Set it at 1.0 percent,
+   re-run `004310` with `--check-output`, and record the four readings and
+   the margin in section 17.3. A gate that fires on a good copy is a defect,
+   not a caveat.
+2. **Measure the wrist to knuckle direction as the "whose hands" rule.**
+   `hands.rect_for` already computes the angle that puts the wrist to middle
+   knuckle line upright. The wearer's hands point up the frame, away from the
+   chest camera; a bystander facing the wearer has hands pointing down or
+   toward it. Add `zone_orientation` (degrees from straight up within which a
+   hand may be the wearer's; first guess 100) as a third condition beside
+   size and edge, score it against the 27 labelled cases in
+   `docs/audits/zone_faces_set_aside_2026-09-11.csv` and the labels from item
+   3, and report the table. If it separates the 20 bystander cases from the
+   7 wearer hands on its own, re-sweep `zone_face_needs_hand=False` with it
+   on: that would give D1 back and stop masking the three wearer hands the
+   1.6 palm region costs. If it does not, keep the current rule and say so.
+   Do not flip `zone_face_needs_hand` without that table.
+3. **Label the uniform sample.** `docs/audits/zone_hands_*.csv` holds 179
+   rendered rows and no verdicts. Fill `verdict` (`wearer`, `bystander`,
+   `not a hand`, `cannot tell`) and `note` for all 179 and commit. That is
+   the only measurement of how often "whose hands" is wrong on frames nobody
+   pre-selected, and 17.6 admits it does not exist. Then correct the sentence
+   in 17.5 that says these labels were committed.
+4. **Cut the window grid.** 30 windows of 512 px at half overlap cover the
+   whole frame; the wearer's hands never reach the top third. Measure the
+   zone on the four files with the top row of windows dropped
+   (`zone_top_frac`, first guess 0.3): hands per frame, zone share, the 44 of
+   52 hand rule agreement of 17.4, and ms per frame. Ship it only if the
+   first three do not move.
+
+**Verify.** `pytest tests`; the four files with `--check-output` held back
+for `zone` on none of them; section 17 amended, not appended; `STATE.md`
+"decisions taken by default" updated with the outcome of item 2 either way.
+
 ### G1. The gate in the window (1 to 2 days)
 
 `ui/app.py` never sets `check_output` or `quarantine`, so no run started
@@ -344,6 +413,17 @@ rules; `tests/test_ui.py` and `tests/manual_ui.md` updated.
 **Goal.** Re-measure the settings section 10 rejected for masking the
 wearer's hand, now that the zone protects it, and move the defaults if the
 numbers say to.
+
+**Two prerequisites in the harness, found by H1 (report 17.4).**
+`eval/measure.evaluate` builds masks from the raw cache and the tracker and
+does not apply the zone, so a sweep today scores masks the pipeline would
+not apply; build the zone from the cached hands (add them to the raw cache
+with their own fingerprint) and subtract it exactly as `redact` does before
+any number is read. And `hand_damage` now measures two things: MediaPipe's
+hulls are every hand in the frame, the rule protects only the wearer's, so a
+mask on a bystander's hand is permitted. Split it into `hand_damage_wearer`
+(hulls that intersect the zone; gate 0.1 percent as before) and
+`hand_damage_other` (reported, no gate) before leaning on it.
 
 **Method.** `eval/sweep.py` gains a grid over: `conf` 0.4 to 0.6, `engine`
 `yunet` and `both`, `verify` on and off, `confirm_tta` 2 with
@@ -418,6 +498,15 @@ found. No card veto, no surface classes, no OCR.
 the zone, `applied` through `region_for`, `classify` as before, persistence
 `text_gate_min_run` 2 in checked frames, `text_gate_min_px` 16.
 `held_for` adds `text`. `KINDS_CHECKED` gains `text`.
+
+**The other half of the promise.** The precision gate from H1 tests only the
+hand region and only the live zone (report 17.6), so nothing yet checks that
+text and screens inside the reach or the remembered zone were left alone.
+Before `TEXT.ready` is set, the check must rebuild the reach on the source
+frames (live polygons at `zone_scale`, which needs no memory) and report
+text and screen pixels destroyed inside it as `reach_pixels_changed`, gated
+like `zone_gate_changed`. The remembered half stays unchecked and section 19
+says so.
 
 **Ready.** `TEXT.ready = True`;
 `tests/test_classes.py::test_which_kinds_this_build_can_actually_do` changes
@@ -591,21 +680,22 @@ labels committed, and are not the number quoted.
 
 | Order | Package | Estimate | Depends on |
 |---|---|---|---|
-| 1 | R2 review fixes | 1 day | nothing |
-| 2 | H1 handled zone | 5 days | nothing |
-| 3 | G1 gate in the window | 1 to 2 days | nothing |
-| 4 | F2 recall outside the zone | 3 days | H1 |
-| 5 | F1 second chance | 5 days | R2, H1 |
-| 6 | T1 text detector | 3 days | nothing; measure with H1 on |
-| 7 | T3 text policy, gate, ready | 3 days | T1, H1 |
-| 8 | S2 screens outside the zone | 2 days | H1 |
-| 9 | D defaults | half a day | T3 |
-| 10 | T4 identifiers | 3 days | T3, optional |
-| 11 | M1 metadata line | half a day | nothing |
+| done | R2 review fixes | | |
+| done | H1 handled zone | | |
+| 1 | H2 zone follow ups | 2 days | nothing |
+| 2 | G1 gate in the window | 1 to 2 days | nothing |
+| 3 | F2 recall outside the zone | 4 days, with its two harness prerequisites | H2 |
+| 4 | F1 second chance | 5 days | H2 |
+| 5 | T1 text detector | 3 days | nothing |
+| 6 | T3 text policy, gate, ready | 4 days, with the reach gate | T1, H2 |
+| 7 | S2 screens outside the zone | 2 days | H2 |
+| 8 | D defaults | half a day | T3 |
+| 9 | T4 identifiers | 3 days | T3, optional |
+| 10 | M1 metadata line | half a day | nothing |
 
-About five weeks; four without T4. H1 is the critical path: F2, F1, T3 and
-S2 all measure with the zone on. T1 can run beside H1 if two sessions are
-used, since it touches only new modules.
+About four weeks from here; three without T4. H2 is short and comes first
+because F2, F1, T3 and S2 all lean on the zone's "whose hands" rule. T1 can
+run beside H2 if two sessions are used, since it touches only new modules.
 
 ## 10. What not to do
 
@@ -623,13 +713,20 @@ used, since it touches only new modules.
 - Do not delete `footage_blurred*` folders or an environment; disk is the
   owner's.
 - Do not build F0 or T2; they are dropped by the rule, not deferred.
-- Do not produce a by eye audit without committing its labels.
+- Do not produce a by eye audit without committing its labels, and do not
+  write that labels are committed when the CSV holds none.
+- Do not flip `zone_face_needs_hand` without the H2 item 2 table. It is the
+  difference between a stranger's face left in a copy and a printed face on
+  a card being masked, and only the labels can say which rule pays.
+- Do not trust `hand_damage` as a single number after H1; it counts
+  bystanders' hands, which the rule allows to be masked. Split it (F2).
 
 ## 11. Open questions for the owner
 
 - **Card footage.** The rule no longer depends on cards, but no number about
   card text or printed faces can be measured until there is footage with
-  cards in it. One file of a collector at work would do.
+  cards in it. One file of a collector at work would do. It is also the only
+  way to find out what the D1 reversal after H1 actually costs.
 - **A screen someone else holds up to the wearer** (risk 3): handled, or
   not? The default protects it.
 - **A second venue.** Every screen and text setting will be tuned on the
