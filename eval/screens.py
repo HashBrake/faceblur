@@ -117,6 +117,179 @@ def shipped_masks(video: Path, settings: Settings, stride: int = 1
     return hold(found, settings, total), found, total
 
 
+# Package S2, 2026-09-12. The shipped floor is `screen_conf` 0.5 and section
+# 16.2 measured 0 to 23 percent recall against the oracle. Under the rule of
+# 2026-09-11 a missed screen outside the handled zone is a leak and a masked
+# table is a cost to the environment rather than to privacy, so the floor is
+# asked again, with the zone on.
+S2_CONFS = (0.5, 0.4, 0.3, 0.25)
+
+
+def zones_for(video: Path, settings: Settings, frames: int):
+    """The handled zone per frame, or None when there is no hands cache.
+
+    A screen the wearer is holding is protected whatever the floor, so it is
+    neither a mask nor a miss, and it has to be taken out of both counts
+    before either means anything.
+    """
+    from eval.zone import load_hands, zone_from_cache
+
+    held = load_hands(video, settings)
+    if held is None:
+        return None
+    return zone_from_cache(held, settings, frames, 30.0, None)
+
+
+def protected_by(zone, det: Detection, shape) -> bool:
+    """Is this box mostly inside what the zone protects for a screen?
+
+    Live polygons and remembered ones both, because `REMEMBERED_PROTECTS`
+    holds screens: a phone the wearer put down a second ago is still the
+    thing they were handling.
+    """
+    from faceblur.zone import alpha_for
+
+    if zone is None:
+        return False
+    polys = tuple(zone.live) + tuple(zone.remembered)
+    if not polys:
+        return False
+    import numpy as np
+
+    protected = alpha_for(shape, polys, 0.0) >= 0.5
+    x0, y0 = max(0, int(det.x)), max(0, int(det.y))
+    x1 = min(shape[1], int(det.x + det.w))
+    y1 = min(shape[0], int(det.y + det.h))
+    if x1 <= x0 or y1 <= y0:
+        return False
+    inside = protected[y0:y1, x0:x1]
+    return float(inside.mean()) >= 0.5
+
+
+def masked_area(video: Path, settings: Settings, per_frame: dict, zones,
+                shape, frames: int, sample: int = 120) -> dict:
+    """How much of the frame the screen masks take, and how often that is over
+    the budget the pipeline ships.
+
+    Sampled rather than exhaustive: the masks are polygons and the answer is
+    a share, so a spread of frames over the file gives the same number for a
+    fraction of the work.
+    """
+    import numpy as np
+
+    from faceblur.redact import alpha_with_zone
+
+    if frames <= 0:
+        return {"masked_mean": 0.0, "masked_max": 0.0, "over_budget": 0, "frames": 0}
+    picks = ([int(round(i * (frames - 1) / max(1, sample - 1))) for i in range(sample)]
+             if sample < frames else list(range(frames)))
+    shares = []
+    for i in sorted(set(picks)):
+        dets = per_frame.get(i) or []
+        if not dets:
+            shares.append(0.0)
+            continue
+        zone = zones[i] if zones is not None and i < len(zones) else None
+        alpha = alpha_with_zone(shape, dets, settings, zone)
+        shares.append(float((alpha >= 0.5).mean()))
+    a = np.asarray(shares) if shares else np.zeros(1)
+    return {"masked_mean": float(a.mean()), "masked_max": float(a.max()),
+            "over_budget": int((a > settings.mask_budget).sum()),
+            "frames": len(shares)}
+
+
+def sweep(video: Path, confs=S2_CONFS, floors=FLOORS,
+          min_share: float = MIN_SHARE) -> dict:
+    """Package S2: recall, precision, masked share and budget per `screen_conf`.
+
+    The detector runs once, at the lowest floor asked for, and the higher
+    floors are taken by filtering its boxes. That is the same answer: NMS
+    keeps the highest scoring box of a cluster, so a box above 0.5 can never
+    have been suppressed by one below it.
+    """
+    import cv2
+
+    base = Settings(mask=("face", "screen"), screen_conf=min(confs))
+    path = owl_path(video)
+    if not path.is_file():
+        raise SystemExit(
+            f"no oracle cache at {path}. Run\n"
+            f"  .venv-oracle\\Scripts\\python.exe eval\\oracle_owl.py {video} --stride 5")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cap = cv2.VideoCapture(str(video))
+    shape = (int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+    cap.release()
+    _, raw, total = shipped_masks(video, base)
+    zones = zones_for(video, base, total)
+    frames = sorted(int(k) for k in data["frames"])
+
+    rows = []
+    for conf in confs:
+        settings = base.with_changes(screen_conf=conf)
+        kept = {i: [d for d in dets if d.score >= conf] for i, dets in raw.items()}
+        kept = {i: dets for i, dets in kept.items() if dets}
+        masked = hold(kept, settings, total)
+        # Once per floor of the detector, not once per floor of the oracle:
+        # what is masked depends on `screen_conf` alone, and the oracle's
+        # floor only decides which of its boxes are worth comparing against.
+        area = {f"area_{k}": v for k, v in masked_area(
+            video, settings, masked, zones, shape, total).items()}
+        for floor in floors:
+            hit = missed = set_aside = 0
+            matched = unmatched = in_zone = 0
+            for i in frames:
+                zone = zones[i] if zones is not None and i < len(zones) else None
+                theirs = oracle_screens(data, i, floor, min_share)
+                ours = masked.get(i, [])
+                for o in theirs:
+                    if any(iou(o, m) >= MATCH_IOU for m in ours):
+                        hit += 1
+                    elif protected_by(zone, o, shape):
+                        set_aside += 1
+                    else:
+                        missed += 1
+                for m in ours:
+                    if protected_by(zone, m, shape):
+                        in_zone += 1
+                    elif any(iou(o, m) >= MATCH_IOU for o in theirs):
+                        matched += 1
+                    else:
+                        unmatched += 1
+            rows.append({
+                "screen_conf": conf, "floor": floor,
+                "oracle_screens": hit + missed, "recalled": hit,
+                "recall": hit / (hit + missed) if hit + missed else None,
+                "handled_set_aside": set_aside,
+                "masked_boxes": matched + unmatched, "confirmed": matched,
+                "precision": matched / (matched + unmatched) if matched + unmatched else None,
+                "masked_in_zone": in_zone,
+                **area,
+            })
+    return {"video": video.name, "frames_compared": len(frames), "frames_total": total,
+            "stride": data["stride"], "min_share": min_share,
+            "zone": zones is not None, "rows": rows}
+
+
+def describe_sweep(result: dict) -> str:
+    def pct(v):
+        return "n/a" if v is None else f"{100 * v:.0f}%"
+
+    out = [f"{result['video']}: {result['frames_compared']} frames compared of "
+           f"{result['frames_total']}"
+           + ("" if result["zone"] else ", NO HANDS CACHE so the zone is empty"),
+           "| `screen_conf` | Oracle floor | Oracle screens | Recall | Masked boxes | "
+           "Precision | Handled, set aside | Masked frame, mean | Max | Over budget |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
+    for r in result["rows"]:
+        out.append(
+            f"| {r['screen_conf']} | {r['floor']} | {r['oracle_screens']} | "
+            f"{pct(r['recall'])} | {r['masked_boxes']} | {pct(r['precision'])} | "
+            f"{r['handled_set_aside'] + r['masked_in_zone']} | "
+            f"{100 * r['area_masked_mean']:.2f}% | {100 * r['area_masked_max']:.2f}% | "
+            f"{r['area_over_budget']} of {r['area_frames']} |")
+    return "\n".join(out)
+
+
 def score(video: Path, settings: Settings | None = None,
           floors=FLOORS, min_share: float = MIN_SHARE) -> dict:
     """Recall and precision of the shipped rule against the oracle."""
@@ -189,10 +362,20 @@ def main() -> int:
     ap.add_argument("--min-share", type=float, default=MIN_SHARE,
                     help=f"smallest oracle screen that counts, as a share of the "
                          f"frame (default: {MIN_SHARE})")
+    ap.add_argument("--s2", action="store_true",
+                    help="package S2: sweep screen_conf 0.5 to 0.25 with the "
+                         "handled zone on, and report the masked share and the "
+                         "frames over budget as well")
     ap.add_argument("--json", default=None, help="write the full result here")
     args = ap.parse_args()
     results = []
     for name in args.video:
+        if args.s2:
+            result = sweep(Path(name), min_share=args.min_share)
+            results.append(result)
+            print(describe_sweep(result), flush=True)
+            print()
+            continue
         result = score(Path(name), min_share=args.min_share)
         results.append(result)
         print(describe(result), flush=True)

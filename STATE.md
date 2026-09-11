@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1184 passing, about five minutes
+tree is clean. Tests: `tests/`, 1186 passing, about five minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -108,9 +108,9 @@ tree is clean. Tests: `tests/`, 1184 passing, about five minutes
 | F1 | Second chance for missed faces | Done, report 20 |
 | T1 | Text detector | Done, report 21 |
 | T3 | Text policy, gate, ready | **Blocked by T1's numbers.** 90 percent of what the detector finds here is not text |
-| **S2** | **Screens outside the zone** | **Next** |
+| S2 | Screens outside the zone | Done, report 22. The floor did not move |
 | D | Defaults: all three kinds on | Blocked with T3 |
-| T4, M1 | Identifiers, metadata line | Optional |
+| **T4, M1** | **Identifiers, metadata line** | **Optional. T4 needs T3, so M1 is what is left** |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
 ### What to do next
@@ -199,6 +199,17 @@ model rather than the policy. What would unblock it:
 
 **D is blocked with it**, since it turns on every ready kind and text is not
 one. S2 does not depend on either.
+
+**S2 is done and the floor did not move.** Report 22. `screen_conf` at 0.5,
+0.4, 0.3 and 0.25 against the oracle with the zone on, on all four files. The
+rule for moving it was precision over 50 percent and the masked share under 2
+percent mean on every file. The masked share was never the problem: it stays
+under 1.03 percent everywhere. Precision is what refuses it, on three files
+of four at every floor including the one that ships. The exception is
+`005035`, the table tennis hall, where the oracle finds 529 screens and
+lowering to 0.4 takes recall from 22 to 37 percent at 74 percent precision.
+That gain is real and it is not a default, because the setting would have to
+know which room it is in.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 

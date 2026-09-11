@@ -285,7 +285,38 @@ def test_the_cap_is_on_area_not_on_a_side():
 
 def test_the_shipped_floor_is_the_measured_one_not_the_first_guess():
     """0.35 destroyed 78 percent of a frame on the sample footage. The
-    numbers behind both of these are in section 15 of docs/report.md."""
+    numbers behind both of these are in section 15 of docs/report.md.
+
+    Package S2 asked the floor again with the handled zone on, at 0.5, 0.4,
+    0.3 and 0.25, and it did not move: precision against the oracle clears 50
+    percent on one file of four at any floor, and on three of them it is
+    under 20. Report section 22.
+    """
     assert Settings().screen_conf == 0.5
     assert Settings().screen_max_area == 0.12
     assert Settings().screen_min_run == 3
+
+
+def test_a_handled_screen_is_set_aside_by_the_sweep_rather_than_counted():
+    """S2's counting rule. A screen the wearer is holding is protected by the
+    zone whatever the floor, so it is neither a mask the oracle should
+    confirm nor a screen the rule should have found. Counting it either way
+    would report the rule working as the rule failing."""
+    from eval.screens import protected_by
+    from faceblur.detect import Detection
+    from faceblur.zone import ZoneFrame
+
+    shape = (400, 400)
+    quad = ((100.0, 100.0), (300.0, 100.0), (300.0, 300.0), (100.0, 300.0))
+    inside = Detection(150.0, 150.0, 80.0, 80.0, 0.6, None, "tv", True, 0.6, "screen")
+    outside = Detection(320.0, 320.0, 60.0, 60.0, 0.6, None, "tv", True, 0.6, "screen")
+    assert protected_by(ZoneFrame(live=(quad,)), inside, shape)
+    assert not protected_by(ZoneFrame(live=(quad,)), outside, shape)
+    assert not protected_by(None, inside, shape), "no zone protects nothing"
+    assert not protected_by(ZoneFrame(), inside, shape), "an empty zone protects nothing"
+
+
+def test_the_sweep_asks_the_floors_the_build_plan_named():
+    from eval.screens import S2_CONFS
+
+    assert S2_CONFS == (0.5, 0.4, 0.3, 0.25)

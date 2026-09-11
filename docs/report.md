@@ -1553,12 +1553,9 @@ to face the question rather than move every gate quietly.
 
 ### 16.5 Screens outside the handled zone
 
-Held for work package S2. Section 16.2 says the shipped screen class reports
-most of what the oracle sees at a score under `screen_conf` 0.5, and the rule
-of 2026-09-11 changes what a lower floor costs: a masked table is a cost to
-the environment rather than to privacy, and a handled screen is protected by
-the zone whatever the floor. S2 re-measures at 0.5, 0.4, 0.3 and 0.25 with the
-zone on and moves the default only if precision holds.
+Done, in section 22. The floor was re-measured at 0.5, 0.4, 0.3 and 0.25 with
+the zone on, and it did not move: precision clears 50 percent on one file of
+four at any floor. The masked share was never what refused it.
 
 ### 16.6 Fixes from the review of that pass (2026-09-11)
 
@@ -2667,3 +2664,105 @@ The 90 percent is about this footage and this model at these settings. It is
 not a statement about PP-OCRv3, which finds four lines of four on a clean
 card, and it is not a statement about what text masking would cost on
 footage that has text in it.
+
+## 22. Screens outside the zone (2026-09-12)
+
+Section 16.2 measured the shipped screen class against the OWLv2 oracle and
+found 0 to 23 percent recall. The rule of 2026-09-11 changes what a lower
+floor costs: a missed screen outside the handled zone is a leak, a masked
+table is a cost to the environment rather than to privacy, and a screen the
+wearer is holding is protected by the zone whatever the floor. So the floor
+is asked again.
+
+    .venv\Scripts\python.exe -m eval.screens VIDEO --s2
+
+The rule for moving the default was set before the numbers: **precision over
+50 percent against the oracle, and the masked share under 2 percent mean, on
+every file.**
+
+### 22.1 What the sweep does
+
+`screen_conf` at 0.5, 0.4, 0.3 and 0.25, against the oracle at six size
+floors, on all four files, with the zone on. The detector runs once per file
+at the lowest floor and the higher floors are taken by filtering its boxes,
+which is the same answer: NMS keeps the highest scoring box of a cluster, so
+a box above 0.5 can never have been suppressed by one below it.
+
+The zone is applied to both sides of the count. An oracle screen the zone
+protects is set aside rather than counted as a miss, and a masked box the
+zone protects is set aside rather than counted against precision. Those are
+the screens the wearer is handling and neither number is about them.
+
+### 22.2 The numbers, at the oracle's middle floor
+
+| File | `screen_conf` | Oracle screens | Recall | Masked boxes | Precision | Handled, set aside | Masked frame, mean | Over budget |
+|---|---|---|---|---|---|---|---|---|
+| `003939` | 0.5 | 30 | 0% | 4 | 0% | 6 | 0.04% | 0 of 120 |
+| | 0.4 | 30 | 17% | 16 | 31% | 7 | 0.14% | 0 |
+| | 0.3 | 30 | 23% | 39 | 18% | 12 | 0.36% | 3 |
+| | 0.25 | 30 | 23% | 49 | 18% | 15 | 0.48% | 4 |
+| `004100` | 0.5 | 77 | 3% | 34 | 6% | 5 | 0.41% | 0 |
+| | 0.4 | 77 | 4% | 53 | 6% | 8 | 0.76% | 5 |
+| | 0.3 | 77 | 9% | 68 | 10% | 16 | 0.86% | 5 |
+| | 0.25 | 77 | 9% | 81 | 9% | 28 | 1.03% | 7 |
+| `004310` | 0.5 | 153 | 0% | 2 | 0% | 3 | 0.01% | 0 |
+| | 0.4 | 153 | 0% | 15 | 0% | 3 | 0.14% | 0 |
+| | 0.3 | 153 | 0% | 46 | 0% | 3 | 0.34% | 0 |
+| | 0.25 | 153 | 0% | 61 | 0% | 3 | 0.44% | 0 |
+| `005035` | 0.5 | 529 | 22% | 156 | **71%** | 38 | 0.30% | 1 |
+| | 0.4 | 531 | 37% | 252 | **74%** | 75 | 0.53% | 2 |
+| | 0.3 | 531 | 46% | 354 | **67%** | 119 | 0.75% | 3 |
+| | 0.25 | 531 | 51% | 414 | **64%** | 156 | 0.89% | 4 |
+
+**The default does not move.** Precision clears 50 percent on one file of
+four at any floor, and it fails on three of them at the floor that ships
+today. The masked share is not what refuses it: it stays under 2 percent
+everywhere, the highest being 1.03 percent on `004100` at 0.25.
+
+### 22.3 The one file where lowering the floor works
+
+`005035`, the table tennis hall, is where the screens are: the oracle finds
+529 of them against 30 on the washroom file. There, and only there, both
+halves of the rule hold at every floor tried. Going from 0.5 to 0.4 takes
+recall from 22 to 37 percent at 74 percent precision, for 0.53 percent of the
+frame masked and two frames of 120 over budget. Going to 0.25 reaches 51
+percent recall at 64 percent precision.
+
+That is a real gain and it is not available as a default, because the setting
+would have to know which room it is in. What it says is that the floor is not
+wrong in principle; the detector is weak where there is little to find, and
+on three of these four files the boxes it adds below 0.5 are not the ones the
+oracle is looking at.
+
+### 22.4 Where the disagreement is, since neither side is truth
+
+On `004310` at 0.25 the rule masks 61 boxes over the compared frames and the
+oracle calls none of them a screen, while itself finding 153. They are not
+near misses. On frame 10 the oracle has a television at the left edge of the
+picture, 108 by 111 px, and the rule masks something 384 px in at 126 by 224.
+Two models are looking at a canteen and finding different objects.
+
+That is the limit of what this measurement can settle, and section 16.2 said
+so first: the oracle is one model's opinion at a threshold somebody chose.
+What can be said is that lowering the floor on this footage does not buy
+agreement with the second opinion, and a floor that only pays in one room of
+four is not a default.
+
+### 22.5 The zone, doing its job quietly
+
+The "handled, set aside" column is screens the wearer is holding, taken out
+of both counts. It grows with the floor, from 3 to 156 boxes on `005035`,
+which is the shape to expect: a lower floor finds more phones in more hands,
+and the zone protects every one of them. Without it those would have been
+counted as precision failures on a rule that was working.
+
+### 22.6 What this does not do
+
+The masked share is sampled at 120 frames a file rather than every frame, so
+"over budget" is out of 120 and not out of the whole video.
+
+Nothing here changes the screen class. `screen_conf` stays at 0.5,
+`screen_min_run` stays where section 10 left it, and the size cap is
+untouched. The one thing S2 adds to the shipped build is the measurement
+command, so the question can be asked again on footage from another venue,
+which is where the answer is likely to be different.
