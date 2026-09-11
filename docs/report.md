@@ -254,7 +254,7 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 ## 9. Reproduce
 
 ```
-.venv\Scripts\python.exe -m pytest tests                      # 1141 tests
+.venv\Scripts\python.exe -m pytest tests                      # 1195 tests
 .venv\Scripts\python.exe cli.py footage -o footage_blurred --workers 10
 .venv\Scripts\python.exe cli.py footage -o out --mask face,screen   # section 15
 .venv-eval\Scripts\python.exe eval\oracle_mediapipe.py VIDEO --stride 5
@@ -263,6 +263,9 @@ B-frames, measured on `003939`: 203.6 MB against 193.0 MB).
 .venv\Scripts\python.exe -m eval.zone --cache-hands VIDEO     # the zone the sweep subtracts
 .venv\Scripts\python.exe -m eval.sweep VIDEO --f2             # section 19, the grid with the zone on
 .venv\Scripts\python.exe -m eval.synthetic VIDEO --zone-bias  # section 19
+.venv\Scripts\python.exe -m eval.text VIDEO --sizes 960,1920  # section 21
+.venv\Scripts\python.exe -m eval.text --audit                 # section 21.3
+.venv\Scripts\python.exe -m eval.screens VIDEO --s2           # section 22
 .venv\Scripts\python.exe -m eval.reid VIDEO BLURRED           # section 12
 .venv\Scripts\python.exe -m faceblur.verify VIDEO BLURRED --workers 4   # sections 13 and 14
 ```
@@ -2769,8 +2772,8 @@ which is where the answer is likely to be different.
 
 ## 23. What the source carried, and what the copy does not (2026-09-12)
 
-Package M1, and it is four lines of code and five tests, but one of the tests
-is worth the package on its own.
+Package M1, and it is a few lines of code and nine tests, but one of the
+tests is worth the package on its own.
 
 ### 23.1 Two lines in the record
 
