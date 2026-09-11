@@ -2638,6 +2638,22 @@ false quads are faces, which the face pass already covers, and one is the
 wearer's own hand on the mop, which the zone protects only because the zone
 happened to reach it.
 
+**And the argument that settles it is the one this pass cannot make.** These
+124 quads are the ones the detector produced, so they say how often it is
+wrong and nothing at all about the words it never found. There is no recall
+number for text and no way to get one here: it would need somebody to mark
+every word in a sample of frames, and the four files hold about a dozen
+readable words between them, which is too few to divide by.
+
+That is what refuses `ready` rather than the false positive rate. Under the
+owner's rule a mask that is 90 percent wrong outside the zone could be
+defended, because over masking there is the cheaper error and the budget has
+room. A switch in the window labelled "personal text" cannot be defended
+without knowing what share of the text it catches, because the person ticking
+it will believe the text is gone. `classes.py` has said since the kinds
+existed that a checkbox which masks nothing is worse than no checkbox, and a
+checkbox whose recall nobody has measured is the same thing wearing a number.
+
 **So text is recorded as blocked, not done, and T3 is not started.**
 `STATE.md` carries what would unblock it:
 

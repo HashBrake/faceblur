@@ -162,6 +162,15 @@ labels are committed. Nothing separates the two groups, the highest scoring
 quad in the set is a ceiling light, and raising the threshold throws the real
 ones away first. T3 and D are blocked behind it and T4 with them.
 
+The deciding argument is not the 90 percent, and it is worth knowing which it
+is. Under the rule a mask that wrong outside the zone could be defended: over
+masking there is the cheaper error and 1 percent of a frame is well inside
+the budget. What refuses it is that **there is no recall number for text and
+this footage cannot give one**, because the four files hold about a dozen
+readable words between them. A switch in the window labelled "personal text"
+cannot ship without one, because the person who ticks it will believe the
+text is gone. Report 21.5.
+
 **3. Two copies that would have shipped yesterday did not.** Report 18. The
 window never set `check_output`, so no run started from it was ever checked.
 It is on by default now, and the first two sample files run through it were
