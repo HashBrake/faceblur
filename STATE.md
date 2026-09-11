@@ -114,26 +114,27 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 
 ### What to do next
 
-**Start H2**, spec section 5. Two days, four items, in this order:
+**Start G1**, the gate in the window. A day or two, and it closes the oldest
+gap in the project: `ui/app.py` never sets `check_output` or `quarantine`, so
+nobody who uses the window gets the check or the gate, and the window is the
+workflow this tool was built around. Every hook the spec names was confirmed
+to exist on 2026-09-11:
 
-1. `zone_gate_changed` is 0.5 percent and `004310` reads 0.501 on one frame,
-   so a clean copy is quarantined for `zone` by a thousandth. Set it from the
-   four readings (1.0 percent), re-run, amend section 17.3. Not optional.
-2. Measure the wrist to knuckle direction (`hands.rect_for` already computes
-   it) as a "whose hands" rule against the 27 labelled cases. If it separates
-   bystanders from the wearer on its own, re-sweep with
-   `zone_face_needs_hand=False`; that gives D1 back and stops masking the
-   three wearer hands the 1.6 palm region costs. If not, keep the rule and
-   record the table either way.
-3. Label the 179 rows of `docs/audits/zone_hands_*.csv`. They were rendered
-   and never scored, and section 17.5 says otherwise; fix the sentence.
-4. Drop the top row of hand windows if the numbers do not move.
+- `ui/app.py` `_build_advanced` is where the checkbox goes, beside
+  `replace_check`, which is the pattern to copy.
+- `run_video` already emits a `checking` progress stage, and `ui/strings.py`
+  already has `STATUS_CHECKING` and its mark. Nothing new is needed in the
+  worker to make the status word appear.
+- The record carries `held_back_for`, so the summary line can name the kinds a
+  copy was held back for rather than just counting them.
+- `tests/manual_ui.md` exists and is the file to update beside
+  `tests/test_ui.py`.
 
-Then **G1**, the gate in the window, a day or two: `ui/app.py` never sets
-`check_output` or `quarantine`, so nobody who uses the window gets the check
-or the gate, and the window is the workflow the tool was built around.
+Say in the help text that the check costs a second detection pass, because it
+roughly doubles a run and the person ticking it should know before they start
+a batch overnight.
 
-**F2 comes after H2 and is the point of H1.** Every setting section 10
+**F2 is the point of H1.** Every setting section 10
 rejected was rejected for masking the wearer's hand, and the zone subtracts
 the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
 0.6, `engine both`, `verify` off, the mirror view at 0.3, `third_conf` down to
@@ -250,7 +251,11 @@ With the handled zone on, from the H1 run of 2026-09-11:
 | Mask the zone took back | 0.036 % | 0.008 % | 0.015 % | 0.035 % |
 | Frames over the zone gate | 0 | 0 | 0 | 0 |
 | Worst zone frame | 0.10 % | 0.10 % | 0.50 % | 0.30 % |
-| Whose hands, wrong on a uniform sample | \\ | 12 percent of 173 rows | \\ | \\ |
+
+Over all four files together, **"whose hands" is wrong 12 percent of the
+time**: 20 of the 173 polygons that could be called, out of 179 on 100
+uniformly sampled frames. Report 17.7 and
+`docs/audits/zone_hands_*.csv`.
 
 The zone takes almost nothing back because the track level hand rules were
 already keeping masks off hands. What it changes is that the protection is

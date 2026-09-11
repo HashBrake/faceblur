@@ -40,9 +40,14 @@ seconds after a hand leaves, moving with the camera, so a thing put down on a
 table is still protected while it is being worked through.
 
 On the sample footage it covers 7 to 11 percent of each frame, and the wearer's
-hands are in shot on essentially every frame of every file. It costs about 60
+hands are in shot on essentially every frame of every file. It costs about 45
 ms a frame, which roughly doubles the detection pass; `--no-zone` turns it off
 and is for measuring what it costs, not for a copy that ships.
+
+Whose hands it counts as the wearer's is a rule about size and position, not
+an understanding of who is doing what, and on a uniform sample of 179 hands it
+is wrong 12 percent of the time. The labels behind that are committed under
+`docs/audits/`.
 
 Two things it does **not** promise, both measured and both in
 `docs/report.md` section 17:
