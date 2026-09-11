@@ -396,6 +396,29 @@ that holds back a clean copy and is not optional.
 for `zone` on none of them; section 17 amended, not appended; `STATE.md`
 "decisions taken by default" updated with the outcome of item 2 either way.
 
+### R3. After H2 (1 hour)
+
+H2 is done (report 17.3 and 17.7): the gate is set from the distribution at
+1.0 percent, the 179 uniform audit rows are labelled (12 percent "whose
+hands" error), the orientation rule was measured and refuted on this
+footage, the window grid is cut to 24 with `zone_top_frac` 0.15. Two things
+the review of it found:
+
+1. The orientation table was produced by code that was not committed. Add
+   `eval/zone.py --orientation`: read `docs/audits/zone_hands_*.csv`, recover
+   the wrist to knuckle angle from each committed quad, print the two tables
+   in 17.7, and cite the command there. Every number in the report has to
+   come from a command a third party can re-run; H2 reaffirmed that rule in
+   the same section it broke it.
+2. The 20 bystander rows are all side on to the wearer (a counter worker
+   reaching in, a man bending over, a man at a sink). The hypothesis was
+   about a bystander facing the wearer, and none is in the sample. Narrow
+   the sentence in 17.7 to what was measured and put the face to face case
+   on the "re-measure when card footage arrives" list in `STATE.md`, beside
+   D1 and `zone_top_frac`.
+
+**Verify.** The command prints the tables in 17.7; `pytest tests`.
+
 ### G1. The gate in the window (1 to 2 days)
 
 `ui/app.py` never sets `check_output` or `quarantine`, so no run started
@@ -682,20 +705,22 @@ labels committed, and are not the number quoted.
 |---|---|---|---|
 | done | R2 review fixes | | |
 | done | H1 handled zone | | |
-| 1 | H2 zone follow ups | 2 days | nothing |
+| done | H2 zone follow ups | | |
+| 1 | R3 after H2 | 1 hour | nothing |
 | 2 | G1 gate in the window | 1 to 2 days | nothing |
-| 3 | F2 recall outside the zone | 4 days, with its two harness prerequisites | H2 |
-| 4 | F1 second chance | 5 days | H2 |
+| 3 | F2 recall outside the zone | 4 days, with its two harness prerequisites | nothing |
+| 4 | F1 second chance | 5 days | nothing |
 | 5 | T1 text detector | 3 days | nothing |
-| 6 | T3 text policy, gate, ready | 4 days, with the reach gate | T1, H2 |
-| 7 | S2 screens outside the zone | 2 days | H2 |
+| 6 | T3 text policy, gate, ready | 4 days, with the reach gate | T1 |
+| 7 | S2 screens outside the zone | 2 days | nothing |
 | 8 | D defaults | half a day | T3 |
 | 9 | T4 identifiers | 3 days | T3, optional |
 | 10 | M1 metadata line | half a day | nothing |
 
-About four weeks from here; three without T4. H2 is short and comes first
-because F2, F1, T3 and S2 all lean on the zone's "whose hands" rule. T1 can
-run beside H2 if two sessions are used, since it touches only new modules.
+About four weeks from here; three without T4. The order is fixed. A package
+whose verify step cannot be made to pass after a real attempt is recorded in
+`STATE.md` as blocked, with what was tried, and the next package that does
+not depend on it starts; nothing waits on the owner.
 
 ## 10. What not to do
 

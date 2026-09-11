@@ -26,10 +26,10 @@ region everywhere". Two consequences are easy to miss:
 
 - **The precision constraint moved from hands to the handled zone.** It used
   to be that the wearer's hand must never be masked, and that constraint is
-  what rejected every setting that would have found more faces. Once the zone
-  exists and is subtracted from every mask, the hand cannot be masked by any
+  what rejected every setting that would have found more faces. The zone is
+  in and subtracted from every mask, so the hand cannot be masked by any
   setting, and those settings can be re-measured. That is package F2, and
-  nothing may be loosened before H1 lands.
+  nothing may be loosened outside it.
 - **Over masking outside the zone stopped being a failure.** A wall sign the
   collector reads is text, and text outside the zone is to be masked. YuNet
   scoring a sign at 0.80 was a false positive under the old rule and is a
@@ -102,7 +102,8 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 | R2 | Fixes from the review of that pass | Done, report 16.6 |
 | H1 | The handled zone | Done, report 17 |
 | H2 | Zone follow ups | Done, report 17.3 and 17.7 |
-| **G1** | **The gate in the window** | **Next** |
+| **R3** | **The orientation table made re-runnable; 17.7 narrowed to what was measured** | **Next, an hour** |
+| G1 | The gate in the window | After R3 |
 | F2 | Recall outside the zone | Not started. Needs its two harness prerequisites |
 | F1 | Second chance for missed faces | Not started |
 | T1 | Text detector | Not started |
@@ -114,7 +115,29 @@ tree is clean. Tests: `tests/`, 1084 passing, about four minutes
 
 ### What to do next
 
-**Start G1**, the gate in the window. A day or two, and it closes the oldest
+**The weekend build, 2026-09-12 to 14.** The owner is away and asked for a
+long unattended run through the packages in order: R3, G1, F2, F1, T1, T3,
+S2, D, then T4 and M1. Every decision is delegated. At the end, or whenever
+the session must stop, this section is rewritten as "what happened", with
+the packages done, the numbers, and the decisions taken by default at the
+top, so the owner can read it in five minutes on Monday.
+
+**First, R3, an hour.** Two things the review of H2 found:
+
+- The orientation table in report 17.7 was produced by code that was never
+  committed, so nobody can re-run it. Add `eval/zone.py --orientation`,
+  which reads `docs/audits/zone_hands_*.csv`, recovers the wrist to knuckle
+  angle from each committed quad, and prints the two tables in 17.7. Cite
+  the command there.
+- 17.7 says the orientation "does not separate them". The 20 bystander rows
+  are a counter worker reaching in from the right, a man bending over at the
+  left and a man at a sink, all side on to the wearer. A bystander *facing*
+  the wearer, whose hands point down the frame, is not in the sample. Change
+  the sentence to say the rule fails on side on bystanders and is untested on
+  face to face ones, and add it to the list below of things to re-measure
+  when card footage arrives.
+
+**Then G1**, the gate in the window. A day or two, and it closes the oldest
 gap in the project: `ui/app.py` never sets `check_output` or `quarantine`, so
 nobody who uses the window gets the check or the gate, and the window is the
 workflow this tool was built around. Every hook the spec names was confirmed
@@ -150,6 +173,17 @@ the hand from the mask whatever the threshold says. Re-measure `conf` 0.4 to
   gate. Section 17.4.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
+
+**To re-measure when card footage arrives**, because each was decided on
+footage that has no cards and no face to face bystanders:
+
+- D1, a printed face on a handled card (`zone_face_needs_hand`, report 17.5).
+- The orientation rule for "whose hands" on a bystander facing the wearer
+  (report 17.7).
+- `zone_top_frac` 0.15, chosen for people holding things up to look at them
+  (report 17.7).
+- The 12 percent "whose hands" error rate, measured on a facilities worker's
+  footage.
 
 ## Decisions taken by default
 
