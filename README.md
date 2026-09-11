@@ -356,7 +356,12 @@ for the right reason.
 - `<name>_blurred.mp4.json`, the audit record: frames, tracks, how much of each
   frame was masked (mean, p95, max), frames over the mask budget, the same
   three split by kind, every setting, the sha256 of each model, and the time
-  taken. Read the split when more than one kind is on: a screen mask is large
+  taken. It also says whether the source had sound and lists the **names** of
+  the metadata tags the source carried, never their values, so that a reader
+  who cannot be handed the footage can still answer both questions. The
+  blurred copy carries none of those tags: a location written in a container
+  survives any amount of blurring, and there is a test that it does not
+  survive this (report section 23). Read the split when more than one kind is on: a screen mask is large
   by design, and on the table tennis file the union says 40 frames are over
   the 5 percent budget where the face mask puts 9 of them there. With screens on it also holds
   `screens`, the detections the model made, and `screen_frames`, the frames a

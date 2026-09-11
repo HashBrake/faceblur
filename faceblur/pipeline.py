@@ -149,6 +149,11 @@ class AuditRecord:
     # comment in batch.run_video: a seed is evidence, not a stray detection.
     second_chance_seeds_kept: int = 0
     second_chance_seconds: float = 0.0
+    # What the source carried besides pictures, package M1. The tag names
+    # only: a value can hold a location or a device serial, and this record
+    # is a document that gets sent to people.
+    source_audio: bool = False
+    source_tags_present: list = field(default_factory=list)
     settings: dict = field(default_factory=dict)
     detect_seconds: float = 0.0
     encode_seconds: float = 0.0

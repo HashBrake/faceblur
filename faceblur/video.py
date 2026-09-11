@@ -96,6 +96,58 @@ class VideoInfo:
     height: int
     fps: float
     frame_count: int
+    # What the source carried besides pictures. Package M1: an auditor asking
+    # "was there sound, and what did the container know about this file" can
+    # read the answer without the file.
+    audio: bool = False
+    # The **names** of the container's metadata tags, never their values. A
+    # tag can hold a location, a device serial or an account name, and this
+    # project does not copy those anywhere, including into its own record.
+    tags: tuple = ()
+
+
+def source_metadata(src: Path) -> tuple[bool, tuple[str, ...]]:
+    """(has audio, the names of the container's tags).
+
+    One ffmpeg call that decodes nothing. `-f ffmetadata` writes the tags as
+    `name=value` lines and everything to the left of the first `=` is kept,
+    which is the whole point: the value is what would be sensitive.
+
+    A file ffmpeg cannot read is not an error here. `probe` has already said
+    so, or is about to, and a metadata line is not worth a second way to fail.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            [ffmpeg_exe(), "-hide_banner", "-v", "error", "-i", str(src),
+             "-map_metadata", "0", "-f", "ffmetadata", "-"],
+            capture_output=True, timeout=120, **_no_window())
+    except (OSError, subprocess.SubprocessError):
+        return False, ()
+    names = []
+    for line in r.stdout.decode(errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith((";", "#", "[")) or "=" not in line:
+            continue
+        name = line.split("=", 1)[0].strip()
+        if name and name not in names:
+            names.append(name)
+    return has_audio(src), tuple(names)
+
+
+def has_audio(src: Path) -> bool:
+    """Is there an audio stream? Asked of the demuxer, decoding nothing."""
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            [ffmpeg_exe(), "-hide_banner", "-v", "error", "-i", str(src),
+             "-map", "0:a:0", "-c", "copy", "-frames:a", "0", "-f", "null", "-"],
+            capture_output=True, timeout=120, **_no_window())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
 
 
 def probe(src: Path) -> VideoInfo:
@@ -119,7 +171,8 @@ def probe(src: Path) -> VideoInfo:
             "Could not read this video. Check that the file is not open in "
             "another program."
         )
-    return VideoInfo(width, height, float(fps), count)
+    audio, tags = source_metadata(src)
+    return VideoInfo(width, height, float(fps), count, audio, tags)
 
 
 def read_frames(src: Path) -> Iterator[np.ndarray]:

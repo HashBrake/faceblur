@@ -2766,3 +2766,56 @@ Nothing here changes the screen class. `screen_conf` stays at 0.5,
 untouched. The one thing S2 adds to the shipped build is the measurement
 command, so the question can be asked again on footage from another venue,
 which is where the answer is likely to be different.
+
+## 23. What the source carried, and what the copy does not (2026-09-12)
+
+Package M1, and it is four lines of code and five tests, but one of the tests
+is worth the package on its own.
+
+### 23.1 Two lines in the record
+
+`source_audio` says whether the source had sound. `source_tags_present` lists
+the **names** of the container's metadata tags and never their values, which
+is the whole point: a tag is where a camera writes a location, a device
+serial or an account name. On the four sample files the answer is no audio
+and four tags, `major_brand`, `minor_version`, `compatible_brands` and
+`encoder`, none of which says anything about anybody.
+
+An auditor who cannot be handed the footage can now be handed the record and
+still answer both questions. A record written before today reads back with
+both fields empty, which is the rule for every field this project adds.
+
+### 23.2 The test that matters
+
+A metadata tag survives everything this tool does to a picture. Blurring
+every face in a frame does nothing to a location written in the container,
+and a copy that inherited one would hand over the filming location of
+footage that had been redacted precisely so it could be handed over.
+
+So there is a test with a clip carrying `location=51.5007,-0.1246`, run
+through the pipeline both ways, and it asserts the string appears nowhere in
+the copy:
+
+- through the encode path, where every frame is re-encoded;
+- through the copy path, where clean stretches are the source's own packets
+  taken without re-encoding, which is the one that would carry tags if
+  anything did.
+
+**Neither carries it**, and it is not an accident of the ffmpeg commands any
+more. It was one before today: `Encoder` and `concat` both take their
+metadata from input 0, which is the raw pipe or the list of segments rather
+than the source, and nobody had written that down or checked it. Now a change
+to either command that reversed the inputs fails a test that says why.
+
+The record is checked the same way: the tag value appears nowhere in the
+written sidecar, only the name `comment`.
+
+### 23.3 What this does not do
+
+It does not strip anything. Nothing here rewrites the source, and a tag in
+the source stays in the source; the guarantee is only about the copy this
+tool writes.
+
+It lists the container's tags. Stream level tags and anything a camera hides
+in a private atom are not enumerated, so an empty list means ffmpeg's
+`ffmetadata` writer found nothing, not that the file holds nothing.

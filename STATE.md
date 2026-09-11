@@ -90,7 +90,7 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1186 passing, about five minutes
+tree is clean. Tests: `tests/`, 1195 passing, about six minutes
 (`.venv\Scripts\python.exe -m pytest tests`).
 
 | Package | What | State |
@@ -110,7 +110,8 @@ tree is clean. Tests: `tests/`, 1186 passing, about five minutes
 | T3 | Text policy, gate, ready | **Blocked by T1's numbers.** 90 percent of what the detector finds here is not text |
 | S2 | Screens outside the zone | Done, report 22. The floor did not move |
 | D | Defaults: all three kinds on | Blocked with T3 |
-| **T4, M1** | **Identifiers, metadata line** | **Optional. T4 needs T3, so M1 is what is left** |
+| M1 | Metadata line | Done, report 23 |
+| T4 | Identifiers by pattern | Optional, and blocked with T3 |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
 ### What to do next
@@ -210,6 +211,13 @@ of four at every floor including the one that ships. The exception is
 lowering to 0.4 takes recall from 22 to 37 percent at 74 percent precision.
 That gain is real and it is not a default, because the setting would have to
 know which room it is in.
+
+**M1 is done.** Report 23. The record says whether the source had sound and
+lists the names of its metadata tags, never the values. The test worth having
+is the other one: a clip carrying `location=51.5007,-0.1246` goes through the
+pipeline by both the encode path and the copy path, and the string appears in
+neither copy. That was true before today by accident of which input ffmpeg
+takes its metadata from, and nobody had written it down or checked it.
 
 **Do not lower any face threshold outside F2**, and do not build F0 or T2.
 

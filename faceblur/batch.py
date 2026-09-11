@@ -352,6 +352,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
         info = replace(info, fps=(n - 1) / (times[-1] - times[0]))
     record.resolution = f"{info.width}x{info.height}"
     record.fps = round(info.fps, 3)
+    record.source_audio = bool(info.audio)
+    record.source_tags_present = list(info.tags)
 
     # ---- 1. detect, in frame ranges
     t0 = time.time()
