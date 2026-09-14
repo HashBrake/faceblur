@@ -1,9 +1,14 @@
 # STATE, handover notes
 
-Last updated 2026-09-11, after work package H2 of `FACEBLUR_BUILD_PLAN_V2.md`.
-Packages R1, S1, 4.3, E1, R2, H1 (the handled zone) and **H2 (its follow ups)**
-are done, committed and pushed. **G1, the gate in the window, is next.** F2,
-F1, T3 and S2 all have the zone to measure with.
+Last updated 2026-09-14, after the unattended weekend build of
+`FACEBLUR_BUILD_PLAN_V2.md`. Packages R1, S1, 4.3, E1, R2, H1, H2 and then
+**R3, G1, F2, F1, T1, S2 and M1** are done, committed and pushed. **T3, D and
+T4 are blocked** on numbers rather than on time; report 21.5 says by what.
+
+**Nothing is next until one question is answered**, and it is the first item
+under "What happened while the owner was away": the off face gates have no
+feasible point and the build that ships fails one of them. Every package that
+wants more face recall needs that settled before it has anywhere to stand.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -90,8 +95,11 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean. Tests: `tests/`, 1195 passing, about six minutes
-(`.venv\Scripts\python.exe -m pytest tests`).
+tree is clean and local and remote are the same commit. Tests: `tests/`, 1195
+passing, about six minutes (`.venv\Scripts\python.exe -m pytest tests`).
+
+The weekend build ends at `7dc74a7`. Anything after that in the log is a later
+session and this file will say so.
 
 | Package | What | State |
 |---|---|---|
@@ -114,12 +122,17 @@ tree is clean. Tests: `tests/`, 1195 passing, about six minutes
 | T4 | Identifiers by pattern | Optional, and blocked with T3 |
 | ~~F0~~, ~~T2~~ | Faces on cards, card veto | **Dropped by the rule, not deferred. Do not build them** |
 
-### What happened this weekend
+### What happened while the owner was away
 
 **Seven packages, all seven committed and pushed.** Every one asked for in the
 order R3, G1, F2, F1, T1, T3, S2, D, T4, M1 was either finished or is recorded
 below as blocked with the numbers that blocked it. Tests went from 1084 to
 1195. The working tree is clean and `main` is pushed.
+
+The run started on the evening of 2026-09-11 and finished at 04:57 on
+2026-09-12. **Nothing has run since**, so the repository the owner comes back
+to is exactly what the last commit below describes; the two days after it are
+idle and not a second pass.
 
 | Commit | Package | Report |
 |---|---|---|
@@ -243,16 +256,30 @@ neither copy.
   and text is not one.
 - **T4**, identifiers by pattern, which needs T3.
 
-#### What a next session should do first
+#### What to do next, in this order
 
-1. Settle the gate question in 19.5, because every package that wants recall
-   needs somewhere to stand.
-2. If the answer is that the gates move to the mask budget, re-run
-   `eval.sweep --f2` and `eval.combine` against the new ones. Both commands
-   exist and the caches are built, so it is an afternoon rather than a week.
-3. Ask the owner for footage with cards in it. Four measurements are waiting
-   on it: D1, the orientation rule, text, and what the zone costs when the
-   thing being handled is the thing that matters.
+1. **Settle the gate question in 19.5.** It needs the owner, it is the only
+   thing that does, and every package that wants more face recall is behind
+   it. The choice is between moving the off face gates to the per frame mask
+   budget the rule of 2026-09-11 names, and accepting that the build is over
+   an older limit on one file in three.
+2. **If the gates move, re-run `eval.sweep --f2` and `eval.combine` against
+   the new ones.** Both commands exist, the raw caches and the pasted face
+   sets are built and fingerprinted, and the hands caches are on disk for all
+   four files, so this is an afternoon rather than a week. The answer may
+   change: under the gates as they stand, 24, 20 and 24 of the 54 settings
+   pass on `004100`, `004310` and `005035` taken one file at a time, and none
+   passes on all three.
+3. **Footage with cards in it, which only the owner can supply.** Five
+   measurements are waiting on it: D1, the orientation rule, text recall, the
+   text detector's false positive rate on a scene that has words in it, and
+   what the zone costs when the thing being handled is the thing that
+   matters.
+4. **Then F1 again, or the mask.** F1 took the faces left visible in a copy
+   from 8 to 1 and moved identifiability by 3 leaks in 519, because every
+   leak measured is on a box the mask already reached. If the next thing
+   wanted is fewer identifiable faces rather than fewer visible ones, the
+   subject is the mask itself and section 12 is where that argument is.
 
 ## Decisions taken by default
 
