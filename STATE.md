@@ -1,6 +1,8 @@
 # STATE, handover notes
 
-Last updated 2026-09-14, after the unattended weekend build of
+Last updated 2026-09-14, after the weekend build and a full run of the
+pipeline over all four sample files (report 24). Before that, the unattended
+weekend build of
 `FACEBLUR_BUILD_PLAN_V2.md`. Packages R1, S1, 4.3, E1, R2, H1, H2 and then
 **R3, G1, F2, F1, T1, S2 and M1** are done, committed and pushed. **T3, D and
 T4 are blocked** on numbers rather than on time; report 21.5 says by what.
@@ -258,6 +260,16 @@ neither copy.
 
 #### What to do next, in this order
 
+0. **The gate is not crash safe, and this is a shipping defect.** Found on
+   2026-09-14 by a run the machine killed. `run_video` moves the finished
+   copy into the output folder, then checks it, then moves it to
+   `quarantine` if the check holds it back. A process that dies in that
+   window leaves a complete, playable, ungated copy sitting in the output
+   folder as though it had been delivered, and the only sign is a missing
+   `.json` that nothing looks for. The fix is to keep the copy at its part
+   path until the gate has spoken and then move it once, to the output folder
+   or to quarantine. It was not done on the day because it changes the path
+   every delivered file takes and the owner was back. Report 24.4.
 1. **Settle the gate question in 19.5.** It needs the owner, it is the only
    thing that does, and every package that wants more face recall is behind
    it. The choice is between moving the off face gates to the per frame mask
@@ -280,6 +292,24 @@ neither copy.
    leak measured is on a box the mask already reached. If the next thing
    wanted is fewer identifiable faces rather than fewer visible ones, the
    subject is the mask itself and section 12 is where that argument is.
+
+## What the tool actually produces today
+
+A full run of all four sample files on 2026-09-14, faces only, the zone on,
+the check and the gate on, one second chance round. Report 24.
+
+| File | Faces left, first pass | After the second chance | Largest left |
+|---|---|---|---|
+| `003939` washroom | 6 | 2 | 130 px |
+| `004100` corridor | 8 | 1 | 47 px |
+| `004310` canteen | 13 | 9 | 232 px |
+| `005035` sports hall | 63 | 7 | 41 px |
+
+**90 faces still visible becomes 19, and all four copies are held back.**
+Nothing passes its own gate on this footage, which is the honest state of the
+tool. No frame of any file was over the zone gate, so the one promise that is
+absolute held everywhere. It costs about ten times real time with the check
+and the second chance on, and the check is 58 percent of that.
 
 ## Decisions taken by default
 

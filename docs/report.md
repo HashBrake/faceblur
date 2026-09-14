@@ -2838,3 +2838,81 @@ tool writes.
 It lists the container's tags. Stream level tags and anything a camera hides
 in a private atom are not enumerated, so an empty list means ffmpeg's
 `ffmetadata` writer found nothing, not that the file holds nothing.
+
+## 24. The whole pipeline on the whole sample (2026-09-14)
+
+Every section above measures one thing. This is the build running end to end
+on all four sample files, with everything this weekend added switched on, and
+it is the first time that has been recorded.
+
+    .venv\Scripts\python.exe cli.py footage -o OUT --workers 4 --quarantine --second-chance 1
+
+Faces only, which is the default; the zone on; the output side check and the
+gate on; one second chance round.
+
+### 24.1 What it produced
+
+| File | | Frames | Tracks | Faces left, first pass | Seeds | After | Largest left | Frame masked, mean | Wall |
+|---|---|---|---|---|---|---|---|---|---|
+| `003939` | washroom | 2033 | 33 | 6 | 6 | **2** | 130 px | 0.85% | 9.5 min |
+| `004100` | corridor | 984 | 34 | 8 | 8 | **1** | 47 px | 0.53% | 4.9 min |
+| `004310` | canteen | 938 | 107 | 13 | 11 | **9** | 232 px | 2.33% | 6.8 min |
+| `005035` | sports hall | 3971 | 254 | 63 | 62 | **7** | 41 px | 0.71% | 25.0 min |
+
+**90 faces still visible after the first pass, 19 after the second chance.**
+The sports hall is where F1 earns its cost: 63 down to 7, and the largest
+face left in it is 41 px where the first pass left much more. The canteen is
+where it does least, 13 down to 9, for the reason section 20.3 gives: nine of
+its eleven seeds land on a box the mask was already drawing, so putting the
+same box back cannot help.
+
+**All four copies were held back.** Nothing in `footage_blurred_sample` was
+delivered; every file is in `quarantine` with its record beside it. That is
+the honest state of the tool on this footage: it does not yet produce a copy
+that passes its own gate.
+
+### 24.2 The promise inside the zone held everywhere
+
+7924 of the 7926 frames had a handled zone. **No frame of any file was over
+the zone gate**, and the worst single frame moved 0.455 percent of its zone
+pixels against a limit of 1.0. The second chance did not change that: it adds
+masks outside the zone by construction, and the numbers say it stayed there.
+
+14 boxes across the four files were set aside as the wearer's own hands and
+15 as things inside the zone, so they are in the records, marked, and in no
+count the gate reads.
+
+### 24.3 What it cost
+
+| Phase | Seconds |
+|---|---|
+| Detect | 616 |
+| Write | 461 |
+| Check the copy | 1598 |
+| The second chance, a second write and a second check | 1052 |
+
+46 minutes of wall for 4 minutes 24 seconds of footage, about ten times real
+time. **The check is the largest single cost**, 58 percent of the run, which
+is the price of the only thing here that can see the pipeline's own misses.
+A run without `--quarantine` or `--second-chance` is the first two rows.
+
+Masked share ran 0.53 to 2.33 percent mean against a 5 percent budget, with
+37 frames over it across 7926, 24 of them on the canteen file where the
+masks are largest.
+
+### 24.4 A copy shipped without being checked, and that is a defect
+
+The first attempt at this run was killed by the machine on the fourth file,
+and it left behind a complete, playable, 3971 frame blurred copy in the
+output folder **with no record beside it and the gate never asked**.
+
+`run_video` writes the copy, moves it into place, then checks it, then moves
+it to `quarantine` if the check holds it back. A process that dies between
+the move and the gate leaves a file that looks delivered and never was. The
+only sign is a missing `.json`, which nothing looks for.
+
+On this footage the gate holds every file, so the copy left behind was one
+that should have been held. **It is recorded here and not fixed**, because
+the fix changes the path every delivered file takes: keep the copy at its
+part path until the gate has spoken, then move it to the output folder or to
+quarantine in one step. `STATE.md` carries it as the first thing to fix.
