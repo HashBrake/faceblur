@@ -394,3 +394,30 @@ def test_a_remembered_worker_count_above_the_cap_is_clamped(app):
     window._restore()
     assert window.workers_spin.value() == max_workers()
     window.settings_store.clear()
+
+
+def test_a_folder_whose_videos_are_all_in_subfolders_can_be_recreated(app, tmp_path,
+                                                                     video_silent):
+    # Choosing the folder before ticking the box used to be refused with
+    # "That folder holds no videos", and the box only turns on for a folder
+    # that was taken, so it could never be ticked.
+    source = tmp_path / "Shoot"
+    (source / "day 1").mkdir(parents=True)
+    shutil.copy(video_silent, source / "day 1" / "a.mp4")
+    (source / "notes.txt").write_text("x")
+
+    window = MainWindow()
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.show()
+    window.settings_store.clear()
+    window.output_dir = tmp_path / "out"
+    window._take_paths([source])
+    assert window.source_folder == source
+    assert window.mirror_check.isEnabled()
+    assert window.drop_zone.title.text() == S.INPUT_NONE_AT_TOP
+    assert not window.start_button.isEnabled()
+
+    window.mirror_check.setChecked(True)
+    assert [row.name for row in window.rows] == [str(source.relative_to(source) / "day 1" / "a.mp4")]
+    assert window.start_button.isEnabled()
+    window.settings_store.clear()

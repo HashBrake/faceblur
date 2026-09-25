@@ -227,6 +227,7 @@ class DropZone(QFrame):
 
         self.title = QLabel(S.DROP_ZONE_EMPTY)
         self.title.setAlignment(Qt.AlignCenter)
+        self.title.setWordWrap(True)
         font = self.title.font()
         font.setPointSizeF(font.pointSizeF() + 2.0)
         self.title.setFont(font)
@@ -801,8 +802,12 @@ class MainWindow(QMainWindow):
                                      if p.is_file() and p.suffix.lower() in VIDEO_EXT))
             elif path.is_file() and path.suffix.lower() in VIDEO_EXT:
                 videos.append(path)
-        # A folder with no MP4 in it can still be recreated: it is a copy.
-        if not videos and not mirroring:
+        # One folder is always taken, videos at its top or not. Refusing it
+        # here is what kept "Recreate the whole folder" switched off for a
+        # folder whose videos all sit in subfolders: the box only turns on
+        # once a folder has been taken. A folder with no MP4 in it can still
+        # be recreated, because that is a copy.
+        if not videos and not single_folder:
             QMessageBox.warning(self, S.ERR_INPUT_TITLE, S.INPUT_NONE_FOUND)
             return
 
@@ -814,6 +819,8 @@ class MainWindow(QMainWindow):
         summary = S.input_summary(len(self.inputs), total)
         if mirroring:
             summary = S.MIRROR_SUMMARY.format(folder=paths[0].name, videos=summary)
+        elif not self.inputs:
+            summary = S.INPUT_NONE_AT_TOP
         self.drop_zone.show_summary(summary)
 
         if self.output_dir is None:

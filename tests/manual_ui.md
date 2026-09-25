@@ -18,8 +18,10 @@ automated version never draws the window on a screen.
 - [x] Drop a folder of videos on the drop zone. The count and total size appear,
       for example "12 videos, 8.4 GB". (also automated)
 - [x] Drop three video files at once. The count says 3 videos.
-- [x] Drop a folder that holds no videos. A message says the folder holds no
-      videos and says what to do.
+- [ ] Drop a folder that holds no videos at its top. The drop zone says so and
+      says to tick Recreate the whole folder. The box can be ticked, and then
+      the videos in its subfolders are listed. (also automated) Changed
+      2026-09-26: this used to be a message box that refused the folder.
 - [x] Press Ctrl+O. The file dialog opens.
 - [x] Press Ctrl+Shift+O. The folder dialog opens.
 - [x] Drag a folder over the drop zone. The dashed border changes while the

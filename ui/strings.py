@@ -61,6 +61,10 @@ VIDEO_FILTER = "Videos (*.mp4 *.mov *.avi *.mkv *.m4v *.webm *.mpg *.mpeg *.wmv)
 INPUT_SUMMARY_ONE = "1 video, {size}"
 INPUT_SUMMARY_MANY = "{count} videos, {size}"
 INPUT_NONE_FOUND = "That folder holds no videos. Choose a folder that holds videos."
+INPUT_NONE_AT_TOP = (
+    "No videos at the top of this folder. Tick Recreate the whole folder to "
+    "include subfolders."
+)
 # Recreate a folder: the whole folder is copied, and every MP4 in it is
 # replaced by its blurred copy under the same name.
 MIRROR = "Recreate the whole folder"
