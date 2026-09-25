@@ -264,6 +264,29 @@ Drop a video or a folder on the window. Choose an output folder. Press Blur
 faces. Each row shows one video and its progress. Press Stop to end the run. Stop
 deletes unfinished files.
 
+**Recreate the whole folder.** Choose one folder and tick this box. The app
+makes a copy of the folder, with the same name, inside the output folder: every
+subfolder, including empty ones, and every file, under the same names. Each
+`.mp4` in it, at any depth, is replaced by its blurred copy under the original
+name. Every other file, including other video formats, is copied byte for byte.
+Nothing is added inside the copy: the audit records go in one
+`<folder>_faceblur_report.json` beside it. Two rules follow from "same names":
+
+- A copy the check does not trust stays in place instead of going to
+  `quarantine`, and the summary and the report name it.
+- The original of an MP4 is never copied in, not even when blurring it fails.
+  That file is missing from the copy and its row says why.
+
+The app refuses an output folder inside the chosen folder, and one that would
+put the copy on top of the original.
+
+**Workers** is capped at 4 when the models run on the GPU. Each worker loads
+every model, so more than that only uses memory. Before 2026-09-26 the window
+allowed any number up to the core count and remembered 10. Two busy workers
+already take this PC from 9 GB free to under 2 GB, and a worker that died
+left the run waiting for it forever. A worker that dies now fails that one
+video with a message, and the next video gets a new pool.
+
 ## Use the command line
 
 ```

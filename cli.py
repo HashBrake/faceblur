@@ -40,7 +40,9 @@ from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_size
 
 # Worker processes run the phases of one video at a time: detection in frame
 # ranges, then segment encodes. faceblur.batch holds the pool helpers.
-from faceblur.batch import PoolSubmit, init_pool_worker, run_video, serial_submit  # noqa: E402
+from faceblur.batch import (PoolSubmit, WorkerLost, init_pool_worker, run_video,  # noqa: E402
+                            serial_submit)
+from faceblur.video import part_path  # noqa: E402
 
 
 def find_videos(src: Path, recursive: bool) -> list[Path]:
@@ -190,8 +192,12 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
     records: list[dict] = []
     context = multiprocessing.get_context("spawn")
     reporter.line(f"Running with {workers} workers.")
-    with context.Pool(workers, initializer=init_pool_worker, initargs=(workers,)) as pool:
-        submit = PoolSubmit(pool)
+
+    def new_pool():
+        return context.Pool(workers, initializer=init_pool_worker, initargs=(workers,))
+
+    pool = new_pool()
+    try:
         for number, (src, dst) in enumerate(jobs, 1):
             reporter.line(f"[{number}/{len(jobs)}] {src.name}")
 
@@ -199,11 +205,24 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
                 if total:
                     reporter.status(f"  {name}: {stage} {100 * done / total:5.1f}%")
 
-            record = run_video(src, dst, settings, submit, on_progress=on_progress,
-                               workers=workers)
+            try:
+                record = run_video(src, dst, settings, PoolSubmit(pool),
+                                   on_progress=on_progress, workers=workers)
+            except WorkerLost as exc:
+                # The pool is short a worker and still running the lost job's
+                # siblings. The next video gets a whole new one.
+                pool.terminate()
+                pool.join()
+                part_path(dst).unlink(missing_ok=True)
+                pool = new_pool()
+                record = AuditRecord(source=src.name, output=dst.name,
+                                     status=STATUS_FAILED, error=str(exc))
             reporter.clear()
             reporter.line(describe(record, dst))
             records.append(record.to_dict())
+    finally:
+        pool.terminate()
+        pool.join()
     return records
 
 

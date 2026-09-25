@@ -335,3 +335,62 @@ def test_the_choice_is_remembered_between_runs(app, source_folder, tmp_path):
     # Put the store back, so the next test to build a window sees the default
     # rather than what this one chose.
     again.settings_store.clear()
+
+
+# ------------------------------------------------------------ recreate a folder
+
+def _listing(root):
+    return sorted(str(p.relative_to(root)).replace("\\", "/") + ("/" if p.is_dir() else "")
+                  for p in root.rglob("*"))
+
+
+def test_a_recreated_folder_has_the_same_names_and_blurred_mp4s(app, tmp_path,
+                                                                 video_silent):
+    source = tmp_path / "Shoot"
+    (source / "day 1").mkdir(parents=True)
+    (source / "empty").mkdir()
+    shutil.copy(video_silent, source / "top.mp4")
+    shutil.copy(video_silent, source / "day 1" / "top.mp4")
+    (source / "day 1" / "log.csv").write_text("a,b\n")
+    output = tmp_path / "out"
+
+    window = MainWindow()
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.show()
+    window.settings_store.clear()
+    window.mirror_check.setChecked(True)
+    window._take_paths([source])
+    window.output_dir = output
+    window.workers_spin.setValue(2)
+    window.stride_spin.setValue(3)
+    window.check_output_check.setChecked(False)
+    window._update_start_enabled()
+    assert window.mirror_check.isEnabled()
+    assert len(window.rows) == 2
+    state = run_to_end(app, window)
+
+    assert state["stopped"] is False
+    copy = output / "Shoot"
+    assert _listing(copy) == _listing(source)
+    for name in ("top.mp4", "day 1/top.mp4"):
+        # A blurred copy is written by the encoder, not copied.
+        assert (copy / name).read_bytes() != (source / name).read_bytes()
+    assert (copy / "day 1" / "log.csv").read_text() == "a,b\n"
+    assert (output / "Shoot_faceblur_report.json").exists()
+    assert all(S.STATUS_DONE in row.status.text() for row in window.rows)
+
+
+def test_recreate_is_only_offered_for_one_folder(app, source_folder, tmp_path):
+    window = make_window(app, source_folder, tmp_path / "out")
+    assert window.mirror_check.isEnabled()
+    window._take_paths([source_folder / "clip1.mp4"])
+    assert not window.mirror_check.isEnabled()
+
+
+def test_a_remembered_worker_count_above_the_cap_is_clamped(app):
+    from faceblur.detect import max_workers
+    window = MainWindow()
+    window.settings_store.setValue("workers", 99)
+    window._restore()
+    assert window.workers_spin.value() == max_workers()
+    window.settings_store.clear()

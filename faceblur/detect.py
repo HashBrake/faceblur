@@ -254,6 +254,17 @@ def default_workers(cpu_count: Optional[int] = None, device: str = "auto") -> in
     return n
 
 
+def max_workers(cpu_count: Optional[int] = None, device: str = "auto") -> int:
+    """The most workers worth starting: every core, but no more than the GPU
+    can share when the models run on one. Each worker holds its own copy of
+    every model, so past this they only add memory."""
+    import os
+    n = max(1, cpu_count or os.cpu_count() or 2)
+    if providers_for(device)[0] != "CPUExecutionProvider":
+        n = min(n, GPU_WORKERS)
+    return n
+
+
 def providers_for(device: str) -> list[str]:
     """onnxruntime providers for a device choice, best first."""
     import onnxruntime as ort

@@ -14,6 +14,7 @@ pipeline.py stays as the one process, one video path.
 """
 from __future__ import annotations
 
+import multiprocessing
 import shutil
 import statistics
 from dataclasses import replace
@@ -43,21 +44,59 @@ def serial_submit(func: Callable, jobs: list, limit: int = 1) -> list:
     return [func(job) for job in jobs]
 
 
+class WorkerLost(RuntimeError):
+    """A worker process died with a job in hand.
+
+    Not a VideoError: nothing about the video is wrong, and the pool that lost
+    the worker cannot be trusted with the next job, so the caller has to see
+    this and start a new pool rather than have run_video fold it into a record.
+    """
+
+
+WORKER_LOST = ("A worker process stopped before it finished, most likely because the "
+               "PC ran out of memory. Run the video again with fewer workers.")
+
+
 class PoolSubmit:
-    """Maps phase jobs over a multiprocessing pool, at most `limit` in flight."""
+    """Maps phase jobs over a multiprocessing pool, at most `limit` in flight.
+
+    `multiprocessing.Pool` replaces a worker that dies and never tells the
+    job it was running, so a plain `get()` waits forever. That is what a run
+    that "never finishes" was: the window at 10 workers ran the PC out of
+    memory, one worker went, and the batch sat on its result. So the wait is
+    in short steps, and between steps the workers are counted.
+    """
+
+    POLL_SECONDS = 2.0
 
     def __init__(self, pool):
         self.pool = pool
 
+    def _workers(self) -> list:
+        return list(getattr(self.pool, "_pool", None) or [])
+
+    def _wait(self, result, watched: list):
+        while True:
+            try:
+                return result.get(timeout=self.POLL_SECONDS)
+            except multiprocessing.TimeoutError:
+                pass
+            if any(p.exitcode is not None for p in watched):
+                raise WorkerLost(WORKER_LOST)
+            # A replacement started since the last look is watched too, so a
+            # second death is caught as well as the first.
+            watched.extend(p for p in self._workers() if p not in watched)
+
     def __call__(self, func, jobs, limit):
         limit = max(1, limit)
+        watched = self._workers()
         pending, results = [], []
         for job in jobs:
             pending.append(self.pool.apply_async(func, (job,)))
             if len(pending) >= limit:
-                results.append(pending.pop(0).get())
+                results.append(self._wait(pending.pop(0), watched))
         while pending:
-            results.append(pending.pop(0).get())
+            results.append(self._wait(pending.pop(0), watched))
         return results
 
 

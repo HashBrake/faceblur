@@ -61,6 +61,20 @@ VIDEO_FILTER = "Videos (*.mp4 *.mov *.avi *.mkv *.m4v *.webm *.mpg *.mpeg *.wmv)
 INPUT_SUMMARY_ONE = "1 video, {size}"
 INPUT_SUMMARY_MANY = "{count} videos, {size}"
 INPUT_NONE_FOUND = "That folder holds no videos. Choose a folder that holds videos."
+# Recreate a folder: the whole folder is copied, and every MP4 in it is
+# replaced by its blurred copy under the same name.
+MIRROR = "Recreate the whole folder"
+MIRROR_HELP = (
+    "The app copies the folder with all its subfolders and files. Each MP4 file "
+    "is blurred and keeps its name. Other files are copied as they are."
+)
+MIRROR_SUMMARY = "Recreate {folder}: {videos}"
+MIRROR_COPYING = "Copying {count} other files."
+MIRROR_DONE = " {count} other files copied."
+MIRROR_NOT_COPIED = " {count} files could not be copied."
+MIRROR_REPORT = " The report is in {name}."
+MIRROR_HELD_ONE = " The check found something left in 1 copy: {kinds}. See the report."
+MIRROR_HELD = " The check found something left in {held} copies: {kinds}. See the report."
 
 # Step 2, choose the output folder
 OUTPUT_LABEL = "Output folder"
@@ -85,8 +99,11 @@ MODE_PIXELATE = "Pixelate"
 MODE_PIXELATE_HELP = "The app shrinks the face area, then shows it as large blocks."
 MODE_SOLID = "Black box"
 MODE_SOLID_HELP = "The app paints the face area black."
-WORKERS_LABEL = "Videos at the same time"
-WORKERS_HELP = "Process this many videos at once. Higher uses more of the CPU."
+WORKERS_LABEL = "Workers"
+WORKERS_HELP = (
+    "The app splits each video between this many workers. Each worker uses "
+    "up to 2 GB of memory. Use fewer if the PC runs low on memory."
+)
 # The output side check, and the gate. Off means a copy ships whatever it
 # still shows, which is what every run from this window did before 2026-09-12.
 CHECK_OUTPUT = "Check each copy and hold back any that still shows something"

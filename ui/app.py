@@ -40,7 +40,10 @@ from faceblur.pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED,
 from faceblur.settings import VIDEO_EXT, Settings
 from faceblur.video import part_path
 from ui import strings as S
-from faceblur.batch import PoolSubmit, init_pool_worker, run_video
+from faceblur.batch import PoolSubmit, WorkerLost, init_pool_worker, run_video
+from faceblur.detect import default_workers, max_workers
+from faceblur.mirror import MirrorError, MirrorPlan, copy_files, is_mirrored_video
+from faceblur.mirror import plan as mirror_plan
 
 GRID = 8
 MARGIN = 2 * GRID          # 16
@@ -102,11 +105,16 @@ class BatchRunner(QThread):
     one_finished = Signal(int, dict)        # index, audit record
     all_finished = Signal(bool)             # stopped by the user
 
-    def __init__(self, jobs, settings: Settings, workers: int, parent=None):
+    def __init__(self, jobs, settings: Settings, workers: int, parent=None,
+                 mirror: MirrorPlan | None = None):
         super().__init__(parent)
         self.jobs = jobs                    # list of (src Path, dst Path)
         self.settings = settings
         self.workers = max(1, workers)
+        # A folder being recreated: its other files are copied first, and the
+        # audit records go in one report beside the copy, not beside each file.
+        self.mirror = mirror
+        self.copy_problems: list[str] = []
         self._stop_wanted = False
         self._cancel = threading.Event()
 
@@ -114,10 +122,18 @@ class BatchRunner(QThread):
         self._stop_wanted = True
         self._cancel.set()
 
-    def run(self) -> None:  # runs in the worker thread, never touches widgets
+    def _new_pool(self):
         context = multiprocessing.get_context("spawn")
-        pool = context.Pool(self.workers, initializer=init_pool_worker, initargs=(self.workers,))
-        submit = PoolSubmit(pool)
+        return context.Pool(self.workers, initializer=init_pool_worker,
+                            initargs=(self.workers,))
+
+    def run(self) -> None:  # runs in the worker thread, never touches widgets
+        if self.mirror is not None:
+            self.progress.emit(-1, "copying", 0, len(self.mirror.files))
+            _, self.copy_problems = copy_files(self.mirror, self.settings.replace_existing,
+                                               cancel=self._cancel.is_set)
+        pool = self._new_pool()
+        records = []
         try:
             for index, (src, dst) in enumerate(self.jobs):
                 if self._stop_wanted:
@@ -127,13 +143,25 @@ class BatchRunner(QThread):
                     self.progress.emit(index, stage, done, total)
 
                 try:
-                    record = run_video(Path(src), Path(dst), self.settings, submit,
+                    record = run_video(Path(src), Path(dst), self.settings, PoolSubmit(pool),
                                        on_progress=on_progress, cancel=self._cancel,
-                                       workers=self.workers).to_dict()
-                except Exception as exc:  # a worker died, report it as a failure
+                                       workers=self.workers,
+                                       write_sidecar=self.mirror is None).to_dict()
+                except WorkerLost as exc:
+                    # The pool is short a worker and its other jobs are still
+                    # running. Throw it away, and what this video left behind,
+                    # and give the next video a whole one.
+                    record = {"status": STATUS_FAILED, "error": str(exc)}
+                    pool.terminate()
+                    pool.join()
+                    self._remove_partial_files([(src, dst)])
+                    if index + 1 < len(self.jobs) and not self._stop_wanted:
+                        pool = self._new_pool()
+                except Exception as exc:
                     record = {"status": STATUS_FAILED, "error": str(exc)}
                 if self._stop_wanted and record.get("status") != STATUS_DONE:
                     record["status"] = STATUS_STOPPED
+                records.append({"source": str(src), **record})
                 self.one_finished.emit(index, record)
         finally:
             if self._stop_wanted:
@@ -142,17 +170,38 @@ class BatchRunner(QThread):
             else:
                 pool.close()
             pool.join()
+            if self.mirror is not None:
+                self._write_report(records)
         self.all_finished.emit(self._stop_wanted)
 
-    def _remove_partial_files(self) -> None:
-        """Stop never leaves half a video, or its segment folder, behind."""
+    def _write_report(self, records: list[dict]) -> None:
+        import json
+        report = {"source": str(self.mirror.source), "copy": str(self.mirror.target),
+                  "files_copied_as_they_are": len(self.mirror.files),
+                  "files_not_copied": self.copy_problems, "videos": records}
+        try:
+            self.mirror.report_path.write_text(json.dumps(report, indent=2),
+                                               encoding="utf-8")
+        except OSError:
+            pass
+
+    def _remove_partial_files(self, jobs=None) -> None:
+        """Stop never leaves half a video, or its segment folder, behind.
+
+        A finished copy is told apart from a half written one by its audit
+        record. A recreated folder has no records beside its copies, and a
+        copy only takes its final name once it is whole, so there only the
+        part files and the segment folders go.
+        """
         import shutil
-        for _, dst in self.jobs:
+        jobs = self.jobs if jobs is None else jobs
+        for _, dst in jobs:
             dst = Path(dst)
-            if dst.exists() and not sidecar_path(dst).exists():
+            if (self.mirror is None and dst.exists()
+                    and not sidecar_path(dst).exists()):
                 dst.unlink(missing_ok=True)
             part_path(dst).unlink(missing_ok=True)
-        for folder in {Path(dst).parent for _, dst in self.jobs}:
+        for folder in {Path(dst).parent for _, dst in jobs}:
             for temp in folder.glob("faceblur_*"):
                 if temp.is_dir():
                     shutil.rmtree(temp, ignore_errors=True)
@@ -282,6 +331,10 @@ class MainWindow(QMainWindow):
 
         self.settings_store = QSettings("FaceBlur", "FaceBlur")
         self.inputs: list[Path] = []
+        # The one folder the input came from, when it came from one folder.
+        # Recreating a folder needs to know which.
+        self.source_folder: Path | None = None
+        self.mirror: MirrorPlan | None = None
         self.output_dir: Path | None = None
         self.rows: list[FileRow] = []
         self.jobs: list[tuple[Path, Path]] = []
@@ -358,6 +411,14 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.choose_folder_button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+
+        # Only means something for one folder, so it is only enabled then.
+        self.mirror_check = QCheckBox(S.MIRROR)
+        self.mirror_check.setMinimumHeight(CONTROL_HEIGHT - 4)
+        self.mirror_check.setEnabled(False)
+        self.mirror_check.toggled.connect(self._mirror_toggled)
+        layout.addWidget(self.mirror_check)
+        layout.addWidget(help_label(S.MIRROR_HELP))
         return box
 
     def _build_output(self) -> QWidget:
@@ -513,8 +574,10 @@ class MainWindow(QMainWindow):
         numbers.addWidget(help_label(S.STRIDE_HELP), 1, 0, 1, 3)
 
         self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(1, max(1, multiprocessing.cpu_count()))
-        from faceblur.detect import default_workers
+        # Every worker loads every model. Past the GPU cap they no longer run
+        # faster, they only use memory, and running out of memory is what
+        # made a run at 10 never finish.
+        self.workers_spin.setRange(1, max_workers())
         self.workers_spin.setValue(default_workers())
         self.workers_spin.setMinimumHeight(CONTROL_HEIGHT)
         numbers.addWidget(QLabel(S.WORKERS_LABEL), 2, 0)
@@ -642,12 +705,18 @@ class MainWindow(QMainWindow):
             check.setChecked(self.settings_store.value(
                 f"mask_{name}", name == "face", type=bool))
         self.stride_spin.setValue(self.settings_store.value("stride", 1, type=int))
+        # A stored value above the range is clamped by the spin box, which is
+        # what moves a window that remembered 10 down to the cap.
         self.workers_spin.setValue(self.settings_store.value(
-            "workers", max(1, multiprocessing.cpu_count() // 2), type=int))
+            "workers", default_workers(), type=int))
         self.replace_check.setChecked(
             self.settings_store.value("replace", False, type=bool))
         self.check_output_check.setChecked(
             self.settings_store.value("check_output", True, type=bool))
+        self.mirror_check.blockSignals(True)
+        self.mirror_check.setChecked(
+            self.settings_store.value("mirror", False, type=bool))
+        self.mirror_check.blockSignals(False)
 
     def _remember(self) -> None:
         if self.output_dir:
@@ -662,6 +731,7 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("replace", self.replace_check.isChecked())
         self.settings_store.setValue("check_output",
                                      self.check_output_check.isChecked())
+        self.settings_store.setValue("mirror", self.mirror_check.isChecked())
 
     def _engine(self) -> str:
         return "both" if self.engine_max.isChecked() else "yunet"
@@ -707,23 +777,44 @@ class MainWindow(QMainWindow):
         self.output_value.setText(str(self.output_dir))
         self._update_start_enabled()
 
+    def _mirroring(self) -> bool:
+        return self.source_folder is not None and self.mirror_check.isChecked()
+
+    def _mirror_toggled(self, _checked: bool = False) -> None:
+        # The list of videos depends on it: a recreated folder takes every
+        # MP4 in every subfolder, a plain folder run the videos at its top.
+        if self.source_folder is not None and not self._running():
+            self._take_paths([self.source_folder])
+
     def _take_paths(self, paths: list[Path]) -> None:
         if self._running():
             return
+        single_folder = len(paths) == 1 and paths[0].is_dir()
+        mirroring = single_folder and self.mirror_check.isChecked()
         videos: list[Path] = []
         for path in paths:
-            if path.is_dir():
+            if path.is_dir() and mirroring:
+                videos.extend(sorted(p for p in path.rglob("*")
+                                     if p.is_file() and is_mirrored_video(p)))
+            elif path.is_dir():
                 videos.extend(sorted(p for p in path.glob("*")
                                      if p.is_file() and p.suffix.lower() in VIDEO_EXT))
             elif path.is_file() and path.suffix.lower() in VIDEO_EXT:
                 videos.append(path)
-        if not videos:
+        # A folder with no MP4 in it can still be recreated: it is a copy.
+        if not videos and not mirroring:
             QMessageBox.warning(self, S.ERR_INPUT_TITLE, S.INPUT_NONE_FOUND)
             return
 
+        self.source_folder = paths[0] if single_folder else None
+        self.mirror_check.setEnabled(single_folder)
+
         self.inputs = list(dict.fromkeys(videos))
         total = sum(p.stat().st_size for p in self.inputs)
-        self.drop_zone.show_summary(S.input_summary(len(self.inputs), total))
+        summary = S.input_summary(len(self.inputs), total)
+        if mirroring:
+            summary = S.MIRROR_SUMMARY.format(folder=paths[0].name, videos=summary)
+        self.drop_zone.show_summary(summary)
 
         if self.output_dir is None:
             first = paths[0]
@@ -736,7 +827,8 @@ class MainWindow(QMainWindow):
 
     def _update_start_enabled(self) -> None:
         wanted = bool(self._mask())
-        ready = bool(self.inputs) and self.output_dir is not None and wanted
+        ready = ((bool(self.inputs) or self._mirroring())
+                 and self.output_dir is not None and wanted)
         self.start_button.setEnabled(ready or self._running())
         self.start_help.setVisible(not ready and not self._running())
         # Only nag about the switches once the rest of the form is filled in.
@@ -748,7 +840,7 @@ class MainWindow(QMainWindow):
             item = self.rows_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.rows = [FileRow(self.rows_grid, i, p.name)
+        self.rows = [FileRow(self.rows_grid, i, self._row_name(p))
                      for i, p in enumerate(self.inputs)]
         self.records.clear()
         self.overall_bar.setValue(0)
@@ -758,6 +850,16 @@ class MainWindow(QMainWindow):
             if self.inputs else S.OVERALL_IDLE)
         self.summary_label.setVisible(False)
         self.open_output_button.setVisible(False)
+
+    def _row_name(self, path: Path) -> str:
+        # In a recreated folder two videos can share a name in different
+        # subfolders, so the row shows where each one sits.
+        if self._mirroring():
+            try:
+                return str(path.relative_to(self.source_folder))
+            except ValueError:
+                pass
+        return path.name
 
     # ------------------------------------------------------------------ running
 
@@ -777,6 +879,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, S.ERR_OUTPUT_TITLE, S.ERR_OUTPUT_UNWRITABLE)
             return
 
+        mirror = None
+        if self._mirroring():
+            try:
+                mirror = mirror_plan(self.source_folder, self.output_dir)
+            except MirrorError as exc:
+                QMessageBox.warning(self, S.ERR_OUTPUT_TITLE, str(exc))
+                return
+            self.inputs = [src for src, _ in mirror.videos]
+
         checking = self.check_output_check.isChecked()
         settings = Settings(
             mask=self._mask(),
@@ -788,10 +899,17 @@ class MainWindow(QMainWindow):
             # line in a record nobody reads, and the gate is the reason the
             # check exists.
             check_output=checking,
-            quarantine=checking,
+            # A recreated folder keeps every name in place, so a copy the
+            # check does not trust stays where it is and the summary and the
+            # report name it. The original never goes in its place.
+            quarantine=checking and mirror is None,
         )
-        self.jobs = [(src, output_path(src, self.output_dir, settings.suffix))
-                     for src in self.inputs]
+        if mirror is not None:
+            self.jobs = list(mirror.videos)
+        else:
+            self.jobs = [(src, output_path(src, self.output_dir, settings.suffix))
+                         for src in self.inputs]
+        self.mirror = mirror
 
         self._reset_rows()
         self._remember()
@@ -801,7 +919,8 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(False)
         self.start_button.setText(S.STOP)
 
-        self.runner = BatchRunner(self.jobs, settings, self.workers_spin.value(), self)
+        self.runner = BatchRunner(self.jobs, settings, self.workers_spin.value(), self,
+                                  mirror=mirror)
         self.runner.progress.connect(self._on_progress)
         self.runner.one_finished.connect(self._on_one_finished)
         self.runner.all_finished.connect(self._on_all_finished)
@@ -812,8 +931,9 @@ class MainWindow(QMainWindow):
                        self.choose_output_button, self.engine_standard,
                        self.engine_max, self.mode_blur, self.mode_pixelate,
                        self.mode_solid, self.stride_spin, self.workers_spin,
-                       self.replace_check):
+                       self.replace_check, self.check_output_check):
             widget.setEnabled(enabled)
+        self.mirror_check.setEnabled(enabled and self.source_folder is not None)
         for name, check in self.mask_checks.items():
             from faceblur.classes import kind as kind_of
             check.setEnabled(enabled and kind_of(name).ready)
@@ -836,6 +956,10 @@ class MainWindow(QMainWindow):
             self._ask_to_stop()
 
     def _on_progress(self, index: int, stage: str, done: int, total: int) -> None:
+        if index < 0:
+            # Not one video: the other files of a recreated folder.
+            self.overall_label.setText(S.MIRROR_COPYING.format(count=total))
+            return
         if index >= len(self.rows):
             return
         row = self.rows[index]
@@ -843,11 +967,18 @@ class MainWindow(QMainWindow):
                  "checking": S.STATUS_CHECKING}
         row.set_status(words.get(stage, S.STATUS_WRITING))
         # Each pass walks the whole video, so each is its own part of the row.
-        # Checking the copy is a third pass, and only some runs make it.
-        shares = {"detecting": (0.0, 0.5), "writing": (0.5, 0.5), "checking": (0.0, 1.0)}
+        # Checking the copy is a third pass, and only some runs make it. The
+        # bar never moves back: checking used to start it again from zero,
+        # which read as a run that had started over and would never end.
+        checking = self.runner is not None and self.runner.settings.check_output
+        if checking:
+            shares = {"detecting": (0.0, 0.4), "writing": (0.4, 0.3),
+                      "checking": (0.7, 0.3)}
+        else:
+            shares = {"detecting": (0.0, 0.5), "writing": (0.5, 0.5)}
         share, span = shares.get(stage, (0.5, 0.5))
         fraction = share + (span * done / total if total else 0.0)
-        row.set_fraction(fraction)
+        row.set_fraction(max(fraction, row.bar.value() / 100.0))
 
     def _on_one_finished(self, index: int, record: dict) -> None:
         self.records[index] = record
@@ -870,6 +1001,15 @@ class MainWindow(QMainWindow):
         checked = [r for r in self.records.values() if r.get("checked_frames")]
         if not checked:
             return ""
+        if self.mirror is not None:
+            # No quarantine in a recreated folder, so a copy is flagged by
+            # what would have held it, and it stays in place.
+            held = [r for r in checked if r.get("held_back_for")]
+            if not held:
+                return S.SUMMARY_CHECKED_CLEAN
+            kinds = ", ".join(sorted({k for r in held for k in r["held_back_for"]}))
+            template = S.MIRROR_HELD_ONE if len(held) == 1 else S.MIRROR_HELD
+            return template.format(held=len(held), kinds=kinds)
         held = [r for r in checked if r.get("quarantined")]
         if not held:
             return S.SUMMARY_CHECKED_CLEAN
@@ -916,6 +1056,11 @@ class MainWindow(QMainWindow):
         elif skipped:
             text += S.SUMMARY_SKIPPED.format(skipped=skipped)
         text += self._held_back_line()
+        if self.mirror is not None and self.runner is not None:
+            text += S.MIRROR_DONE.format(count=len(self.mirror.files))
+            if self.runner.copy_problems:
+                text += S.MIRROR_NOT_COPIED.format(count=len(self.runner.copy_problems))
+            text += S.MIRROR_REPORT.format(name=self.mirror.report_path.name)
         self.summary_label.setText(text)
         self.summary_label.setVisible(True)
 
@@ -931,8 +1076,9 @@ class MainWindow(QMainWindow):
         self._update_start_enabled()
 
     def _open_output(self) -> None:
-        if self.output_dir and self.output_dir.is_dir():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.output_dir)))
+        target = self.mirror.target if self.mirror is not None else self.output_dir
+        if target and target.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def _show_about(self) -> None:
         QMessageBox.information(self, S.ABOUT_TITLE, S.ABOUT_TEXT)
