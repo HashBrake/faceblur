@@ -15,6 +15,7 @@ pipeline.py stays as the one process, one video path.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import shutil
 import statistics
 from dataclasses import replace
@@ -35,7 +36,7 @@ from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, 
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
 from .verify import check, held_for, second_chance_seeds
-from .video import VideoError, VideoInfo, part_path, probe
+from .video import VideoError, VideoInfo, part_path, probe, unchecked_path
 
 Submit = Callable[[Callable, list, int], list]
 
@@ -500,9 +501,15 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # which have none. A source with B-frames is encoded whole.
     record.reorder_delay = reorder_delay(src)
     want_copy = settings.copy_clean and record.reorder_delay == 0
+    # A copy the gate will judge is written to a holding name and only moved
+    # once, to `dst` or to quarantine, after the check has spoken. Moving it
+    # into place first and checking it there meant a process that died during
+    # the check left a whole, ungated copy that looked delivered. Report 24.4.
+    gated = settings.check_output or settings.quarantine
+    out = unchecked_path(dst) if gated else dst
 
     def write_pass() -> bool:
-        """Write `dst` from `src` with the masks in `per_frame`. Sets the
+        """Write `out` from `src` with the masks in `per_frame`. Sets the
         record's quality numbers. False means it gave up and said why."""
         t1 = time.time()
         masked_flags = [bool(f) for f in per_frame]
@@ -514,14 +521,14 @@ def run_video(src: Path, dst: Path, settings: Settings,
                                   keys, piece)
             work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
             try:
-                outcome = _write_and_join(src, dst, info, times, settings, segments, per_frame,
+                outcome = _write_and_join(src, out, info, times, settings, segments, per_frame,
                                           submit, workers, Path(work), report, cancelled,
                                           zones)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             if outcome is None:
                 record.status = STATUS_STOPPED
-                dst.unlink(missing_ok=True)
+                out.unlink(missing_ok=True)
                 return False
             masked, masked_by_kind, prevented, problem, copied = outcome
             record.join_attempts = attempt + 1
@@ -529,7 +536,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             if not problem:
                 record.frames_copied = copied
                 break
-            dst.unlink(missing_ok=True)
+            out.unlink(missing_ok=True)
         if record.error:
             return False
 
@@ -568,9 +575,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
         t2 = time.time()
         report("checking", 0, n)
         try:
-            got = check(src, dst, settings, settings.check_stride, submit, workers, chunk)
+            got = check(src, out, settings, settings.check_stride, submit, workers, chunk)
         except VideoError as exc:
+            # A copy the check could not look at is not delivered.
             record.error = str(exc)
+            record.status = STATUS_FAILED
             return None
         record.checked_frames = got["frames_checked"]
         record.residual_faces = got["residual_faces"]
@@ -600,92 +609,100 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.wall_seconds = round(time.time() - started, 2)
         return record
 
-    # ---- 6. check the copy, and hold it back if it still shows a face
-    found = None
-    if settings.check_output or settings.quarantine:
-        found = check_pass()
-        if found is None:
-            record.wall_seconds = round(time.time() - started, 2)
-            return record
-
-    # ---- 7. the second chance, package F1
-    #
-    # The check found faces in the copy on pixels nothing changed. They are
-    # evidence: a detector saw them at a threshold this run already trusts,
-    # on a frame the first pass looked at and passed over. So they go back in
-    # as seeds and the tracker runs again, which is what turns a box on one
-    # frame into a mask over the stretch the face is there for. Nothing is
-    # lowered and nothing is guessed. Report section 20.
-    if found is not None and settings.second_chance:
-        t3 = time.time()
-        record.residual_faces_first_pass = record.residual_faces
-        for _ in range(settings.second_chance):
-            seeds = second_chance_seeds(found, settings)
-            if not seeds:
-                break
-            record.second_chance_rounds += 1
-            record.second_chance_seeds += sum(len(v) for v in seeds.values())
-            for i, dets in seeds.items():
-                strong[i] = list(strong[i]) + list(dets)
-            per_frame, tracks = tracker_for(settings).run(
-                strong, weak, shifts if settings.camera_comp else None,
-                (info.height, info.width))
-            record.second_chance_tracks_added += len(tracks) - record.tracks
-            record.tracks = len(tracks)
-            if settings.wants("screen"):
-                # The tracker does not know about screens and the run above
-                # threw away what section 2b put in. Put it back.
-                for i, dets in held_screens.items():
-                    if 0 <= i < n:
-                        per_frame[i] = list(per_frame[i]) + list(dets)
-            # A seed the tracker dropped goes back as a mask on its own frame.
-            # `min_track` is there so that one spurious detection cannot become
-            # a mask, and a seed is not one: it is a box a second detection
-            # pass found in the finished copy, on pixels the first pass never
-            # changed. Keeping the rule here throws away most of what the
-            # check paid for, and it is measured: on 004100 eight seeds made
-            # three tracks and five fell on the floor.
-            #
-            # With the run's own `tail` either side of the sighting, which is
-            # what the tracker gives the last frame of a track and for the
-            # same reason: a face seen on one frame was there just before and
-            # just after, and the detector is what blinks. Measured, on
-            # 004100: seeds alone left two faces visible at frames 402 and
-            # 591, two and three frames from a seed, and the tail is what
-            # closes them. The box is not grown along the tail, because
-            # nothing here knows which way the face went.
-            tail = max(0, settings.tail)
-            for i, dets in seeds.items():
-                for d in dets:
-                    if any(iou(d, other) >= 0.3 for other in per_frame[i]):
-                        continue
-                    record.second_chance_seeds_kept += 1
-                    for k in range(i - tail, i + tail + 1):
-                        if 0 <= k < n and not any(iou(d, o) >= 0.3 for o in per_frame[k]):
-                            per_frame[k] = list(per_frame[k]) + [d]
-            record.frames_with_mask = sum(1 for f in per_frame if f)
-            if not write_pass():
-                record.second_chance_seconds = round(time.time() - t3, 2)
-                record.wall_seconds = round(time.time() - started, 2)
-                return record
+    try:
+        # ---- 6. check the copy, and hold it back if it still shows a face
+        found = None
+        if settings.check_output or settings.quarantine:
             found = check_pass()
             if found is None:
-                record.second_chance_seconds = round(time.time() - t3, 2)
                 record.wall_seconds = round(time.time() - started, 2)
                 return record
-        record.second_chance_seconds = round(time.time() - t3, 2)
 
-    # ---- 8. the gate, on whatever the last check found
-    if found is not None:
-        # Hands do not hold a copy back. They are in the record either way.
-        # Which kinds do is `verify.held_for`, so that the gate and the report
-        # of it cannot drift apart.
-        held_back = held_for(found, settings)
-        record.held_back_for = list(held_back)
-        if settings.quarantine and held_back:
-            dst = quarantine_output(dst)
-            record.output = dst.name
-            record.quarantined = True
+        # ---- 7. the second chance, package F1
+        #
+        # The check found faces in the copy on pixels nothing changed. They are
+        # evidence: a detector saw them at a threshold this run already trusts,
+        # on a frame the first pass looked at and passed over. So they go back in
+        # as seeds and the tracker runs again, which is what turns a box on one
+        # frame into a mask over the stretch the face is there for. Nothing is
+        # lowered and nothing is guessed. Report section 20.
+        if found is not None and settings.second_chance:
+            t3 = time.time()
+            record.residual_faces_first_pass = record.residual_faces
+            for _ in range(settings.second_chance):
+                seeds = second_chance_seeds(found, settings)
+                if not seeds:
+                    break
+                record.second_chance_rounds += 1
+                record.second_chance_seeds += sum(len(v) for v in seeds.values())
+                for i, dets in seeds.items():
+                    strong[i] = list(strong[i]) + list(dets)
+                per_frame, tracks = tracker_for(settings).run(
+                    strong, weak, shifts if settings.camera_comp else None,
+                    (info.height, info.width))
+                record.second_chance_tracks_added += len(tracks) - record.tracks
+                record.tracks = len(tracks)
+                if settings.wants("screen"):
+                    # The tracker does not know about screens and the run above
+                    # threw away what section 2b put in. Put it back.
+                    for i, dets in held_screens.items():
+                        if 0 <= i < n:
+                            per_frame[i] = list(per_frame[i]) + list(dets)
+                # A seed the tracker dropped goes back as a mask on its own frame.
+                # `min_track` is there so that one spurious detection cannot become
+                # a mask, and a seed is not one: it is a box a second detection
+                # pass found in the finished copy, on pixels the first pass never
+                # changed. Keeping the rule here throws away most of what the
+                # check paid for, and it is measured: on 004100 eight seeds made
+                # three tracks and five fell on the floor.
+                #
+                # With the run's own `tail` either side of the sighting, which is
+                # what the tracker gives the last frame of a track and for the
+                # same reason: a face seen on one frame was there just before and
+                # just after, and the detector is what blinks. Measured, on
+                # 004100: seeds alone left two faces visible at frames 402 and
+                # 591, two and three frames from a seed, and the tail is what
+                # closes them. The box is not grown along the tail, because
+                # nothing here knows which way the face went.
+                tail = max(0, settings.tail)
+                for i, dets in seeds.items():
+                    for d in dets:
+                        if any(iou(d, other) >= 0.3 for other in per_frame[i]):
+                            continue
+                        record.second_chance_seeds_kept += 1
+                        for k in range(i - tail, i + tail + 1):
+                            if 0 <= k < n and not any(iou(d, o) >= 0.3 for o in per_frame[k]):
+                                per_frame[k] = list(per_frame[k]) + [d]
+                record.frames_with_mask = sum(1 for f in per_frame if f)
+                if not write_pass():
+                    record.second_chance_seconds = round(time.time() - t3, 2)
+                    record.wall_seconds = round(time.time() - started, 2)
+                    return record
+                found = check_pass()
+                if found is None:
+                    record.second_chance_seconds = round(time.time() - t3, 2)
+                    record.wall_seconds = round(time.time() - started, 2)
+                    return record
+            record.second_chance_seconds = round(time.time() - t3, 2)
+
+        # ---- 8. the gate, on whatever the last check found
+        if found is not None:
+            # Hands do not hold a copy back. They are in the record either way.
+            # Which kinds do is `verify.held_for`, so that the gate and the report
+            # of it cannot drift apart.
+            held_back = held_for(found, settings)
+            record.held_back_for = list(held_back)
+            if settings.quarantine and held_back:
+                dst = quarantine_output(dst, out)
+                record.output = dst.name
+                record.quarantined = True
+        if gated and not record.quarantined:
+            os.replace(out, dst)
+    finally:
+        # Whatever stopped the run between the write and the gate, the copy
+        # that was never delivered does not stay behind under any name.
+        if gated:
+            out.unlink(missing_ok=True)
 
     record.wall_seconds = round(time.time() - started, 2)
     if write_sidecar:
@@ -694,19 +711,25 @@ def run_video(src: Path, dst: Path, settings: Settings,
     return record
 
 
-def quarantine_output(dst: Path) -> Path:
+def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
     """Move a copy that still shows a face out of the delivery folder.
 
     It is not deleted: it is the only blurred copy of that video, and the
     audit record beside it says which frames stopped it. Whoever picks it up
     decides whether to cut those frames, run it again with other settings, or
     look at it.
+
+    `copy` is where the copy is now, `dst` when not given. Whatever sits at
+    `dst` from an earlier run goes, so a held back copy never leaves an older
+    one looking delivered.
     """
+    copy = Path(copy) if copy is not None else Path(dst)
     held = dst.parent / "quarantine"
     held.mkdir(parents=True, exist_ok=True)
     target = held / dst.name
     target.unlink(missing_ok=True)
-    shutil.move(str(dst), str(target))
+    shutil.move(str(copy), str(target))
+    Path(dst).unlink(missing_ok=True)
     sidecar_path(dst).unlink(missing_ok=True)
     return target
 
@@ -773,6 +796,5 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
     if problem:
         part.unlink(missing_ok=True)
         return masked, by_kind, prevented, f"The joined file did not verify: {problem}", 0
-    import os
     os.replace(part, dst)
     return masked, by_kind, prevented, "", sum(s.frames for s in segments if s.copy)

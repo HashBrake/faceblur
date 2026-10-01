@@ -42,7 +42,7 @@ from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_size
 # ranges, then segment encodes. faceblur.batch holds the pool helpers.
 from faceblur.batch import (PoolSubmit, WorkerLost, init_pool_worker, run_video,  # noqa: E402
                             serial_submit)
-from faceblur.video import part_path  # noqa: E402
+from faceblur.video import part_path, unchecked_path  # noqa: E402
 
 
 def find_videos(src: Path, recursive: bool) -> list[Path]:
@@ -214,6 +214,7 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
                 pool.terminate()
                 pool.join()
                 part_path(dst).unlink(missing_ok=True)
+                unchecked_path(dst).unlink(missing_ok=True)
                 pool = new_pool()
                 record = AuditRecord(source=src.name, output=dst.name,
                                      status=STATUS_FAILED, error=str(exc))

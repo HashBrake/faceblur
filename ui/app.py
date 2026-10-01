@@ -38,7 +38,7 @@ if __package__ in (None, ""):  # started as `python ui/app.py`
 from faceblur.pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED,
                                STATUS_STOPPED, output_path, sidecar_path)
 from faceblur.settings import VIDEO_EXT, Settings
-from faceblur.video import part_path
+from faceblur.video import part_path, unchecked_path
 from ui import strings as S
 from faceblur.batch import PoolSubmit, WorkerLost, init_pool_worker, run_video
 from faceblur.detect import default_workers, max_workers
@@ -190,8 +190,9 @@ class BatchRunner(QThread):
 
         A finished copy is told apart from a half written one by its audit
         record. A recreated folder has no records beside its copies, and a
-        copy only takes its final name once it is whole, so there only the
-        part files and the segment folders go.
+        copy only takes its final name once it is whole and, with the check
+        on, once the gate has spoken, so there only the part files, the copies
+        waiting for the check and the segment folders go.
         """
         import shutil
         jobs = self.jobs if jobs is None else jobs
@@ -201,6 +202,7 @@ class BatchRunner(QThread):
                     and not sidecar_path(dst).exists()):
                 dst.unlink(missing_ok=True)
             part_path(dst).unlink(missing_ok=True)
+            unchecked_path(dst).unlink(missing_ok=True)
         for folder in {Path(dst).parent for _, dst in jobs}:
             for temp in folder.glob("faceblur_*"):
                 if temp.is_dir():

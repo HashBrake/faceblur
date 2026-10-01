@@ -2916,3 +2916,13 @@ that should have been held. **It is recorded here and not fixed**, because
 the fix changes the path every delivered file takes: keep the copy at its
 part path until the gate has spoken, then move it to the output folder or to
 quarantine in one step. `STATE.md` carries it as the first thing to fix.
+
+**Fixed on 2026-10-01.** A run with the check on writes its copy to
+`<name>.mp4.unchecked`, checks it there, and moves it once: to its delivered
+name if the gate lets it through, to `quarantine` if not. A run that stops
+or raises anywhere between the write and the gate deletes the held copy, and
+one the machine kills outright leaves it under a name that says it was never
+checked. A check that cannot read the copy now fails the video instead of
+leaving it in place. A held back copy also takes an older delivered copy of
+the same name with it, which the old order did by overwriting it first.
+Runs without the check are unchanged. Four tests in `tests/test_verify.py`.

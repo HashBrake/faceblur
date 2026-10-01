@@ -1,8 +1,10 @@
 # STATE, handover notes
 
-Last updated 2026-09-14, after the weekend build and a full run of the
-pipeline over all four sample files (report 24). Before that, the unattended
-weekend build of
+Last updated 2026-10-01, when the gate was made crash safe (report 24.4).
+Before that, 2026-09-26: a run that hung on a dead worker, and "recreate the
+whole folder" in the window. Before that, 2026-09-14, a full run of the
+pipeline over all four sample files (report 24), and the unattended weekend
+build of
 `FACEBLUR_BUILD_PLAN_V2.md`. Packages R1, S1, 4.3, E1, R2, H1, H2 and then
 **R3, G1, F2, F1, T1, S2 and M1** are done, committed and pushed. **T3, D and
 T4 are blocked** on numbers rather than on time; report 21.5 says by what.
@@ -97,11 +99,26 @@ repository has ever been measured on a card.
 ## Where things stand
 
 Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean and local and remote are the same commit. Tests: `tests/`, 1195
+tree is clean and local and remote are the same commit. Tests: `tests/`, 1281
 passing, about six minutes (`.venv\Scripts\python.exe -m pytest tests`).
 
 The weekend build ends at `7dc74a7`. Anything after that in the log is a later
 session and this file will say so.
+
+### After the weekend
+
+- **2026-09-14, `629d156`.** The whole pipeline on the whole sample, report
+  24, and the crash safety defect it found.
+- **2026-09-26, `46dbddf` and `adcc469`.** A run from the window with 10
+  workers saved waited forever: a worker the machine killed is replaced by
+  `multiprocessing.Pool` and the job it held never completes. `PoolSubmit`
+  now raises `WorkerLost`, the window and the CLI fail that one video and
+  start a fresh pool, and the worker count is capped at `max_workers()`.
+  The window also gained "Recreate the whole folder": the folder tree is
+  copied as it is, every `.mp4` at any depth replaced by its blurred copy
+  under the same name, no quarantine (it would change names), records in
+  `<folder>_faceblur_report.json`. `tests/manual_ui.md` has the steps.
+- **2026-10-01.** The gate is crash safe; item 0 below is done.
 
 | Package | What | State |
 |---|---|---|
@@ -260,7 +277,9 @@ neither copy.
 
 #### What to do next, in this order
 
-0. **The gate is not crash safe, and this is a shipping defect.** Found on
+0. ~~**The gate is not crash safe, and this is a shipping defect.**~~ **Fixed
+   2026-10-01**: a checked copy waits as `<name>.mp4.unchecked` and moves
+   once, after the gate. Report 24.4 says what changed. Found on
    2026-09-14 by a run the machine killed. `run_video` moves the finished
    copy into the output folder, then checks it, then moves it to
    `quarantine` if the check holds it back. A process that dies in that

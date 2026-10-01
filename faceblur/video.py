@@ -90,6 +90,16 @@ def part_path(dst: Path) -> Path:
     return Path(str(dst) + ".part")
 
 
+def unchecked_path(dst: Path) -> Path:
+    """Where a finished copy waits while the output side check looks at it.
+
+    A copy that is going to be checked never takes its delivered name until
+    the gate has spoken, so a process that dies during the check leaves a file
+    whose name says it was not checked, not one that looks delivered.
+    """
+    return Path(str(dst) + ".unchecked")
+
+
 @dataclass(frozen=True)
 class VideoInfo:
     width: int

@@ -338,6 +338,11 @@ PC. `--quarantine` turns that into a gate: a copy that still shows a face of
 the output instead of shipping, with its audit record naming the frames. Use
 both for anything that leaves the machine.
 
+While a copy is being checked it is named `<name>.mp4.unchecked`, and it takes
+its real name, or goes to `quarantine`, only once the check has spoken. A file
+with that ending in an output folder is one a run did not finish checking:
+it was never delivered and can be deleted.
+
 `--second-chance N` uses what the check found. A face it finds in the copy
 is a face this run missed, on pixels the run never changed, and it goes back
 in as a detection: the file is written again from the source, never from the

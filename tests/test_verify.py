@@ -19,6 +19,7 @@ from faceblur.batch import run_video, serial_submit
 from faceblur.detect import Detection
 from faceblur.pipeline import STATUS_DONE, sidecar_path
 from faceblur.settings import Settings
+from faceblur.video import unchecked_path
 from faceblur.redact import redact
 from faceblur.verify import (FLAT_DIFF, KINDS_CHECKED, MISSED_APPLIED, applied, box_diff,
                              check, classify, describe, detection_from_row, frame_noise,
@@ -249,6 +250,77 @@ def test_a_copy_that_still_shows_a_face_is_moved_to_quarantine(tmp_path, video_w
     assert held.is_file()
     assert sidecar_path(held).is_file()
     assert not sidecar_path(out).exists()
+
+
+# A copy the gate will judge takes its delivered name only once the gate has
+# spoken. Before, it was moved into place and then checked, and a process
+# that died during the check left a whole, ungated copy that looked
+# delivered. Report section 24.4.
+
+def test_while_the_copy_is_checked_it_is_not_under_its_delivered_name(tmp_path,
+                                                                      video_with_face):
+    out = tmp_path / "out.mp4"
+    seen = []
+
+    def on_progress(stage, done, total):
+        if stage == "checking":
+            seen.append((out.exists(), unchecked_path(out).exists()))
+
+    record = run_video(video_with_face, out, Settings(check_output=True, **FAST),
+                       serial_submit, on_progress=on_progress)
+    assert record.status == STATUS_DONE, record.error
+    assert seen and all(not final and waiting for final, waiting in seen)
+    assert out.is_file() and not unchecked_path(out).exists()
+
+
+def test_a_run_that_dies_during_the_check_delivers_nothing(tmp_path, video_with_face,
+                                                           monkeypatch):
+    import faceblur.batch as batch
+
+    def dies(*args, **kwargs):
+        raise RuntimeError("the worker went away")
+
+    monkeypatch.setattr(batch, "check", dies)
+    out = tmp_path / "out.mp4"
+    with pytest.raises(RuntimeError):
+        run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert not out.exists()
+    assert not unchecked_path(out).exists()
+    assert not (tmp_path / "quarantine").exists()
+
+
+def test_a_copy_the_check_could_not_read_is_not_delivered(tmp_path, video_with_face,
+                                                          monkeypatch):
+    import faceblur.batch as batch
+    from faceblur.pipeline import STATUS_FAILED
+    from faceblur.video import VideoError
+
+    def unreadable(*args, **kwargs):
+        raise VideoError("could not open the copy")
+
+    monkeypatch.setattr(batch, "check", unreadable)
+    out = tmp_path / "out.mp4"
+    record = run_video(video_with_face, out, Settings(check_output=True, **FAST),
+                       serial_submit)
+    assert record.status == STATUS_FAILED
+    assert "could not open the copy" in record.error
+    assert not out.exists()
+    assert not unchecked_path(out).exists()
+
+
+def test_a_held_back_copy_does_not_leave_an_older_one_looking_delivered(tmp_path,
+                                                                       video_with_face,
+                                                                       monkeypatch):
+    import faceblur.batch as batch
+
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _NothingFound())
+    out = tmp_path / "held.mp4"
+    out.write_bytes(b"an earlier run's copy")
+    record = run_video(video_with_face, out,
+                       Settings(quarantine=True, replace_existing=True, **FAST), serial_submit)
+    assert record.quarantined is True
+    assert not out.exists()
+    assert (tmp_path / "quarantine" / out.name).is_file()
 
 
 class _NothingFound:
