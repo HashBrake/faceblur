@@ -2926,3 +2926,61 @@ checked. A check that cannot read the copy now fails the video instead of
 leaving it in place. A held back copy also takes an older delivered copy of
 the same name with it, which the old order did by overwriting it first.
 Runs without the check are unchanged. Four tests in `tests/test_verify.py`.
+
+## 25. The gates move to the mask budget (2026-10-01)
+
+The owner's answer to section 19.5: the off face gates move to the per frame
+mask budget the rule of 2026-09-11 names. `eval/sweep.py` `GATES` is now
+`masked_p95` at most `mask_budget` (5 percent) and `hand_damage_wearer` at
+most 0.1 percent, which did not move. `off_face_mean`, `off_face_max` and
+`off_face_detections_mean` are still measured and reported, and gate nothing.
+
+### 25.1 Which frame the budget is read on
+
+The budget is per frame, and the worst single frame cannot be the reading.
+On it **no setting of the 54 passes on all three files**, including the
+shipped one, which masks 5.83 percent of one frame of `004100` and 5.80 of
+one of `004310`. The old `off_face_max` gate allowed 6 percent, so the
+budget read that way is stricter than the rule it replaces, which is the
+opposite of what the rule asked for. The worst frame is one close face or
+one mirror. The gate reads the 95th percentile frame: at most one frame in
+twenty may be masked beyond the budget. `masked_max` stays in every row.
+
+### 25.2 What it chose
+
+Nothing had to be measured again. The gates decide which stored row passes
+and do not change what a row measured, so `eval.combine` now applies the
+current gates to the stored F2 sweeps rather than the verdict each sweep file
+was written with. 24 of the 54 settings pass on all three files, and they are
+exactly the 24 the hand gate passes on its own: on this footage the budget
+never binds. `004310` comes closest, at 4.03 percent on its 95th percentile
+frame.
+
+The winner keeps every detector and every scan size and moves three
+thresholds: `conf` 0.6 to 0.5, `verify_conf_sure` 0.5 to 0.3 (equal to
+`verify_conf`, so the borderline band that asked the mirror view is off),
+and `third_conf` 0.5 to 0.1. The runner up is the same with `third_conf`
+left at 0.5, tied on both exposure counts and 0.0006 behind on score; the
+ranking `eval.combine` has always used picks the first, and it was not
+overridden.
+
+| File | Exposed 40+ before | after | Exposed 24-40 before | after | Synthetic before | after | Masked mean before | after | Wearer's hands |
+|---|---|---|---|---|---|---|---|---|---|
+| `004100` | 91 | 85 | 55 | 55 | 87.8 % | 87.8 % | 0.50 % | 0.56 % | 0.00 % |
+| `004310` | 62 | 65 | 116 | 118 | 78.7 % | 79.1 % | 2.27 % | 2.35 % | 0.00 % |
+| `005035` | 435 | 404 | 1196 | 1172 | 86.2 % | 86.8 % | 0.67 % | 0.70 % | 0.00 % |
+| All three | 588 | 554 | 1367 | 1345 | | | | | |
+
+**A small gain, and not everywhere.** 34 fewer exposed frames of a known
+face of 40 px or more, 31 of them on `005035`; `004310` is 3 worse. The cost
+in mask is a tenth of a point or less. The speed is the same to within
+noise: the same models run at the same sizes, and lower thresholds only send
+a few more boxes to the confirmation crops.
+
+The question 19.5 asked was about the gates, not the knobs, and the answer
+it gets is that the build is no longer over its limit anywhere. It was never
+going to buy much recall: everything 19 rejected, the second detector over
+the whole frame and the 2560 scan, is still rejected by the hand gate, which
+did not move.
+
+`docs/f2_combined.md` is the table for all 54 rows.

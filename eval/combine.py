@@ -27,7 +27,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from eval.common import CACHE_DIR, REPORT_DIR  # noqa: E402
-from eval.sweep import GATES  # noqa: E402
+from eval.sweep import GATES, passes  # noqa: E402
 from faceblur.settings import Settings  # noqa: E402
 
 
@@ -67,7 +67,10 @@ def candidates(sweeps: dict[str, dict]) -> list[dict]:
             "key": k,
             "changes": json.loads(k),
             "per_file": per_file,
-            "passes_everywhere": all(r["passes"] for r in per_file.values()),
+            # Against the gates as they are now, not as they were when the
+            # sweep ran: a sweep file keeps its own verdict and that may be
+            # an older one.
+            "passes_everywhere": all(passes(r) for r in per_file.values()),
             "exposed_40": sum(r["exposed_40"] for r in per_file.values()),
             "exposed_24_40": sum(r["exposed_24_40"] for r in per_file.values()),
             "score": sum(r["score"] for r in per_file.values()) / len(per_file),
@@ -140,7 +143,7 @@ def main() -> int:
             print(f"    {stem[-30:]}: exposed {f['exposed_40']}/{f['exposed_24_40']}, "
                   f"synthetic {100 * f['synthetic_recall']:.1f}%, hands "
                   f"{100 * (f['hand_damage_wearer'] or 0):.2f}%, "
-                  f"{'passes' if f['passes'] else 'FAILS'}")
+                  f"{'passes' if passes(f) else 'FAILS'}")
 
     text = ["# F2: one default across every file", "",
             f"Settings measured on all of {', '.join(stems)}. A candidate has to pass "

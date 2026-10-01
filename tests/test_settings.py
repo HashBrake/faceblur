@@ -9,7 +9,8 @@ from faceblur.settings import Settings, SettingsError, parse_det_sizes
 def test_defaults_are_the_precision_first_ones():
     s = Settings()
     assert s.engine == "yunet"
-    assert s.conf == 0.6
+    assert s.conf == 0.5
+    assert s.verify_conf_sure == 0.3 and s.third_conf == 0.1
     assert s.det_sizes == (1280, 1920)
     assert s.verify is True
     assert s.max_face_frac == 0.15

@@ -31,8 +31,17 @@ from faceblur.settings import Settings
 # wearer's, and a mask on a bystander's hand is over masking rather than a
 # broken promise. `hand_damage_other` is reported beside it and not gated.
 # Report 17.4 and section 4.3 of the build plan.
-GATES = {"off_face_mean": 0.007, "off_face_max": 0.06, "off_face_detections_mean": 0.003,
-         "hand_damage_wearer": 0.001}
+#
+# 2026-10-01, the owner: the off face gates move to the mask budget. They
+# encoded "minimum region everywhere", and the rule of 2026-09-11 replaced
+# that with "outside the zone a miss is the leak and over masking is the
+# cheaper error, within a per frame mask budget". Under the old gates no
+# setting passed on all three files (report 19.5). The budget is read as the
+# 95th percentile frame: the worst single frame is one close face or one
+# mirror, and on that reading nothing at all passes, including every setting
+# the old 6 percent frame gate allowed. The off face numbers are still
+# measured and reported. Report 25.
+GATES = {"masked_p95": Settings().mask_budget, "hand_damage_wearer": 0.001}
 
 # Package F2, 2026-09-12. Every setting section 10 rejected was rejected for
 # masking the wearer's hand, and the zone takes the hand out of every mask
@@ -123,9 +132,7 @@ def _run(changes):
 
 
 def passes(r: dict) -> bool:
-    if r["off_face_mean"] > GATES["off_face_mean"] or r["off_face_max"] > GATES["off_face_max"]:
-        return False
-    if r["off_face_detections_mean"] > GATES["off_face_detections_mean"]:
+    if r["masked_p95"] > GATES["masked_p95"]:
         return False
     if r["hand_damage_wearer"] is not None and r["hand_damage_wearer"] > GATES["hand_damage_wearer"]:
         return False
@@ -285,10 +292,8 @@ def write_report(video, results, chosen, ellipse_rows, synth,
     lines = ["# Precision report", "",
              f"Automatic sweep on `{video.name}`. No human labels. See `eval/` for the method.",
              "", "## Gates", "",
-             f"- off-face masked area, where no detector sees a face: mean at most "
-             f"{pct(GATES['off_face_mean'])}, any frame at most {pct(GATES['off_face_max'])}; "
-             f"the part from detector boxes rather than tails at most "
-             f"{pct(GATES['off_face_detections_mean'])}",
+             f"- masked share of the frame, the mask budget: at most "
+             f"{pct(GATES['masked_p95'])} on 95 percent of frames",
              f"- hand pixels touched: at most {pct(GATES['hand_damage_wearer'])}",
              "- among settings inside the gates, the fewest frames with a known face "
              "of 40 px or more left visible wins (the hard gate), then the fewest of "

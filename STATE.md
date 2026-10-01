@@ -1,6 +1,7 @@
 # STATE, handover notes
 
-Last updated 2026-10-01, when the gate was made crash safe (report 24.4).
+Last updated 2026-10-01, when the gate was made crash safe (report 24.4)
+and the gates moved to the mask budget (report 25).
 Before that, 2026-09-26: a run that hung on a dead worker, and "recreate the
 whole folder" in the window. Before that, 2026-09-14, a full run of the
 pipeline over all four sample files (report 24), and the unattended weekend
@@ -9,10 +10,10 @@ build of
 **R3, G1, F2, F1, T1, S2 and M1** are done, committed and pushed. **T3, D and
 T4 are blocked** on numbers rather than on time; report 21.5 says by what.
 
-**Nothing is next until one question is answered**, and it is the first item
-under "What happened while the owner was away": the off face gates have no
-feasible point and the build that ships fails one of them. Every package that
-wants more face recall needs that settled before it has anywhere to stand.
+The question that held everything, the off face gates in report 19.5, was
+answered on 2026-10-01: they moved to the mask budget, and the build passes
+every gate on every file (report 25). What is left needs footage with cards
+and words in it.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -119,6 +120,8 @@ session and this file will say so.
   under the same name, no quarantine (it would change names), records in
   `<folder>_faceblur_report.json`. `tests/manual_ui.md` has the steps.
 - **2026-10-01.** The gate is crash safe; item 0 below is done.
+- **2026-10-01.** The off face gates moved to the mask budget and three
+  detection thresholds moved with them; items 1 and 2 below are done.
 
 | Package | What | State |
 |---|---|---|
@@ -169,7 +172,8 @@ package it came out of, and it is about the build rather than about a knob.
 #### What the owner should look at first
 
 **1. The off face gates have no feasible point, and the shipped build fails
-one of them.** Report 19.5. F2 measured all 54 settings on all three files
+one of them.** Report 19.5. *Answered 2026-10-01: the gates moved to the mask budget,
+report 25.* F2 measured all 54 settings on all three files
 with consensus labels, and none of them passes every gate on every file,
 including the combination the build ships today: on `004310` every setting
 that keeps verification on is over `off_face_mean` 0.7 percent, the shipped
@@ -289,18 +293,14 @@ neither copy.
    path until the gate has spoken and then move it once, to the output folder
    or to quarantine. It was not done on the day because it changes the path
    every delivered file takes and the owner was back. Report 24.4.
-1. **Settle the gate question in 19.5.** It needs the owner, it is the only
-   thing that does, and every package that wants more face recall is behind
-   it. The choice is between moving the off face gates to the per frame mask
-   budget the rule of 2026-09-11 names, and accepting that the build is over
-   an older limit on one file in three.
-2. **If the gates move, re-run `eval.sweep --f2` and `eval.combine` against
-   the new ones.** Both commands exist, the raw caches and the pasted face
-   sets are built and fingerprinted, and the hands caches are on disk for all
-   four files, so this is an afternoon rather than a week. The answer may
-   change: under the gates as they stand, 24, 20 and 24 of the 54 settings
-   pass on `004100`, `004310` and `005035` taken one file at a time, and none
-   passes on all three.
+1. ~~**Settle the gate question in 19.5.**~~ **Done 2026-10-01**: the owner
+   moved the off face gates to the mask budget, read on the 95th percentile
+   frame. Report 25.
+2. ~~**Re-run `eval.combine` against the new gates.**~~ **Done 2026-10-01**,
+   without a new sweep: gates change verdicts, not measurements. 24 of 54
+   pass on all three files, the budget never binds, and the defaults moved
+   three thresholds (`conf` 0.5, `verify_conf_sure` 0.3, `third_conf` 0.1)
+   for 588 to 554 exposed frames. Report 25.
 3. **Footage with cards in it, which only the owner can supply.** Five
    measurements are waiting on it: D1, the orientation rule, text recall, the
    text detector's false positive rate on a scene that has words in it, and

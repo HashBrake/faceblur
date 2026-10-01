@@ -184,9 +184,11 @@ class Settings:
     # yunet: YuNet finds faces, CenterFace confirms them (see verify).
     # both: union of the two, no confirmation. centerface: CenterFace alone.
     engine: str = "yunet"
-    # YuNet score threshold. Chosen by eval/sweep.py: the highest recall that
-    # keeps off-face masking under 0.3 percent and hands untouched.
-    conf: float = 0.6
+    # YuNet score threshold. Chosen by eval/combine.py over three files: the
+    # fewest faces left visible with the wearer's hands untouched and the mask
+    # inside its budget. 0.6 until 2026-10-01, when the gates moved from off
+    # face masking to the mask budget. Report 25.
+    conf: float = 0.5
     # Absolute long side lengths to scan at. 640 was dropped: on a 1600 px frame
     # it shrinks a 35 px face to 14 px while a sink becomes a face.
     det_sizes: tuple[int, ...] = (1280, 1920)
@@ -198,7 +200,10 @@ class Settings:
     # the mirror view also sees a face at mirror_agree or more. Faces are
     # symmetric and clear this every time measured (43 of 45 borderline
     # consensus faces on three files); the wearer's hand did not (0 of 2).
-    verify_conf_sure: float = 0.5
+    # Equal to verify_conf since 2026-10-01, which turns the borderline band
+    # off: the hand gate holds without it now that the zone takes the
+    # wearer's hand out of every mask. Report 25.
+    verify_conf_sure: float = 0.3
     mirror_agree: float = 0.2
     # Confirmation runs on a crop around each candidate rather than on the
     # whole frame at every size. The crop is crop_scale times the box, scaled
@@ -221,7 +226,8 @@ class Settings:
     # Two of three then decide. Never asked about a box the second detector
     # scored below verify_conf_low, which is where hands and signs land.
     third_opinion: bool = True
-    third_conf: float = 0.5
+    # 0.5 until 2026-10-01. Tied with it on faces left visible; report 25.
+    third_conf: float = 0.1
     verify_conf_low: float = 0.25
     # Two detectors agreeing is as good as one being sure: a YuNet box from
     # conf_agree up that CenterFace scores at verify_conf_agree or more is a
