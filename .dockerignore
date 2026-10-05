@@ -1,0 +1,13 @@
+# Only what cloud/Dockerfile copies. Footage and outputs never go in an image.
+*
+!models/*.onnx
+!models/*.txt
+!models/README.md
+!faceblur/*.py
+!cli.py
+!pyproject.toml
+!tests
+!cloud
+**/__pycache__
+**/*.mp4
+!tests/data/*.mp4

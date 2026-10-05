@@ -17,7 +17,7 @@ import pytest
 from conftest import run_ffmpeg
 from faceblur.batch import run_video, serial_submit
 from faceblur.detect import Detection
-from faceblur.pipeline import STATUS_DONE, sidecar_path
+from faceblur.pipeline import STATUS_DONE, STATUS_SKIPPED, sidecar_path
 from faceblur.settings import Settings
 from faceblur.video import unchecked_path
 from faceblur.redact import redact
@@ -321,6 +321,30 @@ def test_a_held_back_copy_does_not_leave_an_older_one_looking_delivered(tmp_path
     assert record.quarantined is True
     assert not out.exists()
     assert (tmp_path / "quarantine" / out.name).is_file()
+
+
+def test_a_restarted_run_does_not_redo_a_copy_it_already_held_back(tmp_path, video_with_face,
+                                                                    monkeypatch):
+    import faceblur.batch as batch
+
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _NothingFound())
+    out = tmp_path / "held.mp4"
+    first = run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert first.quarantined is True
+    again = run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert again.status == STATUS_SKIPPED
+    # A copy moved there without its record is not finished, and is redone.
+    sidecar_path(tmp_path / "quarantine" / out.name).unlink()
+    third = run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert third.quarantined is True
+
+
+def test_a_copy_goes_into_a_subfolder_that_does_not_exist_yet(tmp_path, video_with_face):
+    # cli.py --recursive mirrors the source tree and only makes the top folder.
+    out = tmp_path / "a" / "b" / "copy.mp4"
+    record = run_video(video_with_face, out, Settings(quarantine=True, **FAST), serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert out.is_file() or (out.parent / "quarantine" / out.name).is_file()
 
 
 class _NothingFound:

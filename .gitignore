@@ -39,3 +39,6 @@ eval/cache/
 *_report.json
 sweep_*.log
 .venv-oracle/
+
+# Cloud keys
+cloud/*.env

@@ -1,0 +1,15 @@
+# The cloud run: Linux, an NVIDIA card through CUDA. The same versions as
+# requirements.txt, with onnxruntime-gpu in place of onnxruntime-directml and
+# no window toolkit, because nothing here opens a window.
+flatbuffers==25.12.19
+imageio-ffmpeg==0.6.0
+iniconfig==2.3.0
+numpy==2.5.2
+onnx==1.17.0
+onnxruntime-gpu==1.24.4
+opencv-python-headless==4.13.0.92
+packaging==26.3
+pluggy==1.6.0
+protobuf==7.36.1
+Pygments==2.21.0
+pytest==9.0.2

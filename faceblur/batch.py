@@ -369,9 +369,12 @@ def run_video(src: Path, dst: Path, settings: Settings,
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
 
-    if dst.exists() and not settings.replace_existing:
+    if not settings.replace_existing and (dst.exists() or _held_back_before(dst, settings)):
         record.status = STATUS_SKIPPED
         return record
+    # A recursive run mirrors the source tree, so the folder may not exist yet,
+    # and the work folder and the held copy are both made inside it.
+    dst.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         info = probe(src)
@@ -709,6 +712,19 @@ def run_video(src: Path, dst: Path, settings: Settings,
         import json
         sidecar_path(dst).write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
     return record
+
+
+def _held_back_before(dst: Path, settings: Settings) -> bool:
+    """An earlier run with the gate on already finished this video and held it
+    back. Without this a restarted batch redoes every quarantined copy, and on
+    footage where the gate holds most files that is most of the run.
+
+    The record is written after the copy is moved, so a record in quarantine
+    means the copy beside it is whole."""
+    if not settings.quarantine:
+        return False
+    held = Path(dst).parent / "quarantine" / Path(dst).name
+    return held.is_file() and sidecar_path(held).is_file()
 
 
 def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
