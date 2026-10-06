@@ -2,7 +2,9 @@
 
     python cloud/deliver.py SOURCE_FOLDER [--apply]
 
-The delivered tree, `deliver/`, is the source folder exactly, file for file
+The delivered tree, at the root of its own bucket (`--to`, default the public
+bucket `faceblur-blurred`, every object public-read), is the source folder
+exactly, file for file
 and name for name, with three changes decided by the owner on 2026-10-06:
 
 - every video is its blurred copy under the original name. A copy the gate
@@ -74,6 +76,10 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("source", type=Path)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--to", default="faceblur-blurred",
+                    help="the bucket the delivered tree goes to; it holds nothing else")
+    ap.add_argument("--acl", default="public-read",
+                    help="ACL for every delivered object (the owner chose a public link)")
     args = ap.parse_args(argv)
     load_env()
     b = f"vs:{os.environ['BUCKET']}"
@@ -126,15 +132,19 @@ def main(argv: list[str]) -> int:
         print("dry run; --apply to do it")
         return 0
 
+    d = f"vs:{args.to}"
+    acl = ["--s3-acl", args.acl] if args.acl else []
+    rclone("mkdir", d)
+
     for src, rel in copies:
-        rclone("copyto", f"{b}/out/{src}", f"{b}/deliver/{rel}")
+        rclone("copyto", f"{b}/out/{src}", f"{d}/{rel}", *acl)
     for src, rel in records:
         rclone("copyto", f"{b}/out/{src}", f"{b}/faceblur-records/{rel}")
     for rel in stubs:
-        rclone("copyto", str(args.source / rel), f"{b}/deliver/{rel}")
+        rclone("copyto", str(args.source / rel), f"{d}/{rel}", *acl)
     filters = "\n".join(["- *.mp4", "- *.MP4", *[f"- *{a}" for a in AUDIO], "+ **"])
-    rclone("copy", str(args.source), f"{b}/deliver", "--filter-from", "-",
-           "--transfers", "8", stdin=filters)
+    rclone("copy", str(args.source), d, "--filter-from", "-", "--transfers", "8", *acl,
+           stdin=filters)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["video", "faces_left", "largest_px", "frames_with_a_face"])
@@ -144,7 +154,7 @@ def main(argv: list[str]) -> int:
 
     # Nothing raw may be in the delivered tree: every delivered video must be
     # a copy that came out of the pipeline, or a stub.
-    delivered = listing(f"{b}/deliver")
+    delivered = listing(d)
     expected = {rel: out[src] for src, rel in copies}
     raw = [rel for rel, size in delivered.items()
            if PurePosixPath(rel).suffix.lower() in VIDEO_EXT and size >= EMPTY
