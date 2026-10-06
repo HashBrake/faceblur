@@ -130,8 +130,14 @@ def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
     total = int(mask.sum())
     if not total:
         return 0.0, 0
-    diff = np.abs(before.astype(np.float32) - after.astype(np.float32)).mean(axis=2)
-    return float(((diff > noise + FLAT_DIFF) & mask).sum()) / total, total
+    # Only the rows and columns the zone touches: a pixel outside it never
+    # counts, and the whole frame in float was a fifth of the check.
+    rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
+    y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+    diff = np.abs(before[y0:y1, x0:x1].astype(np.float32)
+                  - after[y0:y1, x0:x1].astype(np.float32)).mean(axis=2)
+    moved = ((diff > noise + FLAT_DIFF) & mask[y0:y1, x0:x1]).sum()
+    return float(moved) / total, total
 
 
 def box_diff(a: np.ndarray, b: np.ndarray, det: Detection) -> float:
@@ -289,7 +295,11 @@ def residual_job(job: dict) -> dict:
     bank = _bank(settings) if "face" in wanted else None
     screens = _screens(settings) if "screen" in wanted else None
     rule = _hand_rule(settings) if bank is not None and settings.hand_rule else None
-    finder = _zone(settings) if settings.zone else None
+    # The detection pass already found every source frame's hands with the
+    # same models and settings, so they come with the job when it has them
+    # and are not found a second time. That was about half of the check.
+    known = job.get("hands")
+    finder = _zone(settings) if settings.zone and known is None else None
     zone_rows: list[dict] = []
     found, hands, checked, in_zone = [], 0, 0, 0
     flat = {name: 0 for name in wanted}
@@ -304,13 +314,14 @@ def residual_job(job: dict) -> dict:
         faces = bank.detect(after) if bank is not None else []
         glass = screens.detect(after) if screens is not None else []
         zone_mask = face_zone = None
-        if finder is not None:
+        if settings.zone:
             # The zone is rebuilt from the source: hands are unmasked in both
             # and the source is sharper. Live polygons only; see the module
             # docstring for why the remembered ones are not checked here.
             from .zone import polygon_for, qualifies
 
-            mine = [hand for hand in finder.detect(before)
+            source_hands = known.get(i, []) if known is not None else finder.detect(before)
+            mine = [hand for hand in source_hands
                     if qualifies(hand, before.shape[:2], settings)]
             live = [polygon_for(hand, settings, before.shape[:2]) for hand in mine]
             quads = [tuple(hand.grown(settings.zone_face_scale).quad) for hand in mine]
@@ -396,17 +407,25 @@ def residual_job(job: dict) -> dict:
 
 
 def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
-              stride: int = 1) -> list[dict]:
-    """One job per frame range, with both files' timing resolved once."""
+              stride: int = 1, hands: Optional[dict] = None) -> list[dict]:
+    """One job per frame range, with both files' timing resolved once.
+
+    `hands` is every frame's confirmed hands from the detection pass, when it
+    looked at every frame; a frame missing from it had none. A job that
+    carries them does not find the hands again (see `residual_job`)."""
     info, out_info = probe(src), probe(out)
     times, out_times = frame_times(src), frame_times(out)
     n = min(len(times), len(out_times))
     if n == 0:
         raise VideoError("Could not read one of these videos.")
-    return [{"src": str(src), "out": str(out), "settings": settings, "stride": stride,
+    jobs = [{"src": str(src), "out": str(out), "settings": settings, "stride": stride,
              "info": info, "out_info": out_info, "times": times, "out_times": out_times,
              "start": a, "end": min(b, n)}
             for a, b in [(k, k + chunk) for k in range(0, n, max(1, chunk))]]
+    if hands is not None:
+        for job in jobs:
+            job["hands"] = {i: hands[i] for i in range(job["start"], job["end"]) if i in hands}
+    return jobs
 
 
 def not_hands(rows: list[dict]) -> list[dict]:
@@ -597,13 +616,15 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
 
 
 def check(src: Path, out: Path, settings: Optional[Settings] = None, stride: int = 1,
-          submit=None, workers: int = 1, chunk: int = 300) -> dict:
-    """Run the whole check. `submit` maps jobs the way batch.run_video does."""
+          submit=None, workers: int = 1, chunk: int = 300,
+          hands: Optional[dict] = None) -> dict:
+    """Run the whole check. `submit` maps jobs the way batch.run_video does.
+    `hands` as in `plan_jobs`."""
     from .batch import serial_submit
 
     settings = settings or Settings()
     submit = submit or serial_submit
-    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride)
+    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands)
     return summarise(list(submit(residual_job, jobs, workers)), settings)
 
 

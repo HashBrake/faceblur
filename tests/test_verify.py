@@ -24,7 +24,7 @@ from faceblur.redact import redact
 from faceblur.verify import (FLAT_DIFF, KINDS_CHECKED, MISSED_APPLIED, applied, box_diff,
                              check, classify, describe, detection_from_row, frame_noise,
                              held_for, kinds_checked, not_hands, of_kind, runs_of,
-                             screen_runs, summarise)
+                             screen_runs, summarise, zone_changed)
 
 LM = ((10.0, 10.0), (30.0, 10.0), (20.0, 20.0), (12.0, 30.0), (28.0, 30.0))
 FAST = dict(device="cpu", copy_clean=False, chunk_seconds=0, encode_seconds=0)
@@ -645,3 +645,44 @@ def test_the_exit_code_is_the_gate_and_not_the_find_count(tmp_path, video_with_f
     three = screen_report([4, 5, 6], Settings(**SCREENS))
     monkeypatch.setattr(verify, "check", lambda *a, **k: three)
     assert verify.main() == 1, "a run of three does hold it back"
+
+
+def test_zone_changed_reads_only_the_zone_and_gives_the_whole_frame_answer():
+    # The fast path crops to the zone's rows and columns; the answer must be
+    # the one the whole frame gives, pixel for pixel.
+    from faceblur.zone import alpha_for
+
+    rng = np.random.default_rng(7)
+    before = rng.integers(0, 256, (240, 320, 3), dtype=np.uint8)
+    after = before.copy()
+    after[100:180, 150:260] = rng.integers(0, 256, (80, 110, 3), dtype=np.uint8)
+    polygons = [((120, 90), (230, 95), (240, 200), (110, 190)), ((10, 10), (40, 10), (40, 30))]
+    for noise in (0.0, 2.5, 40.0):
+        mask = alpha_for(before.shape[:2], polygons, 0.0) >= 0.5
+        diff = np.abs(before.astype(np.float32) - after.astype(np.float32)).mean(axis=2)
+        whole = float(((diff > noise + FLAT_DIFF) & mask).sum()) / int(mask.sum())
+        assert zone_changed(before, after, polygons, noise) == (whole, int(mask.sum()))
+
+
+def test_the_check_given_the_hands_reports_what_it_reports_finding_them(tmp_path,
+                                                                        video_with_face):
+    # The detection pass hands its hands to the check. Handed or found, the
+    # report must be the same.
+    from faceblur.zone import HandFinder
+    from faceblur.segments import decode_range, frame_times
+    from faceblur.video import probe
+
+    out = tmp_path / "copy.mp4"
+    settings = Settings(**FAST)
+    run_video(video_with_face, out, settings, serial_submit)
+    info, times = probe(video_with_face), frame_times(video_with_face)
+    finder = HandFinder(settings)
+    hands = {}
+    for i, frame in enumerate(decode_range(video_with_face, times, 0, len(times), info,
+                                           settings.hwaccel)):
+        found = finder.detect(frame)
+        if found:
+            hands[i] = found
+    found_again = check(video_with_face, out, settings)
+    handed = check(video_with_face, out, settings, hands=hands)
+    assert handed == found_again

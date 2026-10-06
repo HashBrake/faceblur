@@ -7,8 +7,13 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 # "video" exposes the card's encoder to ffmpeg, which "compute" alone does not.
+# NVIDIA_DISABLE_REQUIRE: the base image refuses to start on a host driver
+# older than CUDA 12.8 asks for. CUDA 12 runs on any 12.x driver through minor
+# version compatibility, the host's driver is not ours to choose, and the
+# smoke test proves CUDA works instead.
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+    NVIDIA_DISABLE_REQUIRE=1 \
     PYTHONUNBUFFERED=1
 
 # Ubuntu's ffmpeg is built with NVENC; the static one imageio-ffmpeg ships for
@@ -33,6 +38,11 @@ RUN /venv/bin/pip install --no-cache-dir jupyterlab==4.6.4
 
 ENV PATH=/venv/bin:$PATH \
     IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg
+# A notebook host starts the container with its own command, and an SSH login
+# shell does not see ENV, so login shells get the same settings.
+RUN printf '%s\n' 'export PATH=/venv/bin:$PATH' 'export IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg' \
+        'export NVIDIA_DRIVER_CAPABILITIES=compute,video,utility' 'cd /app 2>/dev/null' \
+        > /etc/profile.d/faceblur.sh
 
 WORKDIR /app
 COPY models models

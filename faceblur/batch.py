@@ -578,7 +578,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
         t2 = time.time()
         report("checking", 0, n)
         try:
-            got = check(src, out, settings, settings.check_stride, submit, workers, chunk)
+            # The hands the detection pass found go with it when that pass
+            # looked at every frame, so the check does not find them again.
+            known = hands_found if settings.zone and settings.zone_stride == 1 else None
+            got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
+                        hands=known)
         except VideoError as exc:
             # A copy the check could not look at is not delivered.
             record.error = str(exc)
