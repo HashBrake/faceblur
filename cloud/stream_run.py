@@ -12,7 +12,8 @@ Configuration is read from the environment (see cloud/run.env.example):
 S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, BUCKET, IN_PREFIX (default "in"),
 OUT_PREFIX (default "out"), WORK (local scratch, default /tmp/faceblur),
 WORKERS (pipeline workers per card), RUN_ARGS (extra cli.py arguments),
-GPUS (default: every card nvidia-smi lists).
+GPUS (default: every card nvidia-smi lists), SHARD (k/n: this machine's
+share when n machines run at once, default 0/1).
 
 A video counts as finished once its record is in the bucket, delivered or in
 quarantine; the copy is uploaded before the record, so a record never stands
@@ -85,6 +86,27 @@ def record_names(rel: str) -> tuple[str, str]:
     p = PurePosixPath(rel)
     copy = output_path(Path(p.name), Path("."), SUFFIX).name
     return (str(p.parent / f"{copy}.json"), str(p.parent / "quarantine" / f"{copy}.json"))
+
+
+# SHARD=k/n: this machine takes share k of n, so several machines can work
+# from one bucket without taking the same video. The shares are balanced by
+# size over the whole listing, finished videos included, so every machine and
+# every restart computes the same split.
+SHARD = ENV.get("SHARD", "0/1")
+SHARD_K, SHARD_N = (int(x) for x in SHARD.split("/"))
+TAG = f"shard{SHARD_K}of{SHARD_N}_" if SHARD_N > 1 else ""
+
+
+def share(sizes: dict[str, int]) -> set[str]:
+    """Largest first, each to the share with the least so far; ties by path."""
+    loads = [0] * SHARD_N
+    taken: set[str] = set()
+    for rel in sorted(sizes, key=lambda r: (-sizes[r], r)):
+        k = loads.index(min(loads))
+        loads[k] += sizes[rel]
+        if k == SHARD_K:
+            taken.add(rel)
+    return taken
 
 
 def gpu_count() -> int:
@@ -224,10 +246,15 @@ def card(k: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict, disk: Disk)
 
 def main() -> int:
     WORK.mkdir(parents=True, exist_ok=True)
+    # The recorder's empty stubs (24 bytes) hold no frames and are delivered
+    # as they are; leaving them out also keeps the share split the same on a
+    # machine that lists the bucket while they are still arriving.
     inputs = {p: s for p, s in listing(IN).items()
-              if PurePosixPath(p).suffix.lower() in VIDEO_EXT}
+              if PurePosixPath(p).suffix.lower() in VIDEO_EXT and s >= 1024}
     outputs = listing(OUT)
-    todo = [p for p in inputs if not any(r in outputs for r in record_names(p))]
+    ours = share(inputs)
+    todo = [p for p in inputs if p in ours
+            and not any(r in outputs for r in record_names(p))]
     gb = sum(inputs[p] for p in todo) / 1e9
     n = gpu_count()
     say(f"{len(inputs)} videos in {IN}, {len(inputs) - len(todo)} finished, "
@@ -255,15 +282,15 @@ def main() -> int:
         hours = (time.time() - started) / 3600
         finished = sum(tally.values())
         say(f"progress: {finished}/{len(todo)} after {hours:.2f} h, {tally}")
-        rclone("copyto", str(LOG), f"{OUT}/_logs/stream_run.log", check=False)
+        rclone("copyto", str(LOG), f"{OUT}/_logs/{TAG}stream_run.log", check=False)
     for k in range(n):
-        rclone("copyto", str(WORK / f"gpu{k}" / "cli.log"), f"{OUT}/_logs/gpu{k}_cli.log",
+        rclone("copyto", str(WORK / f"gpu{k}" / "cli.log"), f"{OUT}/_logs/{TAG}gpu{k}_cli.log",
                check=False)
     marker = WORK / "DONE"
     marker.write_text(json.dumps({"tally": tally, "todo": len(todo),
                                   "hours": round((time.time() - started) / 3600, 2)}))
-    rclone("copyto", str(marker), f"{OUT}/_logs/DONE.json", check=False)
-    rclone("copyto", str(LOG), f"{OUT}/_logs/stream_run.log", check=False)
+    rclone("copyto", str(marker), f"{OUT}/_logs/{TAG}DONE.json", check=False)
+    rclone("copyto", str(LOG), f"{OUT}/_logs/{TAG}stream_run.log", check=False)
     say(f"finished: {tally}")
     return 0 if tally.get("failed", 0) == 0 else 1
 
