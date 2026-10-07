@@ -122,7 +122,37 @@ def fetch(rel: str, dest: Path) -> None:
     rclone("copyto", f"{IN}/{rel}", str(dest), "--multi-thread-streams", "8")
 
 
-def card(k: int, jobs: "queue.Queue[str]", tally: dict) -> None:
+class Disk:
+    """Room on the work disk, shared by every card.
+
+    A video in progress needs its source, its copy (about 1.6 times the
+    source at the encoder's quality) and the segments the copy is built from,
+    so each one reserves `NEED` times its size before it downloads and gives
+    it back when it is done. A card waits for room instead of filling the
+    disk; with nothing else reserved a video goes ahead whatever its size."""
+
+    NEED, SPARE = 3.5, 5e9
+
+    def __init__(self, path: Path):
+        self.room = shutil.disk_usage(path).free - self.SPARE
+        self.held = 0.0
+        self.cond = threading.Condition()
+
+    def take(self, size: int) -> float:
+        need = size * self.NEED + 1e9
+        with self.cond:
+            while self.held and self.held + need > self.room:
+                self.cond.wait(30)
+            self.held += need
+        return need
+
+    def give(self, need: float) -> None:
+        with self.cond:
+            self.held -= need
+            self.cond.notify_all()
+
+
+def card(k: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict, disk: Disk) -> None:
     base = WORK / f"gpu{k}"
     env = dict(ENV, CUDA_VISIBLE_DEVICES=str(k))
     nxt: tuple[str, threading.Thread, list] | None = None
@@ -135,6 +165,9 @@ def card(k: int, jobs: "queue.Queue[str]", tally: dict) -> None:
         err: list = []
 
         def run():
+            # The room is taken here, in the download thread, so the video
+            # being worked on now never waits for it.
+            err.append(disk.take(sizes[rel]))
             try:
                 fetch(rel, base / "in" / rel)
             except Exception as exc:          # reported when the file is reached
@@ -151,6 +184,7 @@ def card(k: int, jobs: "queue.Queue[str]", tally: dict) -> None:
         src = base / "in" / rel
         out_dir = base / "out" / PurePosixPath(rel).parent
         started = time.time()
+        reserved, err = err[0], err[1:]
         try:
             if err:
                 raise err[0]
@@ -185,6 +219,7 @@ def card(k: int, jobs: "queue.Queue[str]", tally: dict) -> None:
         finally:
             src.unlink(missing_ok=True)
             shutil.rmtree(base / "out", ignore_errors=True)
+            disk.give(reserved)
 
 
 def main() -> int:
@@ -208,7 +243,9 @@ def main() -> int:
     if not cards:
         say("no card works with CUDA, stopping")
         return 2
-    threads = [threading.Thread(target=card, args=(k, jobs, tally), daemon=True)
+    disk = Disk(WORK)
+    say(f"work disk: {disk.room / 1e9:.0f} GB to use at {WORK}")
+    threads = [threading.Thread(target=card, args=(k, jobs, tally, inputs, disk), daemon=True)
                for k in cards]
     started = time.time()
     for t in threads:

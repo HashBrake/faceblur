@@ -8,15 +8,15 @@
 #   ssh -p PORT root@HOST 'bash -l /app/cloud/notebook_run.sh'
 #
 # It returns at once; the run goes on under nohup. Progress is in
-# /workspace/faceblur/stream_run.log here and in out/_logs/ in the bucket.
+# /var/faceblur/stream_run.log here and in out/_logs/ in the bucket.
 #
 # Settings of the run decided on 2026-10-06: the check, quarantine and one
 # second chance round; five workers a card, measured best on a 4090 with six
-# cores. The work folder is on the block storage volume, not the 94 GB root,
-# because eight cards stream two videos each at once.
+# cores. The work folder is on the root disk: block storage over 20 GB fails to
+# provision on this account (2026-10-07), and stream_run.py waits for room.
 set -euo pipefail
 set -a; . /root/faceblur.env; set +a
-export WORK=${WORK:-/workspace/faceblur} WORKERS=${WORKERS:-5}
+export WORK=${WORK:-/var/faceblur} WORKERS=${WORKERS:-5}
 export RUN_ARGS=${RUN_ARGS:---quarantine --second-chance 1}
 mkdir -p "$WORK"
 nvidia-smi --query-gpu=index,name,driver_version --format=csv,noheader
