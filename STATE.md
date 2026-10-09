@@ -1,19 +1,18 @@
 # STATE, handover notes
 
-Last updated 2026-10-01, when the gate was made crash safe (report 24.4)
-and the gates moved to the mask budget (report 25).
-Before that, 2026-09-26: a run that hung on a dead worker, and "recreate the
-whole folder" in the window. Before that, 2026-09-14, a full run of the
-pipeline over all four sample files (report 24), and the unattended weekend
-build of
-`FACEBLUR_BUILD_PLAN_V2.md`. Packages R1, S1, 4.3, E1, R2, H1, H2 and then
-**R3, G1, F2, F1, T1, S2 and M1** are done, committed and pushed. **T3, D and
-T4 are blocked** on numbers rather than on time; report 21.5 says by what.
+Last updated 2026-10-08. **The tool is in production**: the whole Phase 0
+footage, 119 hours, is to be blurred on rented cloud GPUs and handed over as
+two download links. The raw link exists; the run is waiting for GPU capacity.
+"The production run" below is the live work and is read first.
 
-The question that held everything, the off face gates in report 19.5, was
-answered on 2026-10-01: they moved to the mask budget, and the build passes
-every gate on every file (report 25). What is left needs footage with cards
-and words in it.
+Before that, 2026-10-01: the gate made crash safe (report 24.4) and the gates
+moved to the mask budget (report 25). 2026-09-26: a run that hung on a dead
+worker, and "recreate the whole folder" in the window. 2026-09-14: a full run
+of the pipeline over the four sample files (report 24), after the unattended
+weekend build of `FACEBLUR_BUILD_PLAN_V2.md`. Packages R1, S1, 4.3, E1, R2,
+H1, H2, R3, G1, F2, F1, T1, S2 and M1 are done. **T3, D and T4 are blocked**
+on numbers rather than on time; report 21.5 says by what, and what is left
+there needs footage with cards and words in it.
 
 This file says where the project stands and what to do next. `README.md` says
 how to use the tool. `docs/report.md` holds the measurements, one section per
@@ -21,7 +20,179 @@ pass, and is the place to look before changing anything measured.
 `FACEBLUR_BUILD_PLAN_V2.md` is the spec being executed; where it and the code
 disagree the code wins and this file says so.
 
-Read "The rule" and "Where things stand" first. Everything else is reference.
+Read "The production run", "The rule" and "Where things stand" first.
+Everything else is reference.
+
+## The production run
+
+### What is asked
+
+The owner, 2026-10-05 to 07: blur all of `D:\Player One - Phase 0 full` and
+give two links, one to the raw folder and one to the blurred folder, each of
+which lets anybody anywhere download the whole tree quickly. Nothing is
+downloaded back to this PC; a person in another country downloads it.
+
+- **The blurred tree is the source tree exactly**, same folders and names,
+  every `.mp4` replaced by its blurred copy under the same name. `*_audio.wav`
+  and `*_audio_pts.csv` are not delivered at all. The recorder's 24 byte stub
+  videos go as they are (no frames, nothing to blur). A copy the gate held
+  back is delivered blurred and listed in `faceblur-records/held_back.csv`. A
+  real video with no finished copy is never delivered raw; it is listed in
+  `faceblur-records/not_delivered.txt`. FaceBlur's own records go to
+  `faceblur-records/`, beside the tree, not in it.
+- **Settings**: faces, the zone, the check, the gate, one second chance round
+  (`--quarantine --second-chance 1`). Confirmed by the owner after the cost
+  was explained.
+- **Links**: the blurred tree in its own public read bucket, `faceblur-blurred`,
+  with a link that never expires; a separate bucket so a misconfiguration can
+  never make raw footage public. The raw tree stays private and its link is
+  signed, at most seven days, regenerated on request. Each link is a web page
+  listing every file plus one `curl` line that downloads the whole tree with
+  its folders, 16 files at a time, resuming. Still to build: one zip per
+  device folder, on a cheap CPU instance.
+
+### The footage
+
+119 hours, left and right camera per session, about 1.1 TB with the extras:
+1447 files in 150 folders, 351 `.mp4` (321 real, 30 empty or broken, most of
+those the 24 byte stubs), 148 `.wav`, 650 `.csv`, 298 `.yaml`. **This is not
+the four sample files** and it has never been measured as a whole; the speed
+estimates below come from sample clips.
+
+### Where everything is
+
+GreenNode (VNG Cloud), account `alois@vng.com.vn`, a company account paying
+as it goes with no credits. The console is driven through Chrome on this PC;
+its session expires within hours, and deleting anything needs it.
+
+| What | Where |
+|---|---|
+| Raw tree, complete | vStorage HCM04, bucket `faceblur`, prefix `in/`. Verified 2026-10-07: `rclone check` against `D:`, 0 differences |
+| Raw link page and list | `faceblur/in/_download/` |
+| Blurred copies and records, as the run writes them | `faceblur/out/`, logs in `out/_logs/` |
+| Delivered blurred tree | bucket `faceblur-blurred`, made by `cloud/deliver.py` after the run |
+| Image | `vcr.vngcloud.vn/110156-faceblur/faceblur-cuda:3` (CUDA 12.8, onnxruntime-gpu 1.24.4, ffmpeg with NVENC, rclone 1.75.1). Also on this PC's Docker |
+| Secrets | `cloud/greennode.env`, gitignored: S3 keys and the registry robot. SSH key `~/.ssh/faceblur_greennode` |
+| Also ours | AI Platform network volume `faceblur-test-nv` (empty, the notebook form requires one) |
+
+Other resources on the account (`playerone-sandbox`, `playerone-demo`,
+`cer-dev`, `unitree-g1`) are not ours. Never touch them.
+
+rclone is not installed on this PC. The upload and the links ran in
+containers of the `faceblur-cuda` image (`docker run --env-file
+cloud/greennode.env ...`), which has it; `cloud/deliver.py` and
+`cloud/links.py` call `rclone` and expect the same. Docker's disk lives on
+`D:\DockerDesktopWSL`, because C: has about 19 GB free.
+
+### The code for it
+
+Commits `110288d` to `3558c42`, **eight commits not yet pushed** to
+`HashBrake/faceblur`. Tests: 1285 passing.
+
+| Path | What |
+|---|---|
+| `cloud/Dockerfile`, `requirements-cuda.txt`, `entry.sh` | the Linux CUDA image |
+| `cloud/stream_run.py` | the runner: one file at a time per GPU, from the bucket and back; `SHARD=k/n` splits the inputs between machines balanced by size; a card that cannot run CUDA is stopped rather than left on the processor; a card waits for disk room (3.5 times the file plus 1 GB) |
+| `cloud/notebook_run.sh` | starts the run on a notebook instance; returns at once, the run goes on under `nohup` |
+| `cloud/deliver.py` | assembles the blurred tree in the public bucket by server side copies; refuses if any record says the copy kept audio; ends by checking that no raw video and no audio is in the tree |
+| `cloud/links.py` | the download page and the `curl` list for a tree |
+| `cloud/bench_detect.py`, `compare.py`, `run_shards.py` | measuring a card, comparing two copies, local shard runs |
+| `cloud/instance_run.sh` | for a plain VM; superseded by `notebook_run.sh` |
+
+Three fixes to the tool came out of it, all in `110288d` and `ef3a3a5`:
+
+- **A recursive run never made the output subfolders**, so every video in a
+  nested folder failed. `batch.py` makes the folder now.
+- **A restart re-ran a video the gate had held back**, because it looked for
+  the copy only in the output folder. It looks in `quarantine/` too.
+- **The check found the hands a second time.** The detection pass now hands
+  its hands to the check when `zone_stride` is 1. Output is byte for byte the
+  same on `004100` and `004310`, records and copies; the check went 206 s to
+  108 s and 264 s to 179 s.
+
+### Running it
+
+On a GreenNode AI Platform **notebook instance** with the image above. The
+platform replaces the image's command and runs only `sshd`, so the run is
+started over SSH, on the forwarded port the console shows:
+
+```
+cat cloud/greennode.env | ssh -p PORT root@HOST 'cat > /root/faceblur.env && chmod 600 /root/faceblur.env'
+cat cloud/stream_run.py   | ssh -p PORT root@HOST 'cat > /app/cloud/stream_run.py'
+cat cloud/notebook_run.sh | ssh -p PORT root@HOST 'cat > /app/cloud/notebook_run.sh'
+ssh -p PORT root@HOST 'SHARD=1/1 bash -l /app/cloud/notebook_run.sh'
+```
+
+The two script copies are needed because image `:3` predates the last two
+commits; an image `:4` would make them unnecessary. Use `bash -l` (the PATH is
+set in `/etc/profile.d`). `sftp` is disabled, so `scp` needs `-O`. Several
+single card machines are one `SHARD=k/n` each. A restart skips what is
+finished, held back copies included.
+
+What went wrong on the platform:
+
+- **Block storage above 20 GB fails to provision** on this account
+  (2026-10-07), so the work folder is on the root disk, `/var/faceblur`.
+- **No RTX 4090 capacity.** On 2026-10-06 one 1x4090 in zone HCM-03-1B came up
+  and was measured; 1A failed. On 2026-10-07 every 4090 notebook, 8 card and
+  single, failed with a local storage error after about 20 minutes, and
+  GreenNode confirmed the 4090 is out of stock. All failed instances were
+  deleted.
+
+### Speed and cost
+
+Measured on the one 4090 (driver 580, CUDA 13): five workers a card is best;
+a 120 s clip took 586 to 634 s with the check and the second chance, GPU at 47
+percent, before `ef3a3a5` cut the check. Estimates for the 119 hours:
+
+| Where | Time | Cost |
+|---|---|---|
+| 8x RTX 4090 (`48x512-8rtx4090`, about 121,600 VND/h) | 55 to 60 h | about 7M VND |
+| 8x A40 (`48x512-8A40`, about 175,000 VND/h) | 60 to 70 h | about 11 to 12M VND |
+| This PC's RTX 3070 | 4 to 6 weeks without a stop | power only |
+
+The A40 is not measured. Before committing to the 8 card machine, run
+`16x64-1A40` for 20 minutes, check that it uses CUDA and set `WORKERS` from
+what it does. The PC figure is 5.5 to 8 times real time from the sample clips.
+
+Uploading from the office runs at about 45 Mbps to vStorage, 5.5 MiB/s, and
+faster in the evening; more parallel streams did not help.
+
+### The rules for instances
+
+The owner, 2026-10-05: instances may be created as needed **and must be
+deleted when done**. Deleting needs the console session, which expires, so
+**the 8 card machine never runs unattended past the point where somebody can
+sign in again**. The run itself does not delete the instance when it ends.
+
+### Next, in order
+
+1. **GPU capacity.** Waiting on the owner's answer from GreenNode: whether the
+   8x A40 is in stock and when the 4090 returns. Then the 20 minute single card
+   test, then the full run.
+2. Watch the run; when it ends, read the held back count and the failures in
+   `out/_logs/`.
+3. `python cloud/deliver.py "D:\Player One - Phase 0 full"`, read the dry run,
+   then `--apply`. It must end with 0 raw videos and 0 audio files found.
+4. `python cloud/links.py vs:faceblur-blurred "Player One - Phase 0 full (blurred)" --public --apply`
+   gives the blurred link.
+5. One zip per device folder, on a cheap CPU notebook.
+6. **Delete every instance**, then the network volume `faceblur-test-nv`. Keep
+   `faceblur/in/` (the raw link's source). `faceblur/out/` can go once the
+   delivered tree is verified.
+7. Push the eight commits.
+
+Open on the side:
+
+- **The raw link expires 2026-10-14** (made 2026-10-07 05:18 UTC). A new one:
+  `python cloud/links.py vs:faceblur/in "Player One - Phase 0 full" --expire 168h --apply`.
+- **Outbound traffic.** A full download is 1.1 TB per link per person, and
+  GreenNode publishes no price for international traffic. Ask before it is
+  downloaded many times.
+- **Storage** costs about 28 VND per GB per day, so about 31,000 VND a day
+  for the raw tree, and the same again for the blurred one.
+- **The registry secret** was rotated on 2026-10-07 and then appeared in a
+  browser agent's screenshot once. Rotate it again.
 
 ## The rule
 
@@ -60,8 +231,10 @@ redaction, measured on 20 of 27 labelled cases. Report section 17.5.
 ## What this is
 
 FaceBlur: video in, video with the sensitive things destroyed. A Windows
-window plus a command line, running on the owner's PC. Video never leaves the
-machine, no cloud, no telemetry.
+window plus a command line, running on the owner's PC, no telemetry. The
+production run of 2026-10 is the one exception to "video never leaves the
+machine": the owner chose to upload the footage to GreenNode and run it there
+on rented GPUs, with `cloud/` as the runner.
 
 Three kinds, each a switch of its own (`faceblur/classes.py`): **faces**
 (built and measured), **screens** as objects (built and measured), **personal
@@ -99,9 +272,9 @@ repository has ever been measured on a card.
 
 ## Where things stand
 
-Everything is committed and pushed to `HashBrake/faceblur` `main`; the working
-tree is clean and local and remote are the same commit. Tests: `tests/`, 1281
-passing, about six minutes (`.venv\Scripts\python.exe -m pytest tests`).
+Everything is committed. `HashBrake/faceblur` `main` is at `c0f0dc0`; the
+eight cloud commits after it are local only. Tests: `tests/`, 1285 passing,
+about six minutes (`.venv\Scripts\python.exe -m pytest tests`).
 
 The weekend build ends at `7dc74a7`. Anything after that in the log is a later
 session and this file will say so.
@@ -122,6 +295,9 @@ session and this file will say so.
 - **2026-10-01.** The gate is crash safe; item 0 below is done.
 - **2026-10-01.** The off face gates moved to the mask budget and three
   detection thresholds moved with them; items 1 and 2 below are done.
+- **2026-10-05 to 08, `110288d` to `3558c42`.** The production run: the cloud
+  runner, delivery and links, and three fixes to the tool. "The production
+  run" above.
 
 | Package | What | State |
 |---|---|---|
@@ -171,25 +347,8 @@ package it came out of, and it is about the build rather than about a knob.
 
 #### What the owner should look at first
 
-**1. The off face gates have no feasible point, and the shipped build fails
-one of them.** Report 19.5. *Answered 2026-10-01: the gates moved to the mask budget,
-report 25.* F2 measured all 54 settings on all three files
-with consensus labels, and none of them passes every gate on every file,
-including the combination the build ships today: on `004310` every setting
-that keeps verification on is over `off_face_mean` 0.7 percent, the shipped
-one at 0.77. Verification cannot come off, because two of the three files
-refuse that at the hand gate, so the feasible set is empty. This is not a
-regression. Each sweep chose its own winner and the shipped defaults are a
-synthesis across three files that had never been scored on all of them.
-
-The gates encode "hands untouched, minimum region everywhere". The rule of
-2026-09-11 replaced that with "outside the zone a miss is the leak and over
-masking is the cheaper error, subject to a per frame mask budget", and the
-build sits at 0.50, 2.27 and 0.67 percent masked against `mask_budget` 5
-percent. **Either the gates move to the budget the rule names, or the build
-is over its limit on one file in three.** This session did not decide it on
-purpose: changing the measure in the same pass that needs it changed is the
-move a reader should trust least, and the verdict did not depend on it.
+**1. The off face gates had no feasible point.** Report 19.5. *Answered
+2026-10-01: the gates moved to the mask budget, report 25.*
 
 **2. Text is blocked, and the reason is measurable.** Report 21.3. 124 quads
 from the text detector were rendered as crops and labelled by eye: five are
@@ -591,19 +750,15 @@ records and `docs/report.md` are what an auditor actually asks for.
 
 **About what is not built.**
 
-- **The window cannot run the check or the gate at all.** `ui/app.py` never
-  sets `check_output` or `quarantine`, so no run started from the window is
-  checked or held back, and the person most likely to need the gate is the one
-  using the window. That is package G1.
 - **The gate holds all four sample files, and should.** They show faces.
   Package F1 is the work that would change that.
 - **Seven of the twenty hands still read as faces to the output side check**,
   six on the table tennis file: a fist gripping a bat, side on, in motion. H1
   should make this moot for masking, but the check's own hand rule stays as
   belt and braces.
-- **No installer, no code signing, no cloud runner.** `batch.run_video` takes a
-  `submit` callable so a cloud runner can be written without touching the
-  pipeline.
+- **No installer, no code signing.** The cloud runner in `cloud/` is built
+  for GreenNode notebook instances and S3 storage; elsewhere it would need
+  its start script changed.
 
 ## How to run
 
@@ -674,23 +829,13 @@ before changing anything a pass measured.
 | 2026-09-11 | R2: review fixes, exit code follows the gate, rows carry their box, imports checked by `ast` | 16.6 |
 | 2026-09-11 | H1: the handled zone. Three defects found by measurement, including the zone protecting bystanders' faces | 17 |
 | 2026-09-11 | H2: the gate threshold fixed, the uniform sample labelled, the orientation rule refuted, the window grid cut | 17.3, 17.7 |
+| 2026-09-11 to 12 | R3, G1, F2, F1, T1, S2, M1, unattended | 17.7 to 23 |
+| 2026-09-14 | The whole pipeline on the whole sample; the gate was not crash safe | 24 |
+| 2026-10-01 | The gate made crash safe; the gates moved to the mask budget | 24.4, 25 |
+| 2026-10-05 to 08 | The production run: cloud image and runner, the check made faster, delivery and links | this file |
 
 ## Open questions for the owner
 
-- **The off face gates against the rule, and this is the first thing to look
-  at.** F2 measured all 54 settings on all three files and none passes every
-  gate on every file, the shipped build included: on `004310` every setting
-  that keeps verification on is over `off_face_mean` 0.7 percent, the shipped
-  one at 0.77. Verification cannot come off, because two of the three files
-  refuse that at the hand gate. So the feasible set is empty and the next
-  package that wants recall has nowhere to stand. The gates encode "hands
-  untouched, minimum region everywhere"; the rule of 2026-09-11 replaced that
-  with "outside the zone a miss is the leak and over masking is the cheaper
-  error, subject to a per frame mask budget", and the build sits at 0.50,
-  2.27 and 0.67 percent masked against `mask_budget` 5 percent. Either the
-  gates move to the budget the rule names, or the build is over its limit on
-  one file in three. This session did not decide it, on purpose: report 19.5
-  says why.
 - **Text, and whether it is worth a second model.** T1 measured the detector
   and 90 percent of what it finds on this footage is not text: lights,
   railings, a hand on a mop, twice a face. The labels are committed and
