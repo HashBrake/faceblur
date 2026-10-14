@@ -13,7 +13,12 @@ S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, BUCKET, IN_PREFIX (default "in"),
 OUT_PREFIX (default "out"), WORK (local scratch, default /tmp/faceblur),
 WORKERS (pipeline workers per card), RUN_ARGS (extra cli.py arguments),
 GPUS (default: every card nvidia-smi lists), SHARD (k/n: this machine's
-share when n machines run at once, default 0/1).
+share when n machines run at once, default 0/1), LANES (videos worked on at
+once per card, default 1).
+
+Two lanes keep a card busy: a video spends about half its time in steps that
+use one core and no GPU (the tracker, the zone, the encode), and on the RTX
+5090 VMs the card sat idle through them.
 
 A video counts as finished once its record is in the bucket, delivered or in
 quarantine; the copy is uploaded before the record, so a record never stands
@@ -45,6 +50,7 @@ IN = f"vs:{BUCKET}/{ENV.get('IN_PREFIX', 'in')}"
 OUT = f"vs:{BUCKET}/{ENV.get('OUT_PREFIX', 'out')}"
 WORK = Path(ENV.get("WORK", "/tmp/faceblur"))
 WORKERS = ENV.get("WORKERS", "6")
+LANES = int(ENV.get("LANES", "1"))
 RUN_ARGS = shlex.split(ENV.get("RUN_ARGS", "--quarantine"))
 SUFFIX = Settings().suffix
 
@@ -174,8 +180,14 @@ class Disk:
             self.cond.notify_all()
 
 
-def card(k: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict, disk: Disk) -> None:
-    base = WORK / f"gpu{k}"
+def lane_dir(k: int, lane: int) -> str:
+    return f"gpu{k}" if lane == 0 else f"gpu{k}_{lane}"
+
+
+def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
+         disk: Disk) -> None:
+    base = WORK / lane_dir(k, lane)
+    name = f"card {k}" + (f" lane {lane}" if LANES > 1 else "")
     env = dict(ENV, CUDA_VISIBLE_DEVICES=str(k))
     nxt: tuple[str, threading.Thread, list] | None = None
 
@@ -230,14 +242,14 @@ def card(k: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict, disk: Disk)
             else:
                 status = "failed"
             tally[status] = tally.get(status, 0) + 1
-            say(f"card {k}: {rel} {status} (exit {code}) in {time.time() - started:.0f}s")
+            say(f"{name}: {rel} {status} (exit {code}) in {time.time() - started:.0f}s")
             record = base / "out" / (held if status == "held back" else delivered)
             if status != "failed" and not on_cuda(record):
-                say(f"card {k}: STOPPED, {rel} ran on the CPU. The card takes no more work.")
+                say(f"{name}: STOPPED, {rel} ran on the CPU. The card takes no more work.")
                 return
         except Exception as exc:
             tally["failed"] = tally.get("failed", 0) + 1
-            say(f"card {k}: {rel} failed: {exc}")
+            say(f"{name}: {rel} failed: {exc}")
         finally:
             src.unlink(missing_ok=True)
             shutil.rmtree(base / "out", ignore_errors=True)
@@ -258,7 +270,7 @@ def main() -> int:
     gb = sum(inputs[p] for p in todo) / 1e9
     n = gpu_count()
     say(f"{len(inputs)} videos in {IN}, {len(inputs) - len(todo)} finished, "
-        f"{len(todo)} to do ({gb:.0f} GB) on {n} cards, {WORKERS} workers each, "
+        f"{len(todo)} to do ({gb:.0f} GB) on {n} cards, {LANES} lanes of {WORKERS} workers each, "
         f"{' '.join(RUN_ARGS)}")
     jobs: "queue.Queue[str]" = queue.Queue()
     for p in sorted(todo, key=lambda p: inputs[p], reverse=True):
@@ -272,8 +284,8 @@ def main() -> int:
         return 2
     disk = Disk(WORK)
     say(f"work disk: {disk.room / 1e9:.0f} GB to use at {WORK}")
-    threads = [threading.Thread(target=card, args=(k, jobs, tally, inputs, disk), daemon=True)
-               for k in cards]
+    threads = [threading.Thread(target=card, args=(k, lane, jobs, tally, inputs, disk), daemon=True)
+               for k in cards for lane in range(LANES)]
     started = time.time()
     for t in threads:
         t.start()
@@ -284,8 +296,10 @@ def main() -> int:
         say(f"progress: {finished}/{len(todo)} after {hours:.2f} h, {tally}")
         rclone("copyto", str(LOG), f"{OUT}/_logs/{TAG}stream_run.log", check=False)
     for k in range(n):
-        rclone("copyto", str(WORK / f"gpu{k}" / "cli.log"), f"{OUT}/_logs/{TAG}gpu{k}_cli.log",
-               check=False)
+        for lane in range(LANES):
+            d = lane_dir(k, lane)
+            rclone("copyto", str(WORK / d / "cli.log"), f"{OUT}/_logs/{TAG}{d}_cli.log",
+                   check=False)
     marker = WORK / "DONE"
     marker.write_text(json.dumps({"tally": tally, "todo": len(todo),
                                   "hours": round((time.time() - started) / 3600, 2)}))

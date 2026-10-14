@@ -27,6 +27,6 @@ say "SSH up"
 "${SSH[@]}" 'sudo tee /root/vm_run.sh >/dev/null' < "$HERE/vm_run.sh"
 for step in "$@"; do
     say "$step"
-    "${SSH[@]}" "sudo SHARD=$SHARD WORKERS=${WORKERS:-8} bash /root/vm_run.sh $step" 2>&1 | sed "s/^/  /"
+    "${SSH[@]}" "sudo SHARD=$SHARD WORKERS=${WORKERS:-8} LANES=${LANES:-1} bash /root/vm_run.sh $step" 2>&1 | sed "s/^/  /"
 done
 say "done: $*"

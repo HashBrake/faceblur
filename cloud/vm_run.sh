@@ -66,7 +66,7 @@ run)
     : "${SHARD:?SHARD=k/n, k from 0}"
     docker rm -f faceblur 2>/dev/null || true
     docker run -d --name faceblur --restart on-failure:3 --gpus all --ipc=host \
-        --env-file /root/faceblur.env -e SHARD="$SHARD" -e WORKERS="${WORKERS:-5}" \
+        --env-file /root/faceblur.env -e SHARD="$SHARD" -e WORKERS="${WORKERS:-5}" -e LANES="${LANES:-1}" \
         -e RUN_ARGS="${RUN_ARGS:---quarantine --second-chance 1}" -e WORK=/work \
         -v "$WORK:/work" -v /root/stream_run.py:/app/cloud/stream_run.py:ro \
         --entrypoint python "$IMAGE" cloud/stream_run.py
