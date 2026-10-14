@@ -110,6 +110,38 @@ Three fixes to the tool came out of it, all in `110288d` and `ef3a3a5`:
   same on `004100` and `004310`, records and copies; the check went 206 s to
   108 s and 264 s to 179 s.
 
+### Running now (2026-10-14)
+
+Eight GreenNode vServer VMs, `g7-standard-24x64-1rtx5090` (one RTX 5090, 24
+vCPU, 64 GB, 300 GB NVMe), zone HCM03-1B, subnet `faceblur-1b` in VPC
+`net192`, one `SHARD=k/8` each, 8 workers a card, started 18:21 to 19:14.
+`bash cloud/vm_status.sh` prints one line per VM. SSH is port 234, user
+`stackops`, key `~/.ssh/faceblur_greennode_rsa`; `cloud/vm_bootstrap.sh IP k/8
+setup run` puts a fresh VM to work. Make each VM with "Skip password change at
+first login" ticked. Billing is by the minute used (GreenNode, Teams,
+2026-10-14), although the form shows a 30 day total. The vCPU quota was raised
+to 250 on request.
+
+| VM | IP | Slice |
+|---|---|---|
+| faceblur-5090-1 | 116.118.92.106 | 0/8 |
+| faceblur-5090-3 | 116.118.92.82 | 1/8 |
+| faceblur-5090-8 | 116.118.92.84 | 2/8 |
+| faceblur-5090-b-1 | 116.118.92.112 | 3/8 |
+| faceblur-5090-b-2 | 116.118.92.109 | 4/8 |
+| faceblur-5090-b-3 | 116.118.92.113 | 5/8 |
+| faceblur-5090-b-4 | 116.118.92.111 | 6/8 |
+| faceblur-5090-c | 116.118.92.114 | 7/8 |
+
+Measured on a 5090: detection 17.4, 21.9, 24.8 frames a second at 4, 6, 8
+processes; GPU 77 to 80 percent busy at 8 workers, load about 9 of 24 cores.
+One VM (`b-5`) lost its GPU from the bus four minutes after boot (Xid 154) and
+again after a reboot; it was deleted and replaced, and GreenNode was told.
+
+To remove when the run is delivered: the eight VMs with their volumes, subnet
+`faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
+`faceblur_greennode` in the console.
+
 ### Running it
 
 On a GreenNode AI Platform **notebook instance** with the image above. The
