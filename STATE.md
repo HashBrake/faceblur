@@ -86,7 +86,7 @@ cloud/greennode.env ...`), which has it; `cloud/deliver.py` and
 
 ### The code for it
 
-Commits `110288d` to `3558c42`, **eight commits not yet pushed** to
+Commits `110288d` to `3558c42`, all pushed to
 `HashBrake/faceblur`. Tests: 1285 passing.
 
 | Path | What |
@@ -180,12 +180,15 @@ sign in again**. The run itself does not delete the instance when it ends.
 6. **Delete every instance**, then the network volume `faceblur-test-nv`. Keep
    `faceblur/in/` (the raw link's source). `faceblur/out/` can go once the
    delivered tree is verified.
-7. Push the eight commits.
+7. Push whatever is committed by then.
 
 Open on the side:
 
-- **The raw link expires 2026-10-14** (made 2026-10-07 05:18 UTC). A new one:
-  `python cloud/links.py vs:faceblur/in "Player One - Phase 0 full" --expire 168h --apply`.
+- **The raw link expires 2026-10-21 05:59 UTC** (renewed 2026-10-14; the
+  old one ended that day). A new one, from the repo root in the image, which
+  has rclone and needs the repo on `PYTHONPATH`:
+  `MSYS_NO_PATHCONV=1 docker run --rm --env-file cloud/greennode.env -v "$PWD:/w" -w /w -e PYTHONPATH=/w --entrypoint python vcr.vngcloud.vn/110156-faceblur/faceblur-cuda:3 cloud/links.py vs:faceblur/in "Player One - Phase 0 full" --expire 168h --apply`.
+  Each renewal is a new URL; send it to whoever has the old one.
 - **Outbound traffic.** A full download is 1.1 TB per link per person, and
   GreenNode publishes no price for international traffic. Ask before it is
   downloaded many times.
