@@ -120,13 +120,13 @@ started over SSH, on the forwarded port the console shows:
 cat cloud/greennode.env | ssh -p PORT root@HOST 'cat > /root/faceblur.env && chmod 600 /root/faceblur.env'
 cat cloud/stream_run.py   | ssh -p PORT root@HOST 'cat > /app/cloud/stream_run.py'
 cat cloud/notebook_run.sh | ssh -p PORT root@HOST 'cat > /app/cloud/notebook_run.sh'
-ssh -p PORT root@HOST 'SHARD=1/1 bash -l /app/cloud/notebook_run.sh'
+ssh -p PORT root@HOST 'SHARD=0/1 bash -l /app/cloud/notebook_run.sh'
 ```
 
 The two script copies are needed because image `:3` predates the last two
 commits; an image `:4` would make them unnecessary. Use `bash -l` (the PATH is
 set in `/etc/profile.d`). `sftp` is disabled, so `scp` needs `-O`. Several
-single card machines are one `SHARD=k/n` each. A restart skips what is
+single card machines are one `SHARD=k/n` each, k counted from 0 (`0/8` to `7/8`). A restart skips what is
 finished, held back copies included.
 
 What went wrong on the platform:
