@@ -3,14 +3,9 @@
 #
 # The RTX 5090 is offered only as a vServer VM, not as a notebook, so the
 # image runs under Docker on an Ubuntu host with the NVIDIA driver installed.
-# From this PC, once the VM is up (user root or ubuntu, whichever the console
-# says; with ubuntu, prefix the remote commands with sudo):
-#
-#   cat cloud/greennode.env  | ssh -i ~/.ssh/faceblur_greennode root@IP 'cat > /root/faceblur.env && chmod 600 /root/faceblur.env'
-#   cat cloud/stream_run.py  | ssh -i ~/.ssh/faceblur_greennode root@IP 'cat > /root/stream_run.py'
-#   cat cloud/vm_run.sh      | ssh -i ~/.ssh/faceblur_greennode root@IP 'cat > /root/vm_run.sh'
-#   ssh -i ~/.ssh/faceblur_greennode root@IP 'bash /root/vm_run.sh setup'
-#   ssh -i ~/.ssh/faceblur_greennode root@IP 'SHARD=0/8 WORKERS=8 bash /root/vm_run.sh run'
+# Run from this PC with cloud/vm_bootstrap.sh IP SHARD STEP..., which copies
+# the credentials and this script in over SSH (port 234, user stackops, the
+# RSA key faceblur_greennode_rsa) and runs the steps under sudo.
 #
 # `setup` installs Docker and the NVIDIA container toolkit, pulls the image
 # and checks that the card runs CUDA and the encoder inside it. `calibrate`
