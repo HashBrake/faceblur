@@ -135,6 +135,11 @@ to 250 on request.
 
 Measured on a 5090: detection 17.4, 21.9, 24.8 frames a second at 4, 6, 8
 processes; GPU 77 to 80 percent busy at 8 workers, load about 9 of 24 cores.
+A whole video took 2.1 to 2.8 h on one lane, and the GPU sat idle for about
+half of it: the tracker, the zone and the encode use one core, and the
+second chance runs them twice. From 2026-10-15 00:28 every VM runs
+`LANES=2 WORKERS=6` (two videos at once, restarted at a video boundary so no
+work was lost); the GPU is 80 to 85 percent busy throughout.
 One VM (`b-5`) lost its GPU from the bus four minutes after boot (Xid 154) and
 again after a reboot; it was deleted and replaced, and GreenNode was told.
 
