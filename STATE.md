@@ -1,13 +1,14 @@
 # STATE, handover notes
 
-Last updated 2026-10-16 00:20. **The blur run is nearly done**: 8 RTX 5090
-VMs since 2026-10-14 18:20; slices 1, 3 and 4 done and their VMs deleted,
-slices 2 and 7 done and waiting for deletion (the console session ended
-23:00 and needs the owner to sign in), slices 0, 5 and 6 running, expected
-done about 04:00 to 05:00. The 9 cut-off sources are blurring on the pilot
-VM. Then delivery, links and cleanup. In parallel, the partner's hand toolkit
-(EgoSmith, HaWoR + MANO) is in a pilot on the same VM; if it looks good, 2 to
-3 h of footage goes through it for a showcase link. "The production run"
+Last updated 2026-10-16 01:50. **All eight blur slices are done** (8 RTX 5090
+VMs, 2026-10-14 18:20 to 2026-10-16 01:45) and all eight VMs are deleted,
+the last three through the API. Left on the cloud: `faceblur-hands-pilot`,
+re-running the 2 cut-off videos of `AZER76400FF_19700101_000137` with the
+stitch fix (the other 7 cut-off videos are done). Then: check every video
+has a record, delivery, the blurred link, cleanup. In parallel, the partner's
+hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
+to show yet (see "The hand toolkit"); four build sessions run locally
+("Build sessions from the build plan"). "The production run"
 below is the live work and is read first.
 `BUILD_PLAN_PROCESSING_AND_STORAGE.md` (2026-10-16) is the plan for after this run:
 better processing at lower compute, and HEVC/Parquet hot storage.
@@ -136,7 +137,7 @@ to 250 on request.
 | ~~faceblur-5090-8~~ | 116.118.92.84 | 2/8, done 2026-10-15 23:42 (its cut-off videos are on the pilot VM), deleted with its volume 2026-10-16 |
 | ~~faceblur-5090-b-1~~ | 116.118.92.112 | 3/8, done 2026-10-15 21:35, deleted with its volume |
 | ~~faceblur-5090-b-2~~ | 116.118.92.109 | 4/8, done 2026-10-15 21:49 (its two cut-off videos are on the pilot VM), deleted with its volume |
-| faceblur-5090-b-3 | 116.118.92.113 | 5/8 |
+| ~~faceblur-5090-b-3~~ | 116.118.92.113 | 5/8, done 2026-10-16 01:45 (its one failure is the cut-off FF_000137 right, on the pilot VM), deleted with its volume through the API |
 | ~~faceblur-5090-b-4~~ | 116.118.92.111 | 6/8, done 2026-10-16 01:38 (38/38, no failures), deleted with its volume through the API |
 | ~~faceblur-5090-c~~ | 116.118.92.114 | 7/8, done 2026-10-15 23:49, deleted with its volume 2026-10-16 |
 

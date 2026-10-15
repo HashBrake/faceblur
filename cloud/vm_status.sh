@@ -2,7 +2,7 @@
 # One line per VM of the run: slice, progress line, GPU busy, load.
 #   bash cloud/vm_status.sh            (the fleet of 2026-10-14)
 #   bash cloud/vm_status.sh IP:k/n ...
-FLEET=${*:-116.118.92.113:5/8}
+FLEET=${*:-}
 for spec in $FLEET; do
     ip=${spec%%:*}; shard=${spec#*:}
     ( out=$(ssh -p 234 -i "$HOME/.ssh/faceblur_greennode_rsa" -o BatchMode=yes -o ConnectTimeout=10 \
