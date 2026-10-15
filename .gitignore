@@ -42,3 +42,6 @@ sweep_*.log
 
 # Cloud keys
 cloud/*.env
+
+# MANO hand models: licensed, never committed
+cloud/mano/
