@@ -22,6 +22,7 @@ from dataclasses import replace
 import tempfile
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -35,7 +36,7 @@ from .redact import build_alpha, masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
-from .verify import check, held_for, second_chance_seeds
+from .verify import check, held_for, merge_checks, second_chance_seeds, summarise
 from .video import VideoError, VideoInfo, part_path, probe, unchecked_path
 
 Submit = Callable[[Callable, list, int], list]
@@ -345,6 +346,20 @@ def unconfirmed_runs(weak, per_frame, conf: float, min_run: int = 3,
     return runs[:limit], sum(flagged)
 
 
+def _mask_key(dets) -> Counter:
+    """What a frame's masks are, for telling whether a round changed them.
+
+    The fields the redaction reads, in any order. A score or a source that
+    changed with the box where it was draws the same mask and is not a change.
+    """
+    def points(p):
+        return None if p is None else tuple((round(float(a), 3), round(float(b), 3))
+                                            for a, b in p)
+
+    return Counter((d.kind, round(d.x, 3), round(d.y, 3), round(d.w, 3), round(d.h, 3),
+                    points(d.landmarks), points(d.quad)) for d in dets)
+
+
 def _chunks(n: int, size: int) -> list[tuple[int, int]]:
     size = max(1, size)
     return [(a, min(n, a + size)) for a in range(0, n, size)]
@@ -494,9 +509,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # if the mixed join does not verify.
     #
     # A function rather than a straight line because package F1 runs it
-    # again: a second chance writes the whole file a second time from the
-    # source, never from the copy, so a face found late is blurred once and
-    # not blurred twice.
+    # again: a second chance writes the file a second time from the source,
+    # never by re-encoding the copy, so a face found late is blurred once and
+    # not blurred twice. With `second_chance_scope` "changed" only the
+    # stretches whose masks changed are encoded again, from the source; the
+    # rest is stream copied from the first copy, packets unchanged.
     keys = keyframes(src, times)
     min_copy = max(1, int(round(settings.min_copy_seconds * info.fps)))
     piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
@@ -542,7 +559,23 @@ def run_video(src: Path, dst: Path, settings: Settings,
             out.unlink(missing_ok=True)
         if record.error:
             return False
+        written.update(masked=masked, by_kind=masked_by_kind, prevented=prevented)
+        set_quality(masked, masked_by_kind, prevented)
+        record.encode_seconds = round(record.encode_seconds + time.time() - t1, 2)
+        record.status = STATUS_DONE
+        return True
 
+    # What the copy in `out` was written with, frame by frame, so that a
+    # scoped second chance can keep the numbers of the frames it copies.
+    written: dict = {}
+    copy_delay = None                   # reorder_delay(out), when first asked
+    # The scope "changed" keeps the check's per job results, so that a
+    # round can re-check only what it re-encoded and merge the rest.
+    scoped = bool(settings.second_chance) and settings.second_chance_scope == "changed"
+    check_results: list = []
+
+    def set_quality(masked, masked_by_kind, prevented) -> None:
+        """The record's quality numbers, from per frame mask shares."""
         m = np.asarray(masked) if masked else np.zeros(1)
         record.frames = n
         record.masked_mean = round(float(m.mean()), 5)
@@ -563,26 +596,132 @@ def run_video(src: Path, dst: Path, settings: Settings,
             for k, v in sorted(masked_by_kind.items())}
         record.masked_in_zone_prevented = (round(float(np.mean(prevented)), 5)
                                            if prevented else 0.0)
+
+    def changed_plan(previous) -> Optional[list]:
+        """The second write's segments for the scope "changed", or None when
+        the round has to write the whole file the way the scope "all" does.
+
+        Encode segments are every keyframe interval of the first copy that
+        holds a frame whose masks changed, give or take the margin; copy
+        segments are the rest, cut from the first copy. A plan with no encode
+        segment means nothing changed.
+        """
+        nonlocal copy_delay
+        margin = int(round(settings.second_chance_margin_seconds * info.fps))
+        changed = [False] * n
+        for i in range(n):
+            if _mask_key(previous[i]) != _mask_key(per_frame[i]):
+                a, b = max(0, i - margin), min(n, i + margin + 1)
+                changed[a:b] = [True] * (b - a)
+        if all(changed):
+            return None
+        if not any(changed):
+            return [[Segment(0, n, True)], None]
+        try:
+            # The first copy is what gets stream copied now, so its
+            # reordering delay is the one that has to match the encoded
+            # pieces, which have none. Our encoders write no B-frames, so it
+            # is zero unless the copy holds pieces copied from a source that
+            # has them, which `want_copy` already rules out. Checked anyway,
+            # once per file: a mismatch would put copied frames a few places
+            # off, and a whole rewrite is always right.
+            if copy_delay is None:
+                copy_delay = reorder_delay(out)
+            if copy_delay != 0:
+                return None
+            out_times = frame_times(out)
+            out_keys = keyframes(out, out_times)
+        except VideoError:
+            return None
+        # plan_segments snaps each changed stretch out to the keyframes
+        # around it, merges what touches and folds clean stretches shorter
+        # than min_copy into their neighbours, which is the same rule the
+        # first write uses against the source.
+        segments = split_long(plan_segments(changed, out_keys, n, min_copy, True),
+                              out_keys, piece)
+        if all(not s.copy for s in segments):
+            return None
+        return [segments, out_times]
+
+    def scoped_write(segments, out_times):
+        """Write the changed segments from the source and copy the rest from
+        the first copy. Returns the re-encoded [start, end) ranges, None if
+        the run stopped, or False if the join did not verify."""
+        t1 = time.time()
+        # A new name: the first copy is the copy source until the new file
+        # verifies, and only then takes its place.
+        again = Path(str(out) + ".again")
+        work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
+        try:
+            outcome = _write_and_join(src, again, info, times, settings, segments, per_frame,
+                                      submit, workers, Path(work), report, cancelled, zones,
+                                      copy_src=out, copy_times=out_times)
+            if outcome is None:
+                record.status = STATUS_STOPPED
+                return None
+            masked, masked_by_kind, prevented, problem, _ = outcome
+            if problem:
+                return False
+            os.replace(again, out)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+            again.unlink(missing_ok=True)
+        ranges = []
+        for seg in segments:
+            if seg.copy:
+                continue
+            if ranges and ranges[-1][1] == seg.start:
+                ranges[-1][1] = seg.end
+            else:
+                ranges.append([seg.start, seg.end])
+        # Copied frames keep the numbers they were written with; the rest
+        # take the new ones.
+        old_kind = written["by_kind"] or {}
+        merged_kind = {name: list(old_kind.get(name) or [0.0] * n)
+                       for name in set(old_kind) | set(masked_by_kind)}
+        for a, b in ranges:
+            written["masked"][a:b] = masked[a:b]
+            written["prevented"][a:b] = prevented[a:b]
+            for name, row in merged_kind.items():
+                new_row = masked_by_kind.get(name)
+                row[a:b] = new_row[a:b] if new_row else [0.0] * (b - a)
+        written["by_kind"] = merged_kind
+        set_quality(written["masked"], merged_kind, written["prevented"])
+        record.second_chance_reencoded_frames += sum(b - a for a, b in ranges)
         record.encode_seconds = round(record.encode_seconds + time.time() - t1, 2)
         record.status = STATUS_DONE
-        return True
+        return ranges
 
-    def check_pass():
+    def check_pass(ranges=None):
         """Detect on the finished copy and put what it found in the record.
 
         Returns the check's own report, or None if it could not run. The
         quarantine decision is not made here: package F1 gets its rounds
         first, and a copy that is moved is a copy the next round cannot
         write to.
+
+        `ranges` limits the check to those frames, for the scope "changed";
+        the report is then the earlier check with those frames replaced.
         """
+        nonlocal check_results
         t2 = time.time()
         report("checking", 0, n)
         try:
             # The hands the detection pass found go with it when that pass
             # looked at every frame, so the check does not find them again.
             known = hands_found if settings.zone and settings.zone_stride == 1 else None
-            got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
-                        hands=known)
+            if not scoped:
+                got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
+                            hands=known)
+            else:
+                fresh: list = []
+                got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
+                            hands=known, ranges=ranges, results=fresh)
+                if ranges is not None:
+                    check_results = merge_checks(check_results, fresh, ranges)
+                    got = summarise(check_results, settings)
+                else:
+                    check_results = fresh
         except VideoError as exc:
             # A copy the check could not look at is not delivered.
             record.error = str(exc)
@@ -642,6 +781,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
                     break
                 record.second_chance_rounds += 1
                 record.second_chance_seeds += sum(len(v) for v in seeds.values())
+                previous = per_frame             # the masks `out` was written with
                 for i, dets in seeds.items():
                     strong[i] = list(strong[i]) + list(dets)
                 per_frame, tracks = tracker_for(settings).run(
@@ -681,11 +821,29 @@ def run_video(src: Path, dst: Path, settings: Settings,
                             if 0 <= k < n and not any(iou(d, o) >= 0.3 for o in per_frame[k]):
                                 per_frame[k] = list(per_frame[k]) + [d]
                 record.frames_with_mask = sum(1 for f in per_frame if f)
-                if not write_pass():
-                    record.second_chance_seconds = round(time.time() - t3, 2)
-                    record.wall_seconds = round(time.time() - started, 2)
-                    return record
-                found = check_pass()
+                plan = changed_plan(previous) if scoped else None
+                ranges = None
+                if plan is not None:
+                    if all(s.copy for s in plan[0]):
+                        # No mask changed, so the copy and the check stand
+                        # as they are, and the next round would find the
+                        # same seeds.
+                        break
+                    ranges = scoped_write(*plan)
+                    if ranges is None:
+                        record.second_chance_seconds = round(time.time() - t3, 2)
+                        record.wall_seconds = round(time.time() - started, 2)
+                        return record
+                if not ranges:
+                    # The scope "all", or a scoped join that did not verify:
+                    # the whole file, from the source, the way it always was.
+                    ranges = None
+                    if not write_pass():
+                        record.second_chance_seconds = round(time.time() - t3, 2)
+                        record.wall_seconds = round(time.time() - started, 2)
+                        return record
+                    record.second_chance_reencoded_frames += n - record.frames_copied
+                found = check_pass(ranges)
                 if found is None:
                     record.second_chance_seconds = round(time.time() - t3, 2)
                     record.wall_seconds = round(time.time() - started, 2)
@@ -755,18 +913,26 @@ def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
 
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
-                    work: Path, report, cancelled, zones=None):
+                    work: Path, report, cancelled, zones=None, copy_src=None, copy_times=None):
     """Returns (masked, by kind, prevented, problem text, frames copied), or None.
 
     `masked` is the union share of each frame and `masked by kind` splits it.
     `prevented` is what the handled zone took back out of the mask. Copied
-    stretches carry no mask at all, so they are zero in all three.
+    stretches are zero in all three: copied from the source they carry no
+    mask, and copied from an earlier copy their numbers are the caller's.
+
+    Copy segments come from `copy_src` with its own `copy_times` when given,
+    the source otherwise. Encode segments and the audio always come from the
+    source.
     """
+    copy_src = src if copy_src is None else copy_src
+    copy_times = times if copy_times is None else copy_times
     parts = [work / f"seg{k:05d}.mp4" for k in range(len(segments))]
     encode_jobs, copy_jobs = [], []
     for seg, part in zip(segments, parts):
         if seg.copy:
-            copy_jobs.append({"src": str(src), "times": times, "segment": seg, "out": str(part)})
+            copy_jobs.append({"src": str(copy_src), "times": copy_times, "segment": seg,
+                              "out": str(part)})
         else:
             dets = {i: per_frame[i] for i in range(seg.start, seg.end) if per_frame[i]}
             in_zone = {i: zones[i] for i in range(seg.start, seg.end)

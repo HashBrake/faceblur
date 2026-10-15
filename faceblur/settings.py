@@ -13,6 +13,7 @@ ENGINES = ("yunet", "centerface", "both")
 DEVICES = ("auto", "gpu", "cpu")
 ENCODERS = ("auto", "nvenc", "x264")
 MODES = ("blur", "pixelate", "solid")
+SECOND_CHANCE_SCOPES = ("changed", "all")
 
 # Video extensions the batch walker treats as input.
 VIDEO_EXT = frozenset(
@@ -455,6 +456,16 @@ class Settings:
     # as likely to be a pattern as a face and the mask it would drag along is
     # larger than the thing it covers.
     second_chance_min_px: int = 16
+    # What a round writes and checks again. "all" is the whole file from the
+    # source. "changed" is only the stretches whose masks the round changed,
+    # with `second_chance_margin_seconds` either side, out to the first
+    # copy's keyframes; the rest is stream copied from the first copy and
+    # keeps the first check's verdict. The scope is a diff of the masks, not
+    # of the seeds, because a seed moves masks far from its own frame through
+    # stitching and gap filling (DECISIONS D06). The round was a third of the
+    # wall on every sample file, docs/bench/profile_2026-10-16.md.
+    second_chance_scope: str = "changed"
+    second_chance_margin_seconds: float = 1.0
     # The check runs the same face detectors that produced the copy, and they
     # call the wearer's hand a face. The pipeline keeps hands out of the mask
     # with track-level rules; a check that reads one frame at a time cannot,
@@ -543,6 +554,11 @@ class Settings:
                                 f"{self.check_stride}")
         if self.second_chance_min_px < 0:
             raise SettingsError("second_chance_min_px must be 0 or more")
+        if self.second_chance_scope not in SECOND_CHANCE_SCOPES:
+            raise SettingsError(f"second_chance_scope must be one of {SECOND_CHANCE_SCOPES}, "
+                                f"got {self.second_chance_scope!r}")
+        if self.second_chance_margin_seconds < 0:
+            raise SettingsError("second_chance_margin_seconds must be 0 or more")
         if not self.text_sizes or any(s < 64 for s in self.text_sizes):
             raise SettingsError(f"every text size must be at least 64, got {self.text_sizes}")
         for name in ("text_thresh", "text_box_thresh", "text_nms", "text_link_iou"):
@@ -734,6 +750,7 @@ class Settings:
             "text_gap", "text_tail", "text_link_iou",
             "check_output", "check_stride", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
+            "second_chance_scope", "second_chance_margin_seconds",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
             "hand_device",
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",

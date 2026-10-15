@@ -303,6 +303,10 @@ def residual_job(job: dict) -> dict:
     zone_rows: list[dict] = []
     found, hands, checked, in_zone = [], 0, 0, 0
     flat = {name: 0 for name in wanted}
+    # The flat boxes by frame as well as in total, so that a later check over
+    # part of the file can take a frame's count back out (`merge_checks`).
+    # Every other count here is either one per checked frame or one per row.
+    flat_frames: dict[int, dict[str, int]] = {}
     source_frames = decode_range(src, job["times"], start, end, job["info"], settings.hwaccel)
     copy_frames = decode_range(out, job["out_times"], start, end, job["out_info"],
                                settings.hwaccel)
@@ -354,6 +358,8 @@ def residual_job(job: dict) -> dict:
             call = classify(changed, would, noise)
             if call == "flat":
                 flat["face"] += 1
+                counts = flat_frames.setdefault(i, {})
+                counts["face"] = counts.get("face", 0) + 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
                 cover = covered_by_zone(det, face_zone)
@@ -388,6 +394,8 @@ def residual_job(job: dict) -> dict:
             call = classify(changed, would, noise)
             if call == "flat":
                 flat["screen"] += 1
+                counts = flat_frames.setdefault(i, {})
+                counts["screen"] = counts.get("screen", 0) + 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
                 # The label as well, so that a reader knows the detector said
@@ -399,29 +407,36 @@ def residual_job(job: dict) -> dict:
                     row["zone"] = round(cover, 3)
                     in_zone += 1
                 found.append(row)
-    return {"start": start, "end": end, "checked": checked,
-            "flat": sum(flat.values()), "flat_by_kind": flat,
+    return {"start": start, "end": end, "stride": stride, "checked": checked,
+            "flat": sum(flat.values()), "flat_by_kind": flat, "flat_frames": flat_frames,
             "hands": hands, "in_zone": in_zone, "found": found, "zone": zone_rows,
             "hand_models": {} if rule is None else rule.model_hashes,
             "hand_compute": {} if rule is None else rule.compute}
 
 
 def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
-              stride: int = 1, hands: Optional[dict] = None) -> list[dict]:
+              stride: int = 1, hands: Optional[dict] = None,
+              ranges: Optional[list] = None) -> list[dict]:
     """One job per frame range, with both files' timing resolved once.
 
     `hands` is every frame's confirmed hands from the detection pass, when it
     looked at every frame; a frame missing from it had none. A job that
-    carries them does not find the hands again (see `residual_job`)."""
+    carries them does not find the hands again (see `residual_job`).
+
+    `ranges`, [start, end) pairs, limits the jobs to those frames, chunked the
+    same way inside each. The scoped second chance re-checks only what it
+    re-encoded: every other frame is the first copy's, bit for bit."""
     info, out_info = probe(src), probe(out)
     times, out_times = frame_times(src), frame_times(out)
     n = min(len(times), len(out_times))
     if n == 0:
         raise VideoError("Could not read one of these videos.")
+    step = max(1, chunk)
+    spans = [(a, min(b, n)) for a, b in (ranges if ranges is not None else [(0, n)])]
     jobs = [{"src": str(src), "out": str(out), "settings": settings, "stride": stride,
              "info": info, "out_info": out_info, "times": times, "out_times": out_times,
-             "start": a, "end": min(b, n)}
-            for a, b in [(k, k + chunk) for k in range(0, n, max(1, chunk))]]
+             "start": k, "end": min(k + step, b)}
+            for a, b in spans for k in range(a, b, step)]
     if hands is not None:
         for job in jobs:
             job["hands"] = {i: hands[i] for i in range(job["start"], job["end"]) if i in hands}
@@ -521,8 +536,10 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     # that an auditor reads. Every count above is over every row either way.
     kept = of_kind(found, "face")[:200] + of_kind(found, "screen")[:200]
     kept.sort(key=lambda row: (row["frame"], -row["px"]))
+    # Frame breaks ties, so that results merged out of frame order
+    # (`merge_checks`) list the same rows as one pass in order would.
     zone_rows = sorted((row for r in results for row in (r.get("zone") or [])),
-                       key=lambda row: -row["changed"])
+                       key=lambda row: (-row["changed"], row["frame"]))
     over = [row for row in zone_rows if row["changed"] > settings.zone_gate_changed]
     return {"frames_checked": checked,
             "hand_models": models,
@@ -549,6 +566,40 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "zone_frames_over": len(over),
             "zone_list": over[:50],
             "residual_list": kept}
+
+
+def merge_checks(first: list[dict], again: list[dict], ranges: list) -> list[dict]:
+    """The first check's results with the frames in `ranges` taken out, and
+    the check of those frames in their place. `summarise` of the list is what
+    a check of the whole file would say.
+
+    Exact rather than close: frames outside the ranges were copied from the
+    copy the first check read, so its verdict on them stands, and every count
+    `summarise` adds up is per checked frame (`checked`), per row (`hands`,
+    `in_zone`, the rows themselves) or kept per frame for this (`flat_frames`).
+    """
+    def inside(i: int) -> bool:
+        return any(a <= i < b for a, b in ranges)
+
+    kept = []
+    for r in first:
+        stride = max(1, r.get("stride", 1))
+        found = [row for row in r["found"] if not inside(row["frame"])]
+        flat_frames = {i: c for i, c in (r.get("flat_frames") or {}).items() if not inside(i)}
+        flat_by_kind = {name: 0 for name in (r.get("flat_by_kind") or {})}
+        for counts in flat_frames.values():
+            for name, count in counts.items():
+                flat_by_kind[name] = flat_by_kind.get(name, 0) + count
+        kept.append({**r,
+                     "checked": sum(1 for i in range(r["start"], r["end"])
+                                    if i % stride == 0 and not inside(i)),
+                     "flat": sum(flat_by_kind.values()), "flat_by_kind": flat_by_kind,
+                     "flat_frames": flat_frames,
+                     "hands": sum(1 for row in found if "hand" in row),
+                     "in_zone": sum(1 for row in found if "zone" in row),
+                     "found": found,
+                     "zone": [row for row in (r.get("zone") or []) if not inside(row["frame"])]})
+    return kept + list(again)
 
 
 def second_chance_seeds(report: dict, settings: Settings) -> dict:
@@ -617,15 +668,20 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
 
 def check(src: Path, out: Path, settings: Optional[Settings] = None, stride: int = 1,
           submit=None, workers: int = 1, chunk: int = 300,
-          hands: Optional[dict] = None) -> dict:
+          hands: Optional[dict] = None, ranges: Optional[list] = None,
+          results: Optional[list] = None) -> dict:
     """Run the whole check. `submit` maps jobs the way batch.run_video does.
-    `hands` as in `plan_jobs`."""
+    `hands` and `ranges` as in `plan_jobs`. `results`, when given, receives
+    the per job results, which `merge_checks` needs later."""
     from .batch import serial_submit
 
     settings = settings or Settings()
     submit = submit or serial_submit
-    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands)
-    return summarise(list(submit(residual_job, jobs, workers)), settings)
+    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands, ranges)
+    got = list(submit(residual_job, jobs, workers))
+    if results is not None:
+        results.extend(got)
+    return summarise(got, settings)
 
 
 def describe(report: dict, settings: Optional[Settings] = None) -> str:

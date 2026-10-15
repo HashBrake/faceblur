@@ -148,6 +148,10 @@ class AuditRecord:
     # Seeds no track picked up, masked on their own frame instead. See the
     # comment in batch.run_video: a seed is evidence, not a stray detection.
     second_chance_seeds_kept: int = 0
+    # Frames the rounds encoded again, over all rounds. With the scope
+    # "changed" the rest came from the first copy, and `frames_copied` keeps
+    # meaning frames copied from the source, in the first write.
+    second_chance_reencoded_frames: int = 0
     second_chance_seconds: float = 0.0
     # What the source carried besides pictures, package M1. The tag names
     # only: a value can hold a location or a device serial, and this record
