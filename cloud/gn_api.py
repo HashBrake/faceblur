@@ -56,7 +56,7 @@ def token(e: dict) -> str:
     basic = base64.b64encode(f"{e['GN_CLIENT_ID']}:{e['GN_CLIENT_SECRET']}".encode()).decode()
     r = call("POST", TOKEN_URL, {"Authorization": f"Basic {basic}",
                                  "Content-Type": "application/x-www-form-urlencoded"},
-             b"grant_type=client_credentials")
+             b"grant_type=client_credentials&scope=email")
     return r.get("access_token") or r["accessToken"]
 
 
