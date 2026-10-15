@@ -6,6 +6,7 @@ bone-constrained, Kalman/RTS-smoothed and bone-constrained again so the output
 bone lengths are exact. Pass 2 re-reads the
 part and writes the review video of the OUTPUT joints. Outputs in OUT:
 joints.parquet, quality.json, review.mp4 (+ mano.parquet, mano_shape.json).
+joints.parquet's reproj_px column is the RAW stereo triangulation residual (same as quality.json reproj_px).
 """
 from __future__ import annotations
 
@@ -71,7 +72,7 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
     factory = detector_factory or _default_detector
     det_l, det_r = factory(), factory()
     tracker = HandTracker(rect)
-    raw = {h: {"joints": np.full((T, 21, 3), np.nan), "conf": np.zeros((T, 21)),
+    raw = {h: {"joints": np.full((T, 21, 3), np.nan),
                "uv_l": np.full((T, 21, 2), np.nan), "uv_r": np.full((T, 21, 2), np.nan),
                "conf_det": np.zeros((T, 21)), "row_dis": np.full((T, 21), np.nan),
                "world_l": np.full((T, 21, 3), np.nan), "world_r": np.full((T, 21, 3), np.nan),
@@ -84,9 +85,9 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
         hr = det_r.detect(rect.rectify(img_r, "right"))
         det_seconds += time.perf_counter() - t0
         for hand, (i, j) in tracker.update(hl, hr).items():
-            joints, conf, _ = triangulate_hand(rect, hl[i], hr[j])
+            joints, _, _ = triangulate_hand(rect, hl[i], hr[j])
             r = raw[hand]
-            r["joints"][t], r["conf"][t] = joints, conf
+            r["joints"][t] = joints
             r["uv_l"][t], r["uv_r"][t] = hl[i].keypoints, hr[j].keypoints
             r["conf_det"][t] = np.minimum(hl[i].conf, hr[j].conf)
             r["row_dis"][t] = row_disagreement(hl[i].keypoints, hr[j].keypoints)
@@ -120,7 +121,8 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
                            "reproj_px": _reproj_px(rect, rig, r["joints"], r["uv_l"], r["uv_r"])}
     frames = {"frame": np.array([p.frame_left for p in pairs], np.int64),
               "timestamp_us": np.array([p.timestamp_us for p in pairs], np.int64)}
-    write_joints_parquet(out / "joints.parquet", frames, hands)
+    write_joints_parquet(out / "joints.parquet", frames,
+                         {h: {**hands[h], "reproj_px": raw_hands[h]["reproj_px"]} for h in HANDS})
 
     # Pass 2: review video of the output joints.
     reader = PartReader(left_mp4, right_mp4, image_size, cts)

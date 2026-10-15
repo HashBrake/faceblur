@@ -155,6 +155,11 @@ def test_synthetic_end_to_end(synthetic_run):
     assert report["overall"]["reproj_px_median"] == o["reproj_px_median"]
     assert o["bone_cv_max"] < 1e-9  # re-constrained after smoothing: exact bone lengths
 
+    # Parquet reproj_px is the raw stereo residual: pooled over rows where it is finite (the raw-finite
+    # frames quality.py pools), its median equals quality.json's overall.reproj_px_median.
+    rp = np.array(d["reproj_px"], np.float64)
+    assert np.isclose(np.median(rp[np.isfinite(rp)]), o["reproj_px_median"], rtol=0, atol=1e-6)
+
     joints = np.array([[d[c][r] for c in JOINT_COLUMNS] for r in range(2 * T)]).reshape(2, T, 21, 3)
     errs = []
     for h in range(2):
