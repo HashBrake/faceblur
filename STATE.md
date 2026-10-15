@@ -151,7 +151,9 @@ pilot VM with `IN_PREFIX=in_repaired`, writing to the usual `out/` names. The
 slices also try them and log a failure; those failures are expected. Delete
 `in_repaired/` after delivery. Same day: two videos sat 12 h in the tracker's
 stitch step (fixed in 1e62b27, deployed by docker cp into the running
-containers, the two re-run at the end of slices 2/8 and 5/8).
+containers; any new container from image `:3` needs the same `docker cp`, which the
+pilot VM's first did not get, and lost 2 h on the same pair). The pair is in
+the cut-off list too, so the pilot VM re-runs it.
 
 Hand toolkit pilot (2026-10-15): VM `faceblur-hands-pilot`, 116.118.92.130, same
 flavor, created 14:20; delete it with its volume when the pilot is done.
