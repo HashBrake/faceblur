@@ -129,7 +129,7 @@ def main() -> int:
     h = headers(e)
     if sys.argv[1:2] == ["list"]:
         for s in servers(e, h):
-            print(s.get("name"), s.get("uuid") or s.get("id"), s.get("status"))
+            print(s.get("name"), s.get("uuid") or s.get("id"), s.get("status"), s.get("createdAt", ""))
         return 0
     if len(sys.argv) == 3 and sys.argv[1] == "delete":
         name = sys.argv[2]
