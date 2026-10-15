@@ -137,7 +137,7 @@ to 250 on request.
 | ~~faceblur-5090-b-1~~ | 116.118.92.112 | 3/8, done 2026-10-15 21:35, deleted with its volume |
 | ~~faceblur-5090-b-2~~ | 116.118.92.109 | 4/8, done 2026-10-15 21:49 (its two cut-off videos are on the pilot VM), deleted with its volume |
 | faceblur-5090-b-3 | 116.118.92.113 | 5/8 |
-| faceblur-5090-b-4 | 116.118.92.111 | 6/8 |
+| ~~faceblur-5090-b-4~~ | 116.118.92.111 | 6/8, done 2026-10-16 01:38 (38/38, no failures), deleted with its volume through the API |
 | ~~faceblur-5090-c~~ | 116.118.92.114 | 7/8, done 2026-10-15 23:49, deleted with its volume 2026-10-16 |
 
 Measured on a 5090: detection 17.4, 21.9, 24.8 frames a second at 4, 6, 8
