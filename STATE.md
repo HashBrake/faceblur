@@ -9,6 +9,8 @@ VM. Then delivery, links and cleanup. In parallel, the partner's hand toolkit
 (EgoSmith, HaWoR + MANO) is in a pilot on the same VM; if it looks good, 2 to
 3 h of footage goes through it for a showcase link. "The production run"
 below is the live work and is read first.
+`BUILD_PLAN_PROCESSING_AND_STORAGE.md` (2026-10-16) is the plan for after this run:
+better processing at lower compute, and HEVC/Parquet hot storage.
 
 Before that, 2026-10-01: the gate made crash safe (report 24.4) and the gates
 moved to the mask budget (report 25). 2026-09-26: a run that hung on a dead
@@ -190,7 +192,9 @@ licence later ("ignore the licensing for now").
 - Run: `docker run --gpus all --ipc=host -v /root/mano/MANO_RIGHT.pkl:/opt/egosmith/_DATA/data/mano/MANO_RIGHT.pkl:ro -v /root/mano/MANO_LEFT.pkl:/opt/egosmith/_DATA/data_left/mano_left/MANO_LEFT.pkl:ro -v /var/egosmith:/data egosmith:cu128 bash scripts/run_camera_hand_skeleton_pipeline.sh --input-root /data/recordings --output-root /data/results`
 - Pilot: a 10 min cut of a blurred left video
   (`AZER76400EV_19700105_003108`, part 1), started 2026-10-16 00:13 while the
-  VM also blurs. Result pending.
+  VM also blurs. PyTorch 2.6+ refuses HaWoR's checkpoint by default
+  (`weights_only`); the official file loads with
+  `-e TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`. Result pending.
 - The owner asked (2026-10-16): if positive, run 2 to 3 h of left videos from
   different devices, add a version with the skeleton over the blurred
   footage, and publish them on a separate link (signed, 7 days, unless the
