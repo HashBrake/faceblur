@@ -45,3 +45,7 @@ cloud/*.env
 
 # MANO hand models: licensed, never committed
 cloud/mano/
+
+# Speed benchmark: the exported baseline build and both builds' outputs
+tools/
+bench_out/

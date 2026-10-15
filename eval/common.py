@@ -38,7 +38,9 @@ RAW_SETTINGS = ("engine", "det_sizes", "verify", "confirm_on_crops", "crop_size"
                 "grow_face_frac", "nms_detect")
 
 FOOTAGE = REPO / "footage"
-CACHE_DIR = REPO / "eval" / "cache"          # derived from footage, git ignores it
+# Derived from footage, git ignores it. FACEBLUR_EVAL_CACHE points it elsewhere,
+# so a worktree can build its own caches without touching the main checkout's.
+CACHE_DIR = Path(os.environ.get("FACEBLUR_EVAL_CACHE") or REPO / "eval" / "cache")
 REPORT_DIR = REPO / "docs"
 
 # Reference identity region, fixed so that sweeps over the mask ellipse are
