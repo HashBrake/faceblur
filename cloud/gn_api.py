@@ -7,6 +7,7 @@ slice is done.
     python cloud/gn_api.py list                      # read only: our servers
     python cloud/gn_api.py delete faceblur-5090-1    # one VM and its volumes
     python cloud/gn_api.py create faceblur-5090-d --like faceblur-5090-b-3          # dry run
+    python cloud/gn_api.py create faceblur-5090-d --like vm_template_5090.json     # from the saved setup
     python cloud/gn_api.py create faceblur-5090-d --like faceblur-5090-b-3 --apply  # creates it
 
 `create` copies a running VM's flavour, image, network, subnet, security
@@ -148,7 +149,12 @@ def main() -> int:
             raise SystemExit(f"refusing: {name} is outside this scope ({SCOPE}*)")
         if any(s.get("name") == name for s in servers(e, h)):
             raise SystemExit(f"{name} already exists")
-        body = create_body(e, h, name, like)
+        # --like takes a running VM's name or a saved template (JSON), so new
+        # VMs can be made after the whole fleet is gone.
+        if like.endswith(".json"):
+            body = dict(json.loads((HERE / Path(like).name if not Path(like).exists() else Path(like)).read_text()), name=name)
+        else:
+            body = create_body(e, h, name, like)
         if "--apply" not in sys.argv:
             print("dry run, nothing created:")
             print(json.dumps(body, indent=2))
