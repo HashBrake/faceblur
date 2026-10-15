@@ -6,6 +6,14 @@ slice is done.
 
     python cloud/gn_api.py list                      # read only: our servers
     python cloud/gn_api.py delete faceblur-5090-1    # one VM and its volumes
+    python cloud/gn_api.py create faceblur-5090-d --like faceblur-5090-b-3          # dry run
+    python cloud/gn_api.py create faceblur-5090-d --like faceblur-5090-b-3 --apply  # creates it
+
+`create` copies a running VM's flavour, image, network, subnet, security
+groups, SSH key, zone and boot disk, with a public IP and no password change
+at first login, so a new VM matches the fleet exactly. Without `--apply` it
+only prints the request. Then `cloud/vm_bootstrap.sh IP k/n setup run` puts
+it to work.
 
 Credentials come from cloud/greennode.env (or the environment): GN_CLIENT_ID
 and GN_CLIENT_SECRET of an IAM service account allowed to manage vServer, and
@@ -72,6 +80,41 @@ def servers(e: dict, h: dict) -> list[dict]:
     return r.get("listData") or r.get("data") or []
 
 
+def server(e: dict, h: dict, name: str) -> dict:
+    match = [s for s in servers(e, h) if s.get("name") == name]
+    if len(match) != 1:
+        raise SystemExit(f"{name}: {len(match)} servers by that name")
+    sid = match[0].get("uuid") or match[0].get("id")
+    r = call("GET", f"{API}/{e['GN_PROJECT_ID']}/servers/{sid}", h)
+    return r.get("data", r)
+
+
+def create_body(e: dict, h: dict, name: str, like: str) -> dict:
+    """The request for a new server set up exactly like the running `like`."""
+    t = server(e, h, like)
+    nic = t["internalInterfaces"][0]
+    boot = call("GET", f"{API}/{e['GN_PROJECT_ID']}/volumes/{t['bootVolumeId']}", h)
+    boot = boot.get("data", boot)
+    keys = call("GET", f"{API}/{e['GN_PROJECT_ID']}/sshKeys?page=1&size=100", h)
+    key = [k for k in (keys.get("listData") or keys.get("data") or [])
+           if k.get("name") == t["sshKeyName"]]
+    if len(key) != 1:
+        raise SystemExit(f"SSH key {t['sshKeyName']}: {len(key)} found")
+    return {
+        "name": name, "zoneId": t["zoneId"],
+        "flavorId": t["flavor"]["flavorId"], "imageId": t["image"]["id"],
+        "networkId": nic["networkUuid"], "subnetId": nic["subnetUuid"],
+        "securityGroup": [g["uuid"] for g in t["secGroups"]],
+        "sshKeyId": key[0].get("id") or key[0].get("uuid"),
+        "rootDiskSize": boot.get("size"), "rootDiskTypeId": boot.get("volumeTypeId"),
+        "encryptionVolume": False, "attachFloating": True,
+        # The API's own wording: "Skip change password: false". Without it
+        # the first login asks for a password nobody has.
+        "expirePassword": False,
+        "createdFrom": "NEW",
+    }
+
+
 def main() -> int:
     e = env()
     missing = [k for k in ("GN_CLIENT_ID", "GN_CLIENT_SECRET", "GN_PROJECT_ID") if not e.get(k)]
@@ -93,6 +136,20 @@ def main() -> int:
         call("DELETE", f"{API}/{e['GN_PROJECT_ID']}/servers/{sid}", h,
              json.dumps({"deleteAllVolume": True}).encode())
         print(f"deleted {name} ({sid}) with its volumes")
+        return 0
+    if len(sys.argv) >= 5 and sys.argv[1] == "create" and sys.argv[3] == "--like":
+        name, like = sys.argv[2], sys.argv[4]
+        if not name.startswith(OURS):
+            raise SystemExit(f"refusing: {name} is not one of ours ({OURS}*)")
+        if any(s.get("name") == name for s in servers(e, h)):
+            raise SystemExit(f"{name} already exists")
+        body = create_body(e, h, name, like)
+        if "--apply" not in sys.argv:
+            print("dry run, nothing created:")
+            print(json.dumps(body, indent=2))
+            return 0
+        r = call("POST", f"{API}/{e['GN_PROJECT_ID']}/servers", h, json.dumps(body).encode())
+        print(json.dumps(r)[:500])
         return 0
     raise SystemExit(__doc__)
 
