@@ -988,3 +988,73 @@ before changing anything a pass measured.
 | `models/README.md` | every model: source, sha256, input layout, output layout |
 | `docs/report.md` | every measurement, one section per pass |
 | `docs/audits/` | by eye labels, committed. H1's are the first that can be re-scored |
+
+## Stereo hands (hands/, 2026-10-16)
+
+`hands/` turns one Orbbec Ego stereo recording into per-frame 3-D hand skeletons (21 joints per hand, MediaPipe order). Each stereo pair is rectified from the Kannala-Brandt fisheye model at ±60°, MediaPipe Hands runs on each view, left and right detections are matched by palm position, and the joints are triangulated back in the ORIGINAL left camera frame, in metres. The noisy triangulation is fused with MediaPipe's own 3-D hand shape as a prior, bone lengths are fixed once per recording, and a Kalman filter with RTS smoothing cleans the track and fills gaps of up to 10 frames. An optional MANO fit (`--mano`) adds pose and shape parameters; MANO is licensed for non-commercial use only.
+
+### Set up and run
+
+```
+py -3.12 -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements-hands.txt
+.venv\Scripts\python.exe -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120" --part 1 --start 600 --duration 120 [--mano]
+.venv\Scripts\python.exe -m pytest tests/hands -q -m "not real_footage"
+```
+
+On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --`. MANO files (`MANO_LEFT.pkl`, `MANO_RIGHT.pkl`) are read from `cloud/mano/` of the main repo (override with `--mano-dir` or `MANO_DIR`). They are never copied, and nothing derived from them goes into git.
+
+### Outputs (one folder per run, outside the repo)
+
+- `joints.parquet`: one row per frame per hand.
+  - `frame`: left-video frame index.
+  - `timestamp_us`: left timestamp.
+  - `hand`: `left` or `right`.
+  - `valid`: a skeleton is output for this frame.
+  - `interpolated`: the frame is gap-filled, not observed.
+  - `reproj_px`: the raw stereo residual, in original-image px.
+  - `j00_x`..`j20_z`: joints in metres, in the left camera frame, MediaPipe joint order.
+  - `c00`..`c20`: per-joint confidence.
+- `quality.json`: per-hand and overall validity, raw and output reprojection, bone CV (raw and output), bone lengths, jitter, mean confidence, clip metadata and timings, and pass/fail against the targets.
+- `review.mp4`: 1600x650, rectified left and right views side by side, with the output skeleton projected (left hand green, right hand orange).
+- `mano.parquet` (with `--mano`): per frame and hand, `valid`, the 48 MANO pose values and the translation.
+- `mano_shape.json` (with `--mano`): 10 betas per hand for the recording, and the fit `rmse_mm` per hand.
+
+### Results: EV 003108, part 1, 600-720 s (3600 frames)
+
+| Measure | Value | Against the brief |
+|---|---|---|
+| Raw stereo reprojection, median (both hands) | 2.85 px | Meets < 3 px |
+| Raw reprojection, left hand: median / p90 | 3.74 / 8.68 px | Left hand alone misses (fewer, lower-confidence views; mean conf 0.40) |
+| Raw reprojection, right hand: median / p90 | 2.31 / 5.91 px | Meets |
+| Output deviation from observations, median (left / right) | 11.85 px (14.59 / 9.95) | Not a target; the prior and smoothing pull fingertips away from noisy observations on purpose |
+| Bone CV, output max | 9.3e-16 | Meets < 5 % (lengths fixed per recording) |
+| Bone CV, raw max (left / right) | 24.07 / 0.607 | Raw triangulation is far from rigid; left has outlier frames |
+| Valid share (left / right) | 0.896 / 0.965 | |
+| Interpolated share (left / right) | 0.210 / 0.046 | |
+| Any hand valid / both hands valid | 0.987 / 0.874 | |
+| Jitter, raw (left / right) | 63.9 / 18.0 mm | |
+| Jitter, smoothed (left / right, mean) | 5.45 / 2.62 mm (4.04) | |
+| Median wrist depth (left / right) | 0.353 / 0.337 m | |
+| p99 joint-to-wrist distance | 0.142 m (max 0.153) | Plausible hand size, no exploded skeletons |
+| Detection fps (two views) | 11.5 (19.7 on the MANO run) | Shared PC: the two runs differ only in load |
+| Processing fps, without MANO | 8.3 (12.7 on the MANO run) | |
+| MANO fit (both hands, 3600 frames) | 653 s, about 91 ms per hand-frame | Slower than the ~35 ms estimate |
+| MANO rmse (left / right) | 8.94 / 6.83 mm | |
+| MANO valid share (left / right) | 0.896 / 0.965 | Same frames as the joints |
+
+`--mano` does not change `joints.parquet`: the maximum absolute difference between the two runs is 0.0.
+
+Notes on the raw reprojection:
+- The pooled median meets the target, but the left hand alone does not, and the p90 values are well above 3 px.
+- The calibration round trip is exact, so the residual is not a calibration problem. At 0.25-0.35 m the two cameras see the hand 23° apart, and MediaPipe's per-view landmarks disagree by about 5 px on the palm and 25-45 px on the fingertips. The residual is therefore a property of the 2-D model's view dependence.
+
+In the review video, the skeletons lie on the hands in confident frames (frame 3599: both hands). Low-confidence frames show a partial or degenerate left skeleton (first clip frame, mean conf 0.28). Where a hand is half hidden (the right hand on the bucket rim at frame 1800), the frame is invalid.
+
+### Known limitations
+
+- MediaPipe's handedness label is unreliable. Hand identity comes from position plus continuity.
+- When the two views disagree, the fingertips mostly come from the 3-D prior, not from stereo.
+- Frame 0 of each part is skipped.
+- Wall-clock and fps figures come from a shared PC with other jobs running, so they vary between runs (11.5 vs 19.7 detection fps on the same clip).
+
+Next step: stereo-inertial odometry (Basalt / OpenVINS / ORB-SLAM3) from `*_imu.csv` + `*_calibration_imu.yaml` to place the hands in world coordinates; then one pass per video with the blur pipeline (BUILD_PLAN 1.4).
