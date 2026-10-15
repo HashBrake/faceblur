@@ -374,37 +374,57 @@ class Tracker:
             return tracks
         tracks = sorted(tracks, key=lambda t: t.first)
         alive = list(tracks)
+        # Each track's first and last frame, kept here instead of taking the
+        # min and max of its detections at every comparison. A merge adds only
+        # frames after a.last, so a's first never moves and only its last does.
+        first_of = {id(t): t.first for t in alive}
+        last_of = {id(t): t.last for t in alive}
+        # A track that found nothing to join keeps finding nothing: what it is
+        # compared with only loses members, and nothing it is judged on (its
+        # own detections, each candidate's first detection) changes. Only the
+        # track that just took a piece needs looking at again. This gives the
+        # same merges in the same order as rescanning every track after every
+        # merge, which on footage with thousands of tracks took over 12 hours.
+        settled: set[int] = set()
         merged = True
         while merged:
             merged = False
-            alive.sort(key=lambda t: t.last)
+            alive.sort(key=lambda t: last_of[id(t)])
             for a in alive:
-                if a.confirmed < self.continue_after or not self._sure(a):
+                if id(a) in settled:
                     continue
+                if a.confirmed < self.continue_after or not self._sure(a):
+                    settled.add(id(a))
+                    continue
+                a_last = last_of[id(a)]
                 best, best_score = None, 0.0
                 for b in alive:
-                    if b is a or b.first <= a.last or b.first - a.last - 1 > self.stitch_gap:
+                    b_first = first_of[id(b)]
+                    if b is a or b_first <= a_last or b_first - a_last - 1 > self.stitch_gap:
                         continue
-                    pred = self._predict(a, b.first)
-                    first = b.dets[b.first]
+                    pred = self._predict(a, b_first)
+                    first = b.dets[b_first]
                     size = max(pred.long_side, first.long_side)
                     if size <= 0 or min(pred.long_side, first.long_side) / size < 0.5:
                         continue
                     dist = math.hypot(pred.cx - first.cx, pred.cy - first.cy)
-                    gate = size + self.stitch_slack * (b.first - a.last)
+                    gate = size + self.stitch_slack * (b_first - a_last)
                     if dist > gate:
                         continue
                     score = 1.0 - dist / gate
                     if score > best_score:
                         best, best_score = b, score
-                if best is not None:
-                    a.dets.update(best.dets)
-                    a.confirmed += best.confirmed
-                    a.last_confirmed = max(a.last_confirmed, best.last_confirmed)
-                    a.best_conf = max(a.best_conf, best.best_conf)
-                    alive.remove(best)
-                    merged = True
-                    break
+                if best is None:
+                    settled.add(id(a))
+                    continue
+                a.dets.update(best.dets)
+                a.confirmed += best.confirmed
+                a.last_confirmed = max(a.last_confirmed, best.last_confirmed)
+                a.best_conf = max(a.best_conf, best.best_conf)
+                last_of[id(a)] = max(a_last, last_of[id(best)])
+                alive.remove(best)
+                merged = True
+                break
         return alive
 
     def _extend_backwards(self, kept, per_frame, weak, all_tracks) -> None:
