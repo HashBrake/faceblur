@@ -45,3 +45,9 @@ cloud/*.env
 
 # MANO hand models: licensed, never committed
 cloud/mano/
+
+# The orchestrator's session files. A hook in there must never reach main.
+.claude/
+
+# Downloaded binaries such as rclone, fetched per machine, never committed.
+tools/
