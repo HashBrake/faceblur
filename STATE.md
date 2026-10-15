@@ -1,13 +1,17 @@
 # STATE, handover notes
 
-Last updated 2026-10-16 00:20. **The blur run is nearly done**: 8 RTX 5090
-VMs since 2026-10-14 18:20; slices 1, 3 and 4 done and their VMs deleted,
-slices 2 and 7 done and waiting for deletion (the console session ended
-23:00 and needs the owner to sign in), slices 0, 5 and 6 running, expected
-done about 04:00 to 05:00. The 9 cut-off sources are blurring on the pilot
-VM. Then delivery, links and cleanup. In parallel, the partner's hand toolkit
-(EgoSmith, HaWoR + MANO) is in a pilot on the same VM; if it looks good, 2 to
-3 h of footage goes through it for a showcase link. "The production run"
+Last updated 2026-10-16 03:25. **All eight blur slices are done** (8 RTX 5090
+VMs, 2026-10-14 18:20 to 2026-10-16 01:45) and all eight VMs are deleted,
+the last three through the API. Left on the cloud: `faceblur-hands-pilot`,
+re-running the 2 cut-off videos of `AZER76400FF_19700101_000137` (the
+other 7 cut-off videos are done). The left one hung again in the stitch
+step after 1.7 h; the step was made incremental (see "The production run"),
+the left job killed at 03:02, and it re-runs with the new code once the
+right one finishes. Then: check every video
+has a record, delivery, the blurred link, cleanup. In parallel, the partner's
+hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
+to show yet (see "The hand toolkit"); four build sessions run locally
+("Build sessions from the build plan"). "The production run"
 below is the live work and is read first.
 `BUILD_PLAN_PROCESSING_AND_STORAGE.md` (2026-10-16) is the plan for after this run:
 better processing at lower compute, and HEVC/Parquet hot storage.
@@ -131,14 +135,14 @@ to 250 on request.
 
 | VM | IP | Slice |
 |---|---|---|
-| faceblur-5090-1 | 116.118.92.106 | 0/8 |
+| ~~faceblur-5090-1~~ | 116.118.92.106 | 0/8, done 2026-10-16 00:33 (its cut-off video is on the pilot VM), deleted with its volume |
 | ~~faceblur-5090-3~~ | 116.118.92.82 | 1/8, done 2026-10-15 21:46 (its one cut-off video is on the pilot VM), deleted with its volume |
-| faceblur-5090-8 | 116.118.92.84 | 2/8 |
+| ~~faceblur-5090-8~~ | 116.118.92.84 | 2/8, done 2026-10-15 23:42 (its cut-off videos are on the pilot VM), deleted with its volume 2026-10-16 |
 | ~~faceblur-5090-b-1~~ | 116.118.92.112 | 3/8, done 2026-10-15 21:35, deleted with its volume |
 | ~~faceblur-5090-b-2~~ | 116.118.92.109 | 4/8, done 2026-10-15 21:49 (its two cut-off videos are on the pilot VM), deleted with its volume |
-| faceblur-5090-b-3 | 116.118.92.113 | 5/8 |
-| faceblur-5090-b-4 | 116.118.92.111 | 6/8 |
-| faceblur-5090-c | 116.118.92.114 | 7/8 |
+| ~~faceblur-5090-b-3~~ | 116.118.92.113 | 5/8, done 2026-10-16 01:45 (its one failure is the cut-off FF_000137 right, on the pilot VM), deleted with its volume through the API |
+| ~~faceblur-5090-b-4~~ | 116.118.92.111 | 6/8, done 2026-10-16 01:38 (38/38, no failures), deleted with its volume through the API |
+| ~~faceblur-5090-c~~ | 116.118.92.114 | 7/8, done 2026-10-15 23:49, deleted with its volume 2026-10-16 |
 
 Measured on a 5090: detection 17.4, 21.9, 24.8 frames a second at 4, 6, 8
 processes; GPU 77 to 80 percent busy at 8 workers, load about 9 of 24 cores.
@@ -160,7 +164,13 @@ slices also try them and log a failure; those failures are expected. Delete
 stitch step (fixed in 1e62b27, deployed by docker cp into the running
 containers; any new container from image `:3` needs the same `docker cp`, which the
 pilot VM's first did not get, and lost 2 h on the same pair). The pair is in
-the cut-off list too, so the pilot VM re-runs it.
+the cut-off list too, so the pilot VM re-runs it. 2026-10-16: with that fix the
+left one still sat 1.7 h in the stitch step, which re-sorted every track and
+walked all of them after each merge. Now it keeps a heap of the tracks still
+to look at and finds candidates by first frame (same merges, same order and
+ties, tested against the plain version in `tests/test_stitch.py`; 30k+
+tracks in about 30 s). Deployed by docker cp to the pilot container
+(track.py md5 `0511904e5075`); new containers need the same.
 
 Hand toolkit pilot (2026-10-15): VM `faceblur-hands-pilot`, 116.118.92.130, same
 flavor, created 14:20; delete it with its volume when the pilot is done.
@@ -168,6 +178,35 @@ flavor, created 14:20; delete it with its volume when the pilot is done.
 To remove when the run is delivered: the eight VMs with their volumes, subnet
 `faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
 `faceblur_greennode` in the console.
+
+### Build sessions from the build plan (2026-10-16)
+
+Four autonomous Claude Code sessions, one per part of
+`BUILD_PLAN_PROCESSING_AND_STORAGE.md`, each in its own git worktree and
+branch, all from main 3eb0100, local PC only (no cloud):
+
+| Session | Worktree | Branch | Kickoff prompt |
+|---|---|---|---|
+| A robustness (1.1) | `D:\Claude Projects\faceblur-robustness` | `build/robustness` | `D:\Claude Projects\kickoffs\A_robustness.txt` |
+| B blur speed (1.2) | `D:\Claude Projects\faceblur-blur-speed` | `build/blur-speed` | `...\kickoffs\B_blur-speed.txt` |
+| C stereo hands (1.3) | `D:\Claude Projects\faceblur-stereo-hands` | `build/stereo-hands` | `...\kickoffs\C_stereo-hands.txt` |
+| D hot storage (2) | `D:\Claude Projects\faceblur-hot-storage` | `build/hot-storage` | `...\kickoffs\D_hot-storage.txt` |
+
+Each worktree has the orchestration `CLAUDE.md` (Fable orchestrates, Opus
+builders commit) and its own PLAN/STATUS/DECISIONS/BUILD_REPORT ledgers; these
+are excluded through `.git/info/exclude`, so they never reach a commit. They
+share one GPU through `D:\Claude Projects\gpu_lock.py`. Merge order
+afterwards: A, B, D, C (A, B and D all touch `faceblur/` and `cli.py`; C is a
+new package). Items 1.4 (one pass) and 1.5 (hardware) wait for these.
+
+Cloud GPU for the sessions (owner, 2026-10-16): each may run one VM at a
+time, named `faceblur-dev-<a|b|c|d>-N`, created and deleted only through
+`GN_NAME_PREFIX=faceblur-dev-<x>- cloud/gn_api.py` (the prefix makes the
+script refuse every other server), from `cloud/vm_template_5090.json`;
+budget 24 VM-hours per session; this session's 10-minute check deletes any
+faceblur-dev VM older than 24 h. The addenda pasted into the running sessions
+are `D:\Claude Projects\kickoffs\cloud_addendum_<X>.txt`. `vm_bootstrap.sh`
+no longer copies the `GN_*` API keys onto a VM.
 
 ### The hand toolkit (EgoSmith, 2026-10-15)
 
@@ -194,7 +233,14 @@ licence later ("ignore the licensing for now").
   (`AZER76400EV_19700105_003108`, part 1), started 2026-10-16 00:13 while the
   VM also blurs. PyTorch 2.6+ refuses HaWoR's checkpoint by default
   (`weights_only`); the official file loads with
-  `-e TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`. Result pending.
+  `-e TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`. Result 2026-10-16 01:00: ran end to end
+  (13.5 fps end to end, 21 fps HaWoR, GPU shared with blurring); a hand in
+  67 % (left) and 82 % (right) of frames. **Not good enough to show**: drawn
+  through the calibration, skeletons come out ~5x too small, and hands holding
+  tools are often missed. Likely cause: the fisheye image goes into HaWoR,
+  which assumes a pinhole camera, with only the focal length. Next: undistort
+  to pinhole before the toolkit; ask EgoSmith how they run it on Orbbec
+  footage. The showcase waits for a good result.
 - The owner asked (2026-10-16): if positive, run 2 to 3 h of left videos from
   different devices, add a version with the skeleton over the blurred
   footage, and publish them on a separate link (signed, 7 days, unless the
@@ -257,12 +303,16 @@ sign in again**. The run itself does not delete the instance when it ends.
 
 ### Next, in order
 
-1. **Console sign-in** (owner): sessions last about 12 h whatever is done in
-   them. Then delete the finished VMs (`faceblur-5090-8` slice 2,
-   `faceblur-5090-c` slice 7, and the rest as they finish) with "Delete all
-   attached volumes" ticked. `cloud/gn_api.py` can do it without the console
-   once an IAM service account's `GN_CLIENT_ID`/`GN_CLIENT_SECRET` are in
-   `cloud/greennode.env` (the owner has to create the account).
+1. **Delete finished VMs through the API** (working since 2026-10-16 01:30):
+   `py -3.12 cloud/gn_api.py list` / `delete <name>` (deletes volumes too,
+   refuses names not starting with `faceblur-`). The IAM service account
+   `faceblur-automation` (the owner made it, with full access) has its
+   `GN_CLIENT_ID`/`GN_CLIENT_SECRET` and `GN_PORTAL_USER_ID=110156` in
+   `cloud/greennode.env`. The console (12 h sessions) is no longer needed for
+   this. Creating: `py -3.12 cloud/gn_api.py create NAME --like RUNNING_VM [--apply]`
+   copies a running VM's setup (dry run without `--apply`; not yet run for
+   real), then `cloud/vm_bootstrap.sh IP k/n setup run`. The API showed the
+   5090 flavour with `remainingVms: 1` on 2026-10-16: ask GreenNode first.
 2. A slice's failures are fine to leave when every one is in the cut-off list
    (`faceblur/in_repaired/`, blurred by the pilot VM): stop its container
    with `docker update --restart=no faceblur && docker stop faceblur` so it

@@ -14,6 +14,8 @@ fast, which is when the detectors miss.
 """
 from __future__ import annotations
 
+import bisect
+import heapq
 import math
 from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence
@@ -226,7 +228,10 @@ class Tracker:
 
     def _predict(self, t: Track, frame: int) -> Detection:
         """Where the face should be at `frame`: its own motion plus the camera's."""
-        frames = sorted(t.dets)
+        return self._predict_from(t, sorted(t.dets)[-2:], frame)
+
+    def _predict_from(self, t: Track, frames: list[int], frame: int) -> Detection:
+        """`_predict`, given the track's last one or two frames in order."""
         last = t.dets[frames[-1]]
         cx, cy = self._camera(frames[-1], frame)
         if len(frames) < 2:
@@ -373,58 +378,70 @@ class Tracker:
         if self.stitch_gap <= 0 or len(tracks) < 2:
             return tracks
         tracks = sorted(tracks, key=lambda t: t.first)
-        alive = list(tracks)
-        # Each track's first and last frame, kept here instead of taking the
-        # min and max of its detections at every comparison. A merge adds only
-        # frames after a.last, so a's first never moves and only its last does.
-        first_of = {id(t): t.first for t in alive}
-        last_of = {id(t): t.last for t in alive}
+        # The order the plain version scanned in: by last frame, a track that
+        # just took a piece ahead of those already ending there, and otherwise
+        # by first frame. Each track's place is (last, seq); a merge gives the
+        # track a new place, with a seq below every earlier one.
+        first_of = {id(t): t.first for t in tracks}
+        place = {id(t): (t.last, i) for i, t in enumerate(tracks)}
+        # Tracks by first frame, so a track's candidates, which start within
+        # stitch_gap frames of its end, are found without looking at the rest.
+        starts = [first_of[id(t)] for t in tracks]
+        dead: set[int] = set()
         # A track that found nothing to join keeps finding nothing: what it is
         # compared with only loses members, and nothing it is judged on (its
         # own detections, each candidate's first detection) changes. Only the
-        # track that just took a piece needs looking at again. This gives the
-        # same merges in the same order as rescanning every track after every
-        # merge, which on footage with thousands of tracks took over 12 hours.
-        settled: set[int] = set()
-        merged = True
-        while merged:
-            merged = False
-            alive.sort(key=lambda t: last_of[id(t)])
-            for a in alive:
-                if id(a) in settled:
+        # track that just took a piece needs looking at again, so each turn
+        # takes the first track not yet looked at. This gives the same merges
+        # in the same order as rescanning every track after every merge, which
+        # on footage with thousands of tracks took over 12 hours, and as
+        # re-sorting them after every merge, which took hours on more.
+        todo = [(place[id(t)], i) for i, t in enumerate(tracks)]
+        heapq.heapify(todo)
+        merges = 0
+        while todo:
+            key, i = heapq.heappop(todo)
+            a = tracks[i]
+            if id(a) in dead or place[id(a)] != key:
+                continue
+            if a.confirmed < self.continue_after or not self._sure(a):
+                continue
+            a_last = key[0]
+            tail = heapq.nlargest(2, a.dets)[::-1]
+            best, best_score = None, 0.0
+            lo = bisect.bisect_right(starts, a_last)
+            hi = bisect.bisect_right(starts, a_last + 1 + self.stitch_gap)
+            for j in range(lo, hi):
+                b = tracks[j]
+                if b is a or id(b) in dead:
                     continue
-                if a.confirmed < self.continue_after or not self._sure(a):
-                    settled.add(id(a))
+                b_first = first_of[id(b)]
+                pred = self._predict_from(a, tail, b_first)
+                first = b.dets[b_first]
+                size = max(pred.long_side, first.long_side)
+                if size <= 0 or min(pred.long_side, first.long_side) / size < 0.5:
                     continue
-                a_last = last_of[id(a)]
-                best, best_score = None, 0.0
-                for b in alive:
-                    b_first = first_of[id(b)]
-                    if b is a or b_first <= a_last or b_first - a_last - 1 > self.stitch_gap:
-                        continue
-                    pred = self._predict(a, b_first)
-                    first = b.dets[b_first]
-                    size = max(pred.long_side, first.long_side)
-                    if size <= 0 or min(pred.long_side, first.long_side) / size < 0.5:
-                        continue
-                    dist = math.hypot(pred.cx - first.cx, pred.cy - first.cy)
-                    gate = size + self.stitch_slack * (b_first - a_last)
-                    if dist > gate:
-                        continue
-                    score = 1.0 - dist / gate
-                    if score > best_score:
-                        best, best_score = b, score
-                if best is None:
-                    settled.add(id(a))
+                dist = math.hypot(pred.cx - first.cx, pred.cy - first.cy)
+                gate = size + self.stitch_slack * (b_first - a_last)
+                if dist > gate:
                     continue
-                a.dets.update(best.dets)
-                a.confirmed += best.confirmed
-                a.last_confirmed = max(a.last_confirmed, best.last_confirmed)
-                a.best_conf = max(a.best_conf, best.best_conf)
-                last_of[id(a)] = max(a_last, last_of[id(best)])
-                alive.remove(best)
-                merged = True
-                break
+                score = 1.0 - dist / gate
+                # Equal scores go to the track the plain scan met first.
+                if score > best_score or (best is not None and score == best_score
+                                          and place[id(b)] < place[id(best)]):
+                    best, best_score = b, score
+            if best is None:
+                continue
+            a.dets.update(best.dets)
+            a.confirmed += best.confirmed
+            a.last_confirmed = max(a.last_confirmed, best.last_confirmed)
+            a.best_conf = max(a.best_conf, best.best_conf)
+            dead.add(id(best))
+            merges += 1
+            place[id(a)] = (max(a_last, place[id(best)][0]), -merges)
+            heapq.heappush(todo, (place[id(a)], i))
+        alive = [t for t in tracks if id(t) not in dead]
+        alive.sort(key=lambda t: place[id(t)])
         return alive
 
     def _extend_backwards(self, kept, per_frame, weak, all_tracks) -> None:

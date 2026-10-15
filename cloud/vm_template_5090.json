@@ -1,0 +1,17 @@
+{
+  "zoneId": "HCM03-1B",
+  "flavorId": "flav-9b494ade-e4dc-4110-aa54-36fc16e76cb2",
+  "imageId": "img-5a00a285-3544-4cc6-bc9c-5378deccfacb",
+  "networkId": "net-0ebde1a4-a76d-4e59-9b49-ec5ca6b22735",
+  "subnetId": "sub-9f4e692e-aae7-46ce-8135-47fd51618afb",
+  "securityGroup": [
+    "secg-a4bbdec0-e57b-4763-a86d-85c10383c0f2"
+  ],
+  "sshKeyId": "ssh-fc28607b-10a3-4cfb-b67c-3ef7f2ad26ac",
+  "rootDiskSize": 300,
+  "rootDiskTypeId": "vtype-2fc64a6c-38e3-4f08-93a5-18018cb3ab23",
+  "encryptionVolume": false,
+  "attachFloating": true,
+  "expirePassword": false,
+  "createdFrom": "NEW"
+}
