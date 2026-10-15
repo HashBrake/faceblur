@@ -283,8 +283,10 @@ sign in again**. The run itself does not delete the instance when it ends.
    `faceblur-automation` (the owner made it, with full access) has its
    `GN_CLIENT_ID`/`GN_CLIENT_SECRET` and `GN_PORTAL_USER_ID=110156` in
    `cloud/greennode.env`. The console (12 h sessions) is no longer needed for
-   this. Creating VMs through the API is possible too (`POST
-   /v2/{projectId}/servers`, the docs list every field); not written yet.
+   this. Creating: `py -3.12 cloud/gn_api.py create NAME --like RUNNING_VM [--apply]`
+   copies a running VM's setup (dry run without `--apply`; not yet run for
+   real), then `cloud/vm_bootstrap.sh IP k/n setup run`. The API showed the
+   5090 flavour with `remainingVms: 1` on 2026-10-16: ask GreenNode first.
 2. A slice's failures are fine to leave when every one is in the cut-off list
    (`faceblur/in_repaired/`, blurred by the pilot VM): stop its container
    with `docker update --restart=no faceblur && docker stop faceblur` so it
