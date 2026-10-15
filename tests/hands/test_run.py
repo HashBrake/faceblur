@@ -22,6 +22,7 @@ N_ROWS = 70          # csv rows and video frames per camera
 RIGHT_OFFSET = 10    # right csv row 0 == left csv row 10
 START_S, DURATION_S = 0.32, 2.0  # left rows 10..69: the 60 rows both cameras cover
 FPS = 30.0
+CORRUPT_FRAME, CORRUPT_JOINT = 20, 8  # left hand, right view: joint 8 at 0.6 px disparity (~90 m deep)
 
 
 @pytest.fixture(scope="module")
@@ -88,10 +89,12 @@ def make_recording(root):
 class FakeDetector:
     """Returns both synthetic hands, projected into this view's rectified pixels with 0.3 px noise."""
 
-    def __init__(self, view, rect, rig, seed):
+    def __init__(self, view, rect, rig, seed, partner=None):
         self.view, self.rect, self.rig = view, rect, rig
         self.rng = np.random.default_rng(seed)
         self.calls = 0
+        self.partner = partner  # left-view detector: corrupt one joint against its output
+        self.last = None
 
     def detect(self, image):
         assert image.shape == (1300, 1600, 3)
@@ -99,14 +102,18 @@ class FakeDetector:
         for label, X in zip(("left", "right"), truth(self.calls)):
             uv = project_rect(self.rect, self.rig, X)[0 if self.view == "left" else 1]
             uv = uv + self.rng.normal(0, 0.3, uv.shape)
+            if self.partner is not None and label == "left" and self.calls == CORRUPT_FRAME:
+                uv[CORRUPT_JOINT] = self.partner.last[0].keypoints[CORRUPT_JOINT] - [0.6, 0.0]
             out.append(Hand2D(uv, np.full(21, 0.9), label, 0.9, X - X.mean(axis=0)))
         self.calls += 1
+        self.last = out
         return out
 
 
-def factory(rect, rig, made):
+def factory(rect, rig, made, corrupt=False):
     def make():
-        d = FakeDetector("left" if not made else "right", rect, rig, seed=len(made))
+        partner = made[0] if (made and corrupt) else None
+        d = FakeDetector("left" if not made else "right", rect, rig, seed=len(made), partner=partner)
         made.append(d)
         return d
     return make
@@ -123,7 +130,7 @@ def synthetic_run(recording, rect, rig, tmp_path_factory):
     made = []
     logs = []
     report = run_pipeline(recording, out, start_s=START_S, duration_s=DURATION_S,
-                          detector_factory=factory(rect, rig, made), log=logs.append)
+                          detector_factory=factory(rect, rig, made, corrupt=True), log=logs.append)
     return out, report, made, logs
 
 
@@ -155,6 +162,13 @@ def test_synthetic_end_to_end(synthetic_run):
     assert report["overall"]["reproj_px_median"] == o["reproj_px_median"]
     assert o["bone_cv_max"] < 1e-9  # re-constrained after smoothing: exact bone lengths
 
+    # Depth gate: the one ~90 m joint (left hand) is NaN in the raw stats; output joint 8 stays finite.
+    n_present = round(q["left"]["valid_share"] * T)  # synthetic: every frame present, none interpolated
+    assert 0 < q["left"]["implausible_joint_share"] <= 1 / (21 * n_present) + 1e-9
+    assert q["right"]["implausible_joint_share"] == 0
+    assert o["implausible_joint_share"] is not None
+    assert q["left"]["bone_cv_raw_max"] < 0.5
+
     # Parquet reproj_px is the raw stereo residual: pooled over rows where it is finite (the raw-finite
     # frames quality.py pools), its median equals quality.json's overall.reproj_px_median.
     rp = np.array(d["reproj_px"], np.float64)
@@ -169,6 +183,7 @@ def test_synthetic_end_to_end(synthetic_run):
                 errs.append(np.linalg.norm(joints[h, k] - truth(k)[h], axis=1).mean())
     assert len(errs) >= 0.9 * 2 * T
     assert np.mean(errs) < 0.005, np.mean(errs)
+    assert np.isfinite(joints[0, CORRUPT_FRAME, CORRUPT_JOINT]).all()
 
     cap = cv2.VideoCapture(str(out / "review.mp4"))
     assert cap.isOpened()

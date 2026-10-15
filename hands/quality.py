@@ -95,6 +95,7 @@ def _hand_report(h, raw) -> dict:
         "jitter_mm": jit,
         "jitter_raw_mm": jit_raw,
         "mean_conf": mean_conf,
+        "implausible_joint_share": _num(raw.get("implausible_joint_share")),
         "frames_valid": int(valid.sum()),
         "frames_total": int(T),
         "_reproj_out_frames": rp,
@@ -123,7 +124,7 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
     T = len(frames["frame"])
     report = {"clip": dict(meta), "processing_fps": fps_processing}
     any_valid = np.zeros(T, bool)
-    pooled, pooled_out, cv_maxes, jitters = [], [], [], []
+    pooled, pooled_out, cv_maxes, jitters, implausible = [], [], [], [], []
     for hand in HANDS:
         if hand not in hands:
             continue
@@ -135,6 +136,8 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
             cv_maxes.append(r["bone_cv_max"])
         if _num(r["jitter_mm"]) is not None:
             jitters.append(r["jitter_mm"])
+        if r["implausible_joint_share"] is not None:
+            implausible.append(r["implausible_joint_share"])
         report[hand] = r
     rp = np.concatenate(pooled) if pooled else np.empty(0)
     reproj_median = float(np.median(rp)) if len(rp) else None
@@ -146,6 +149,7 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
         "bone_cv_max": cv_max,
         "any_hand_valid_share": any_valid.mean() if T else None,
         "jitter_mm": float(np.mean(jitters)) if jitters else None,
+        "implausible_joint_share": float(np.mean(implausible)) if implausible else None,
         "targets": {"reproj_px_median": TARGET_REPROJ_PX_MEDIAN, "bone_cv_max": TARGET_BONE_CV_MAX},
         "pass": {
             "reproj": reproj_median is not None and reproj_median <= TARGET_REPROJ_PX_MEDIAN,

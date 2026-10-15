@@ -33,6 +33,9 @@ HANDS = ("left", "right")
 PROGRESS_EVERY = 300
 REVIEW_SIZE = (1600, 650)
 INTERPOLATED_MANO_CONF = 0.5  # interpolated frames have conf 0; the fit still needs weights
+# A hand joint seen by a head-mounted camera is within arm's reach; depths (left-camera z) outside this
+# range come from mismatched landmarks with near-zero disparity and are set to NaN after triangulation.
+DEPTH_RANGE_M = (0.1, 2.0)
 
 
 def _default_detector():
@@ -76,7 +79,7 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
                "uv_l": np.full((T, 21, 2), np.nan), "uv_r": np.full((T, 21, 2), np.nan),
                "conf_det": np.zeros((T, 21)), "row_dis": np.full((T, 21), np.nan),
                "world_l": np.full((T, 21, 3), np.nan), "world_r": np.full((T, 21, 3), np.nan),
-               "present": np.zeros(T, bool)} for h in HANDS}
+               "present": np.zeros(T, bool), "n_triangulated": 0, "n_gated": 0} for h in HANDS}
     det_seconds = 0.0
     reader = PartReader(left_mp4, right_mp4, image_size, cts)
     for t, (_, img_l, img_r) in enumerate(reader.frames(pairs)):
@@ -87,6 +90,11 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
         for hand, (i, j) in tracker.update(hl, hr).items():
             joints, _, _ = triangulate_hand(rect, hl[i], hr[j])
             r = raw[hand]
+            finite = np.isfinite(joints).all(axis=1)
+            gated = finite & ((joints[:, 2] < DEPTH_RANGE_M[0]) | (joints[:, 2] > DEPTH_RANGE_M[1]))
+            joints[gated] = np.nan
+            r["n_triangulated"] += int(finite.sum())
+            r["n_gated"] += int(gated.sum())
             r["joints"][t] = joints
             r["uv_l"][t], r["uv_r"][t] = hl[i].keypoints, hr[j].keypoints
             r["conf_det"][t] = np.minimum(hl[i].conf, hr[j].conf)
@@ -118,7 +126,9 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
                        "interpolated": interpolated,
                        "reproj_px": _reproj_px(rect, rig, joints_out, r["uv_l"], r["uv_r"])}
         raw_hands[hand] = {"joints": r["joints"],
-                           "reproj_px": _reproj_px(rect, rig, r["joints"], r["uv_l"], r["uv_r"])}
+                           "reproj_px": _reproj_px(rect, rig, r["joints"], r["uv_l"], r["uv_r"]),
+                           "implausible_joint_share": (r["n_gated"] / r["n_triangulated"]
+                                                       if r["n_triangulated"] else None)}
     frames = {"frame": np.array([p.frame_left for p in pairs], np.int64),
               "timestamp_us": np.array([p.timestamp_us for p in pairs], np.int64)}
     write_joints_parquet(out / "joints.parquet", frames,

@@ -85,6 +85,7 @@ def test_quality_report_values(tmp_path):
         assert abs(r["reproj_px"]["mean"] - np.mean(fr)) < 1e-12
         assert r["jitter_mm"] > 0 and r["jitter_raw_mm"] > 0
         assert 0.5 < r["mean_conf"] < 1
+        assert "implausible_joint_share" in r and r["implausible_joint_share"] is None
     ref_mm = np.median(np.linalg.norm(
         hands["left"]["joints"][20:, 1] - hands["left"]["joints"][20:, 0], axis=1)) * 1000
     assert abs(rep["left"]["bone_lengths_mm"][0] - ref_mm) < 1e-9
@@ -98,6 +99,7 @@ def test_quality_report_values(tmp_path):
     assert o["bone_cv_max"] < 1e-9
     assert o["targets"] == {"reproj_px_median": 3.0, "bone_cv_max": 0.05}
     assert o["pass"] == {"reproj": True, "bone_cv": True}
+    assert o["implausible_joint_share"] is None
     assert abs(o["jitter_mm"] - (rep["left"]["jitter_mm"] + rep["right"]["jitter_mm"]) / 2) < 1e-12
 
     path = tmp_path / "quality.json"
