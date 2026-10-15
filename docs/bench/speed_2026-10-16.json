@@ -1,0 +1,613 @@
+{
+ "date": "2026-10-16",
+ "baseline_commit": "3eb0100",
+ "branch_commit": "5d28803f222eb6eed28d269202f8cbfd018a622a",
+ "workers": 4,
+ "command": "cli.py FOOTAGE -o OUT --workers 4 --quarantine --second-chance 1 --report OUT\\report.json --no-progress",
+ "verify_code": "baseline 3eb0100",
+ "builds": {
+  "baseline": {
+   "settings": {
+    "mask": [
+     "face"
+    ],
+    "engine": "yunet",
+    "conf": 0.5,
+    "conf_weak": 0.4,
+    "det_sizes": [
+     1280,
+     1920
+    ],
+    "verify": true,
+    "verify_conf": 0.3,
+    "verify_iou": 0.3,
+    "confirm_on_crops": true,
+    "crop_size": 224,
+    "crop_scale": 4.0,
+    "confirm_tta": 2,
+    "verify_conf_view": 0.4,
+    "third_opinion": true,
+    "third_conf": 0.1,
+    "verify_conf_low": 0.25,
+    "conf_agree": 0.35,
+    "verify_conf_agree": 0.35,
+    "agree_max_px": 48,
+    "conf_weak_long": 0.3,
+    "established_after": 5,
+    "continue_after": 3,
+    "weak_run": 30,
+    "track_sure_conf": 0.5,
+    "tail_long": 4,
+    "stitch_gap": 45,
+    "stitch_slack": 8.0,
+    "gap_grow": 0.04,
+    "blur_shift": 8.0,
+    "verify_conf_sure": 0.3,
+    "mirror_agree": 0.2,
+    "max_face_frac": 0.15,
+    "grow_face_frac": 0.35,
+    "min_aspect": 0.4,
+    "max_aspect": 2.5,
+    "stride": 1,
+    "device": "auto",
+    "min_track": 2,
+    "max_gap": 5,
+    "tail": 2,
+    "tail_before": 6,
+    "tail_grow": 0.03,
+    "track_iou": 0.3,
+    "camera_comp": true,
+    "link_dist": 0.75,
+    "fast_shift": 10.0,
+    "max_gap_fast": 10,
+    "tail_before_max": 12,
+    "tail_trend": false,
+    "ellipse_w": 1.1,
+    "ellipse_h": 1.15,
+    "pad": 0.1,
+    "feather": 6.0,
+    "mode": "blur",
+    "strength": 6,
+    "crf": 12,
+    "preset": "fast",
+    "encoder": "auto",
+    "nvenc_cq": 16,
+    "mask_budget": 0.05,
+    "chunk_seconds": 15.0,
+    "copy_clean": true,
+    "min_copy_seconds": 2.0,
+    "encode_seconds": 5.0,
+    "nvenc_sessions": 6,
+    "hwaccel": "none",
+    "text_sizes": [
+     1920,
+     2560
+    ],
+    "text_thresh": 0.3,
+    "text_box_thresh": 0.6,
+    "text_unclip": 1.6,
+    "text_min_px": 12,
+    "text_max_frac": 0.3,
+    "text_nms": 0.5,
+    "text_min_run": 2,
+    "text_gap": 6,
+    "text_tail": 3,
+    "text_link_iou": 0.3,
+    "check_output": true,
+    "check_stride": 1,
+    "quarantine": true,
+    "quarantine_min_px": 24,
+    "second_chance": 1,
+    "second_chance_min_px": 16,
+    "hand_rule": true,
+    "hand_windows": [
+     384,
+     512
+    ],
+    "hand_conf": 0.4,
+    "hand_presence": 0.7,
+    "hand_cover": 0.5,
+    "hand_device": "auto",
+    "screen_labels": [
+     "tv",
+     "laptop",
+     "phone"
+    ],
+    "screen_conf": 0.5,
+    "screen_nms": 0.45,
+    "screen_pad": 0.06,
+    "screen_max_area": 0.12,
+    "screen_min_run": 3,
+    "screen_tail": 6,
+    "screen_gap": 12,
+    "screen_gate_min_px": 48,
+    "screen_gate_min_run": 3,
+    "zone": true,
+    "zone_window": 512,
+    "zone_stride": 1,
+    "zone_nms": 0.5,
+    "zone_top_frac": 0.15,
+    "zone_min_hand_px": 120,
+    "zone_edge_frac": 0.25,
+    "zone_scale": 1.5,
+    "zone_memory": 3.0,
+    "zone_gate_changed": 0.01,
+    "zone_cover": 0.5,
+    "zone_face_needs_hand": true,
+    "zone_face_scale": 1.6,
+    "zone_device": "auto",
+    "nms_detect": 0.35,
+    "nms_yunet": 0.3
+   },
+   "nvidia_smi_before": "4341 MiB, 8192 MiB, 7 %",
+   "total_wall_seconds": 1782.93,
+   "runs": 1,
+   "files": {
+    "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+     "wall_seconds": 413.62,
+     "detect_seconds": 131.42,
+     "encode_seconds": 109.73,
+     "check_seconds": 158.72,
+     "second_chance_seconds": 132.19,
+     "second_chance_rounds": 1,
+     "frames": 2033,
+     "quarantined": true,
+     "record_residual_faces": 2,
+     "record_residual_by_size": {
+      "40+ px": 2,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 2,
+      "residual_by_size": {
+       "40+ px": 2,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 87,
+      "frames_checked": 2033
+     },
+     "recall": null,
+     "recall_by_size": null,
+     "exposed_40": null,
+     "exposed_24_40": null,
+     "continuity": null,
+     "masked_mean": null
+    },
+    "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+     "wall_seconds": 217.11,
+     "detect_seconds": 70.1,
+     "encode_seconds": 38.81,
+     "check_seconds": 101.18,
+     "second_chance_seconds": 70.32,
+     "second_chance_rounds": 1,
+     "frames": 984,
+     "quarantined": true,
+     "record_residual_faces": 1,
+     "record_residual_by_size": {
+      "40+ px": 1,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 1,
+      "residual_by_size": {
+       "40+ px": 1,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 223,
+      "frames_checked": 984
+     },
+     "recall": 1.0,
+     "recall_by_size": {
+      "large 64+": [
+       24,
+       24
+      ],
+      "medium 32-63": [
+       28,
+       28
+      ],
+      "small <32": [
+       8,
+       8
+      ]
+     },
+     "exposed_40": 85,
+     "exposed_24_40": 55,
+     "continuity": 0.9843342036553525,
+     "masked_mean": 0.005559731934731933
+    },
+    "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+     "wall_seconds": 345.02,
+     "detect_seconds": 100.46,
+     "encode_seconds": 65.61,
+     "check_seconds": 170.93,
+     "second_chance_seconds": 116.66,
+     "second_chance_rounds": 1,
+     "frames": 938,
+     "quarantined": true,
+     "record_residual_faces": 11,
+     "record_residual_by_size": {
+      "40+ px": 8,
+      "24-40 px": 1,
+      "under 24 px": 2
+     },
+     "verify": {
+      "residual_faces": 11,
+      "residual_by_size": {
+       "40+ px": 8,
+       "24-40 px": 1,
+       "under 24 px": 2
+      },
+      "residual_max_px": 168,
+      "frames_checked": 938
+     },
+     "recall": 0.9974747474747475,
+     "recall_by_size": {
+      "large 64+": [
+       89,
+       90
+      ],
+      "medium 32-63": [
+       96,
+       96
+      ],
+      "small <32": [
+       210,
+       210
+      ]
+     },
+     "exposed_40": 65,
+     "exposed_24_40": 118,
+     "continuity": 0.9882672092234656,
+     "masked_mean": 0.02350438318330606
+    },
+    "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+     "wall_seconds": 805.91,
+     "detect_seconds": 265.08,
+     "encode_seconds": 172.64,
+     "check_seconds": 340.6,
+     "second_chance_seconds": 252.99,
+     "second_chance_rounds": 1,
+     "frames": 3971,
+     "quarantined": true,
+     "record_residual_faces": 9,
+     "record_residual_by_size": {
+      "40+ px": 3,
+      "24-40 px": 3,
+      "under 24 px": 3
+     },
+     "verify": {
+      "residual_faces": 9,
+      "residual_by_size": {
+       "40+ px": 3,
+       "24-40 px": 3,
+       "under 24 px": 3
+      },
+      "residual_max_px": 141,
+      "frames_checked": 3971
+     },
+     "recall": 0.994475138121547,
+     "recall_by_size": {
+      "large 64+": [
+       17,
+       18
+      ],
+      "medium 32-63": [
+       208,
+       210
+      ],
+      "small <32": [
+       495,
+       496
+      ]
+     },
+     "exposed_40": 404,
+     "exposed_24_40": 1172,
+     "continuity": 0.9327647551276684,
+     "masked_mean": 0.006977961925009664
+    }
+   }
+  },
+  "branch": {
+   "settings": {
+    "mask": [
+     "face"
+    ],
+    "engine": "yunet",
+    "conf": 0.5,
+    "conf_weak": 0.4,
+    "det_sizes": [
+     1280,
+     1920
+    ],
+    "verify": true,
+    "verify_conf": 0.3,
+    "verify_iou": 0.3,
+    "confirm_on_crops": true,
+    "crop_size": 224,
+    "crop_scale": 4.0,
+    "confirm_tta": 2,
+    "verify_conf_view": 0.4,
+    "third_opinion": true,
+    "third_conf": 0.1,
+    "verify_conf_low": 0.25,
+    "conf_agree": 0.35,
+    "verify_conf_agree": 0.35,
+    "agree_max_px": 48,
+    "conf_weak_long": 0.3,
+    "established_after": 5,
+    "continue_after": 3,
+    "weak_run": 30,
+    "track_sure_conf": 0.5,
+    "tail_long": 4,
+    "stitch_gap": 45,
+    "stitch_slack": 8.0,
+    "gap_grow": 0.04,
+    "blur_shift": 8.0,
+    "verify_conf_sure": 0.3,
+    "mirror_agree": 0.2,
+    "max_face_frac": 0.15,
+    "grow_face_frac": 0.35,
+    "min_aspect": 0.4,
+    "max_aspect": 2.5,
+    "stride": 1,
+    "device": "auto",
+    "min_track": 2,
+    "max_gap": 5,
+    "tail": 2,
+    "tail_before": 6,
+    "tail_grow": 0.03,
+    "track_iou": 0.3,
+    "camera_comp": true,
+    "link_dist": 0.75,
+    "fast_shift": 10.0,
+    "max_gap_fast": 10,
+    "tail_before_max": 12,
+    "tail_trend": false,
+    "ellipse_w": 1.1,
+    "ellipse_h": 1.15,
+    "pad": 0.1,
+    "feather": 6.0,
+    "mode": "blur",
+    "strength": 6,
+    "crf": 12,
+    "preset": "fast",
+    "encoder": "auto",
+    "nvenc_cq": 16,
+    "mask_budget": 0.05,
+    "chunk_seconds": 15.0,
+    "copy_clean": true,
+    "min_copy_seconds": 2.0,
+    "encode_seconds": 5.0,
+    "nvenc_sessions": 6,
+    "hwaccel": "none",
+    "text_sizes": [
+     1920,
+     2560
+    ],
+    "text_thresh": 0.3,
+    "text_box_thresh": 0.6,
+    "text_unclip": 1.6,
+    "text_min_px": 12,
+    "text_max_frac": 0.3,
+    "text_nms": 0.5,
+    "text_min_run": 2,
+    "text_gap": 6,
+    "text_tail": 3,
+    "text_link_iou": 0.3,
+    "check_output": false,
+    "check_stride": 1,
+    "quarantine": false,
+    "quarantine_min_px": 24,
+    "second_chance": 0,
+    "second_chance_min_px": 16,
+    "hand_rule": true,
+    "hand_windows": [
+     384,
+     512
+    ],
+    "hand_conf": 0.4,
+    "hand_presence": 0.7,
+    "hand_cover": 0.5,
+    "hand_device": "auto",
+    "screen_labels": [
+     "tv",
+     "laptop",
+     "phone"
+    ],
+    "screen_conf": 0.5,
+    "screen_nms": 0.45,
+    "screen_pad": 0.06,
+    "screen_max_area": 0.12,
+    "screen_min_run": 3,
+    "screen_tail": 6,
+    "screen_gap": 12,
+    "screen_gate_min_px": 48,
+    "screen_gate_min_run": 3,
+    "zone": true,
+    "zone_window": 512,
+    "zone_stride": 1,
+    "zone_nms": 0.5,
+    "zone_top_frac": 0.15,
+    "zone_min_hand_px": 120,
+    "zone_edge_frac": 0.25,
+    "zone_scale": 1.5,
+    "zone_memory": 3.0,
+    "zone_gate_changed": 0.01,
+    "zone_cover": 0.5,
+    "zone_face_needs_hand": true,
+    "zone_face_scale": 1.6,
+    "zone_device": "auto",
+    "nms_detect": 0.35,
+    "nms_yunet": 0.3
+   },
+   "nvidia_smi_before": null,
+   "total_wall_seconds": null,
+   "runs": 0,
+   "files": {
+    "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+     "wall_seconds": null,
+     "detect_seconds": null,
+     "encode_seconds": null,
+     "check_seconds": null,
+     "second_chance_seconds": null,
+     "second_chance_rounds": null,
+     "frames": null,
+     "quarantined": null,
+     "record_residual_faces": null,
+     "record_residual_by_size": null,
+     "verify": null,
+     "recall": null,
+     "recall_by_size": null,
+     "exposed_40": null,
+     "exposed_24_40": null,
+     "continuity": null,
+     "masked_mean": null
+    },
+    "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+     "wall_seconds": null,
+     "detect_seconds": null,
+     "encode_seconds": null,
+     "check_seconds": null,
+     "second_chance_seconds": null,
+     "second_chance_rounds": null,
+     "frames": null,
+     "quarantined": null,
+     "record_residual_faces": null,
+     "record_residual_by_size": null,
+     "verify": null,
+     "recall": 1.0,
+     "recall_by_size": {
+      "large 64+": [
+       24,
+       24
+      ],
+      "medium 32-63": [
+       28,
+       28
+      ],
+      "small <32": [
+       8,
+       8
+      ]
+     },
+     "exposed_40": 85,
+     "exposed_24_40": 55,
+     "continuity": 0.9843342036553525,
+     "masked_mean": 0.005559731934731933
+    },
+    "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+     "wall_seconds": null,
+     "detect_seconds": null,
+     "encode_seconds": null,
+     "check_seconds": null,
+     "second_chance_seconds": null,
+     "second_chance_rounds": null,
+     "frames": null,
+     "quarantined": null,
+     "record_residual_faces": null,
+     "record_residual_by_size": null,
+     "verify": null,
+     "recall": 0.9974747474747475,
+     "recall_by_size": {
+      "large 64+": [
+       89,
+       90
+      ],
+      "medium 32-63": [
+       96,
+       96
+      ],
+      "small <32": [
+       210,
+       210
+      ]
+     },
+     "exposed_40": 65,
+     "exposed_24_40": 118,
+     "continuity": 0.9882672092234656,
+     "masked_mean": 0.02350438318330606
+    },
+    "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+     "wall_seconds": null,
+     "detect_seconds": null,
+     "encode_seconds": null,
+     "check_seconds": null,
+     "second_chance_seconds": null,
+     "second_chance_rounds": null,
+     "frames": null,
+     "quarantined": null,
+     "record_residual_faces": null,
+     "record_residual_by_size": null,
+     "verify": null,
+     "recall": 0.994475138121547,
+     "recall_by_size": {
+      "large 64+": [
+       17,
+       18
+      ],
+      "medium 32-63": [
+       208,
+       210
+      ],
+      "small <32": [
+       495,
+       496
+      ]
+     },
+     "exposed_40": 404,
+     "exposed_24_40": 1172,
+     "continuity": 0.9327647551276684,
+     "masked_mean": 0.006977961925009664
+    }
+   }
+  }
+ },
+ "gates": {
+  "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+   "wall_reduction": null,
+   "wall_ok": null,
+   "faces40_baseline": 2,
+   "faces40_branch": null,
+   "faces40_ok": null,
+   "recall_baseline": null,
+   "recall_branch": null,
+   "recall_ok": null
+  },
+  "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+   "wall_reduction": null,
+   "wall_ok": null,
+   "faces40_baseline": 1,
+   "faces40_branch": null,
+   "faces40_ok": null,
+   "recall_baseline": 1.0,
+   "recall_branch": 1.0,
+   "recall_ok": true
+  },
+  "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+   "wall_reduction": null,
+   "wall_ok": null,
+   "faces40_baseline": 8,
+   "faces40_branch": null,
+   "faces40_ok": null,
+   "recall_baseline": 0.9974747474747475,
+   "recall_branch": 0.9974747474747475,
+   "recall_ok": true
+  },
+  "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+   "wall_reduction": null,
+   "wall_ok": null,
+   "faces40_baseline": 3,
+   "faces40_branch": null,
+   "faces40_ok": null,
+   "recall_baseline": 0.994475138121547,
+   "recall_branch": 0.994475138121547,
+   "recall_ok": true
+  }
+ },
+ "all_pass": null
+}

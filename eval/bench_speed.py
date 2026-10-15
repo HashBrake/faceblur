@@ -261,7 +261,7 @@ def step_recall() -> None:
     for side in BUILDS:
         for stem in stems():
             dst = OUT / "recall" / side / f"{stem}.json"
-            if dst.is_file():
+            if recall_current(dst, SIDE_SETTINGS[side]().to_dict()):
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not (WORK_CACHE / f"{stem}.consensus.json").is_file():
@@ -276,6 +276,16 @@ def step_recall() -> None:
                                     "--recall-one", side, stem]), cwd=REPO, env=env)
             if not dst.is_file():
                 print(f"recall: {side} {stem}: failed", flush=True)
+
+
+def recall_current(path: Path, settings: dict) -> bool:
+    """A stored recall counts only if it was scored with the side's settings now.
+
+    Later tasks edit `branch_settings`; a result from the old defaults would
+    otherwise be reported as the new build's.
+    """
+    held = load_json(path)
+    return held is not None and held.get("settings") == json.loads(json.dumps(settings))
 
 
 def recall_one(side: str, stem: str) -> int:

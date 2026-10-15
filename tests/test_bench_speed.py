@@ -97,6 +97,15 @@ def test_a_copy_without_its_sidecar_or_not_done_is_run_again(tmp_path):
     assert bench.missing(tmp_path, STEMS) == ["a", "b"]
 
 
+def test_a_stored_recall_from_other_settings_is_scored_again(tmp_path):
+    path = tmp_path / "a.json"
+    assert not bench.recall_current(path, {"conf": 0.5})
+    path.write_text(json.dumps({"recall": 0.9, "settings": {"conf": 0.5, "det_sizes": [640]}}),
+                    encoding="utf-8")
+    assert bench.recall_current(path, {"conf": 0.5, "det_sizes": (640,)})
+    assert not bench.recall_current(path, {"conf": 0.6, "det_sizes": (640,)})
+
+
 # ---------------------------------------------------------------- commands
 
 def test_the_production_command_goes_through_the_lock_with_the_production_flags(tmp_path):
