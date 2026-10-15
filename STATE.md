@@ -177,10 +177,10 @@ branch, all from main 3eb0100, local PC only (no cloud):
 
 | Session | Worktree | Branch | Kickoff prompt |
 |---|---|---|---|
-| A robustness (1.1) | `D:\Claude Projectsaceblur-robustness` | `build/robustness` | `D:\Claude Projects\kickoffs\A_robustness.txt` |
-| B blur speed (1.2) | `D:\Claude Projectsaceblur-blur-speed` | `build/blur-speed` | `...\kickoffs\B_blur-speed.txt` |
-| C stereo hands (1.3) | `D:\Claude Projectsaceblur-stereo-hands` | `build/stereo-hands` | `...\kickoffs\C_stereo-hands.txt` |
-| D hot storage (2) | `D:\Claude Projectsaceblur-hot-storage` | `build/hot-storage` | `...\kickoffs\D_hot-storage.txt` |
+| A robustness (1.1) | `D:\Claude Projects\faceblur-robustness` | `build/robustness` | `D:\Claude Projects\kickoffs\A_robustness.txt` |
+| B blur speed (1.2) | `D:\Claude Projects\faceblur-blur-speed` | `build/blur-speed` | `...\kickoffs\B_blur-speed.txt` |
+| C stereo hands (1.3) | `D:\Claude Projects\faceblur-stereo-hands` | `build/stereo-hands` | `...\kickoffs\C_stereo-hands.txt` |
+| D hot storage (2) | `D:\Claude Projects\faceblur-hot-storage` | `build/hot-storage` | `...\kickoffs\D_hot-storage.txt` |
 
 Each worktree has the orchestration `CLAUDE.md` (Fable orchestrates, Opus
 builders commit) and its own PLAN/STATUS/DECISIONS/BUILD_REPORT ledgers; these
