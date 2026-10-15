@@ -388,6 +388,28 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.error = ("Could not read this video. Check that the file is not open in "
                         "another program.")
         return record
+    # A camera stopped mid-write leaves a last packet the demuxer lists and the
+    # decoder cannot make a frame of, so every later count would be one too
+    # many. Decoding the last group of pictures once says how many frames
+    # really come out, and the run works on those. The keyframes are wanted
+    # by the write pass anyway, so the probe costs one GOP and nothing more.
+    keys = keyframes(src, times)
+    try:
+        tail = sum(1 for _ in decode_range(src, times, keys[-1], n, info, settings.hwaccel))
+    except VideoError as exc:
+        record.error = str(exc)
+        record.wall_seconds = round(time.time() - started, 2)
+        return record
+    if tail == 0 and keys[-1] == 0:
+        record.error = ("Could not read this video. Check that the file is not open in "
+                        "another program.")
+        return record
+    dropped = n - (keys[-1] + tail)
+    if dropped > 0:
+        times = times[:n - dropped]
+        n = len(times)
+        keys = [k for k in keys if k < n]
+        record.source_frames_dropped = dropped
     # Encoded segments get the rate the timestamps actually show, not the
     # nominal one from the container, so their length matches the copied
     # segments and the audio stays in step.
@@ -497,7 +519,6 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # again: a second chance writes the whole file a second time from the
     # source, never from the copy, so a face found late is blurred once and
     # not blurred twice.
-    keys = keyframes(src, times)
     min_copy = max(1, int(round(settings.min_copy_seconds * info.fps)))
     piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
     # Copied pieces must carry the same reordering delay as the encoded ones,
@@ -522,6 +543,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 break
             segments = split_long(plan_segments(masked_flags, keys, n, min_copy, copy_clean),
                                   keys, piece)
+            if record.source_frames_dropped and segments and segments[-1].copy:
+                # A stream copy of the last stretch would hand ffmpeg the
+                # damaged packet, so the stretch that ends the copy is encoded.
+                last = segments.pop()
+                segments += split_long([Segment(last.start, last.end, False)], keys, piece)
             work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
             try:
                 outcome = _write_and_join(src, out, info, times, settings, segments, per_frame,
