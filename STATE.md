@@ -143,6 +143,9 @@ work was lost); the GPU is 80 to 85 percent busy throughout.
 One VM (`b-5`) lost its GPU from the bus four minutes after boot (Xid 154) and
 again after a reboot; it was deleted and replaced, and GreenNode was told.
 
+Hand toolkit pilot (2026-10-15): VM `faceblur-hands-pilot`, 116.118.92.130, same
+flavor, created 14:20; delete it with its volume when the pilot is done.
+
 To remove when the run is delivered: the eight VMs with their volumes, subnet
 `faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
 `faceblur_greennode` in the console.
