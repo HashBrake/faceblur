@@ -384,6 +384,13 @@ class Settings:
     # Masked stretches are cut at keyframes into pieces of about this length,
     # so several workers encode them at once.
     encode_seconds: float = 5.0
+    # A keyframe every this many seconds inside each encoded piece, with no
+    # extra ones at scene cuts. The scoped second chance cuts the first copy
+    # at its keyframes, and without a set length NVENC put one only at each
+    # piece's start: on the 004100 sample 11 seeds became 684 re-encoded
+    # frames of 984 and the round saved nothing (DECISIONS D18). One second
+    # is the cadence the camera files already have.
+    encode_gop_seconds: float = 1.0
     # Concurrent NVENC encodes. GeForce drivers from 2024 allow 8; 6 is safe.
     nvenc_sessions: int = 6
     # ffmpeg hardware decode: none or cuda. Measured equal to the CPU on a
@@ -463,9 +470,12 @@ class Settings:
     # keeps the first check's verdict. The scope is a diff of the masks, not
     # of the seeds, because a seed moves masks far from its own frame through
     # stitching and gap filling (DECISIONS D06). The round was a third of the
-    # wall on every sample file, docs/bench/profile_2026-10-16.md.
+    # wall on every sample file, docs/bench/profile_2026-10-16.md. Half a
+    # second of margin: with a keyframe every second in the first copy
+    # (`encode_gop_seconds`), the snap out to its keyframes adds up to a
+    # second more on each side anyway (DECISIONS D18).
     second_chance_scope: str = "changed"
-    second_chance_margin_seconds: float = 1.0
+    second_chance_margin_seconds: float = 0.5
     # The check runs the same face detectors that produced the copy, and they
     # call the wearer's hand a face. The pipeline keeps hands out of the mask
     # with track-level rules; a check that reads one frame at a time cannot,
@@ -713,6 +723,8 @@ class Settings:
             raise SettingsError(f"hwaccel must be none or cuda, got {self.hwaccel!r}")
         if self.encode_seconds < 0 or self.nvenc_sessions < 1:
             raise SettingsError("encode_seconds must be 0 or more and nvenc_sessions at least 1")
+        if self.encode_gop_seconds <= 0:
+            raise SettingsError(f"encode_gop_seconds must be above 0, got {self.encode_gop_seconds}")
         if self.ellipse_w <= 0 or self.ellipse_h <= 0:
             raise SettingsError("ellipse_w and ellipse_h must be above 0")
         if self.pad < 0:
@@ -744,7 +756,7 @@ class Settings:
             "ellipse_w", "ellipse_h", "pad", "feather",
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
-            "nvenc_sessions", "hwaccel",
+            "encode_gop_seconds", "nvenc_sessions", "hwaccel",
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",

@@ -256,10 +256,10 @@ def test_merge_keeps_every_frame_when_nothing_was_rechecked():
 
 # ------------------------------------------------------------ the settings
 
-def test_the_scope_defaults_to_changed_with_a_second_of_margin():
+def test_the_scope_defaults_to_changed_with_half_a_second_of_margin():
     s = Settings()
     assert s.second_chance_scope == "changed"
-    assert s.second_chance_margin_seconds == 1.0
+    assert s.second_chance_margin_seconds == 0.5
     assert s.to_dict()["second_chance_scope"] == "changed"
 
 

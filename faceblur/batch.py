@@ -265,7 +265,7 @@ def encode_job(job: dict) -> dict:
     last_error = ""
     for encoder_name in encoders:
         encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
-                                 encoder_name, settings.nvenc_cq)
+                                 encoder_name, settings.nvenc_cq, settings.encode_gop_seconds)
         masked = []
         # One share per frame per kind, beside the union share. A kind that
         # first appears part way through the segment is padded back to zero,
@@ -688,6 +688,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         written["by_kind"] = merged_kind
         set_quality(written["masked"], merged_kind, written["prevented"])
         record.second_chance_reencoded_frames += sum(b - a for a, b in ranges)
+        record.second_chance_ranges += [list(r) for r in ranges]
         record.encode_seconds = round(record.encode_seconds + time.time() - t1, 2)
         record.status = STATUS_DONE
         return ranges

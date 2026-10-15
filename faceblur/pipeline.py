@@ -152,6 +152,9 @@ class AuditRecord:
     # "changed" the rest came from the first copy, and `frames_copied` keeps
     # meaning frames copied from the source, in the first write.
     second_chance_reencoded_frames: int = 0
+    # The [start, end) frame ranges those were, over all rounds. Empty when
+    # a round wrote the whole file from the source (scope "all").
+    second_chance_ranges: list = field(default_factory=list)
     second_chance_seconds: float = 0.0
     # What the source carried besides pictures, package M1. The tag names
     # only: a value can hold a location or a device serial, and this record
