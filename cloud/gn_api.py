@@ -5,6 +5,7 @@ slice can finish at night. This deletes a VM, with its volumes, the moment its
 slice is done.
 
     python cloud/gn_api.py list                      # read only: our servers
+    python cloud/gn_api.py ip faceblur-5090-1        # status and public IP
     python cloud/gn_api.py delete faceblur-5090-1    # one VM and its volumes
     python cloud/gn_api.py create faceblur-5090-d --like faceblur-5090-b-3          # dry run
     python cloud/gn_api.py create faceblur-5090-d --like vm_template_5090.json     # from the saved setup
@@ -142,6 +143,10 @@ def main() -> int:
         call("DELETE", f"{API}/{e['GN_PROJECT_ID']}/servers/{sid}", h,
              json.dumps({"deleteAllVolume": True}).encode())
         print(f"deleted {name} ({sid}) with its volumes")
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "ip":
+        t = server(e, h, sys.argv[2])
+        print(t.get("status"), *[n.get("floatingIp") for n in t.get("internalInterfaces", [])])
         return 0
     if len(sys.argv) >= 5 and sys.argv[1] == "create" and sys.argv[3] == "--like":
         name, like = sys.argv[2], sys.argv[4]
