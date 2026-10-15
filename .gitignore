@@ -45,3 +45,4 @@ cloud/*.env
 
 # MANO hand models: licensed, never committed
 cloud/mano/
+tools/
