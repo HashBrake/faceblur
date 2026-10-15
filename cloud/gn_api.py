@@ -37,6 +37,11 @@ HERE = Path(__file__).resolve().parent
 TOKEN_URL = "https://iamapis.vngcloud.vn/accounts-api/v2/auth/token"
 API = "https://hcm-3.api.vngcloud.vn/vserver/vserver-gateway/v2"
 OURS = "faceblur-"
+# A build session sets GN_NAME_PREFIX (e.g. faceblur-dev-b-) so that it can
+# create and delete only its own VMs, never the production fleet.
+SCOPE = os.environ.get("GN_NAME_PREFIX", OURS)
+if not SCOPE.startswith(OURS):
+    raise SystemExit(f"GN_NAME_PREFIX must start with {OURS}")
 
 
 def env() -> dict[str, str]:
@@ -127,8 +132,8 @@ def main() -> int:
         return 0
     if len(sys.argv) == 3 and sys.argv[1] == "delete":
         name = sys.argv[2]
-        if not name.startswith(OURS):
-            raise SystemExit(f"refusing: {name} is not one of ours ({OURS}*)")
+        if not name.startswith(SCOPE):
+            raise SystemExit(f"refusing: {name} is outside this scope ({SCOPE}*)")
         match = [s for s in servers(e, h) if s.get("name") == name]
         if len(match) != 1:
             raise SystemExit(f"{name}: {len(match)} servers by that name, nothing deleted")
@@ -139,8 +144,8 @@ def main() -> int:
         return 0
     if len(sys.argv) >= 5 and sys.argv[1] == "create" and sys.argv[3] == "--like":
         name, like = sys.argv[2], sys.argv[4]
-        if not name.startswith(OURS):
-            raise SystemExit(f"refusing: {name} is not one of ours ({OURS}*)")
+        if not name.startswith(SCOPE):
+            raise SystemExit(f"refusing: {name} is outside this scope ({SCOPE}*)")
         if any(s.get("name") == name for s in servers(e, h)):
             raise SystemExit(f"{name} already exists")
         body = create_body(e, h, name, like)
