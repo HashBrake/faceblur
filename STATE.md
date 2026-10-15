@@ -1024,25 +1024,30 @@ On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --
 | Measure | Value | Against the brief |
 |---|---|---|
 | Raw stereo reprojection, median (both hands) | 2.85 px | Meets < 3 px |
-| Raw reprojection, left hand: median / p90 | 3.74 / 8.68 px | Left hand alone misses (fewer, lower-confidence views; mean conf 0.40) |
+| Raw reprojection, left hand: median / p90 | 3.74 / 8.66 px | Left hand alone misses (fewer, lower-confidence views; mean conf 0.40) |
 | Raw reprojection, right hand: median / p90 | 2.31 / 5.91 px | Meets |
-| Output deviation from observations, median (left / right) | 11.85 px (14.59 / 9.95) | Not a target; the prior and smoothing pull fingertips away from noisy observations on purpose |
+| Output deviation from observations, median (left / right) | 11.85 px (14.58 / 9.95) | Not a target; the prior and smoothing pull fingertips away from noisy observations on purpose |
 | Bone CV, output max | 9.3e-16 | Meets < 5 % (lengths fixed per recording) |
-| Bone CV, raw max (left / right) | 24.07 / 0.607 | Raw triangulation is far from rigid; left has outlier frames |
+| Bone CV, raw max (left / right) | 1.40 / 0.607 | Raw triangulation is far from rigid; before the depth gate the left value was 24.07 |
+| Implausible (far-depth) joints gated (left / right) | 0.033 % / 0 % (0.000328 / 0.0) | Triangulated joints with depth outside 0.1-2.0 m are set to NaN |
 | Valid share (left / right) | 0.896 / 0.965 | |
 | Interpolated share (left / right) | 0.210 / 0.046 | |
 | Any hand valid / both hands valid | 0.987 / 0.874 | |
-| Jitter, raw (left / right) | 63.9 / 18.0 mm | |
-| Jitter, smoothed (left / right, mean) | 5.45 / 2.62 mm (4.04) | |
+| Jitter, raw (left / right) | 62.5 / 18.0 mm | |
+| Jitter, smoothed (left / right, mean) | 5.48 / 2.62 mm (4.05) | |
 | Median wrist depth (left / right) | 0.353 / 0.337 m | |
 | p99 joint-to-wrist distance | 0.142 m (max 0.153) | Plausible hand size, no exploded skeletons |
-| Detection fps (two views) | 11.5 (19.7 on the MANO run) | Shared PC: the two runs differ only in load |
-| Processing fps, without MANO | 8.3 (12.7 on the MANO run) | |
-| MANO fit (both hands, 3600 frames) | 653 s, about 91 ms per hand-frame | Slower than the ~35 ms estimate |
-| MANO rmse (left / right) | 8.94 / 6.83 mm | |
-| MANO valid share (left / right) | 0.896 / 0.965 | Same frames as the joints |
+| Detection fps (two views) | 14.4 (19.7 on the MANO run) | Shared PC: the two runs differ only in load |
+| Processing fps, without MANO | 8.0 (12.7 on the MANO run) | |
+| MANO fit (both hands, 3600 frames)¹ | 653 s, about 91 ms per hand-frame | Slower than the ~35 ms estimate |
+| MANO rmse (left / right)¹ | 8.94 / 6.83 mm | |
+| MANO valid share (left / right)¹ | 0.896 / 0.965 | Same frames as the joints |
 
-`--mano` does not change `joints.parquet`: the maximum absolute difference between the two runs is 0.0.
+¹ The MANO numbers are from the T11 MANO run, before the depth gate. All other numbers are from the final run (`hands_out/EV_003108_p1_600_120_final`).
+
+`--mano` does not change `joints.parquet`: in the T11 runs, the maximum absolute difference between the runs with and without `--mano` is 0.0.
+
+The depth gate changes the left-hand output a little. Against the T11 run, the left bone lengths move by at most 0.006 mm, and 38 left-hand frames (left frames 20660-20785) move by more than 1 mm (max 77 mm). The right hand, `valid` and `interpolated` are identical.
 
 Notes on the raw reprojection:
 - The pooled median meets the target, but the left hand alone does not, and the p90 values are well above 3 px.
@@ -1055,6 +1060,6 @@ In the review video, the skeletons lie on the hands in confident frames (frame 3
 - MediaPipe's handedness label is unreliable. Hand identity comes from position plus continuity.
 - When the two views disagree, the fingertips mostly come from the 3-D prior, not from stereo.
 - Frame 0 of each part is skipped.
-- Wall-clock and fps figures come from a shared PC with other jobs running, so they vary between runs (11.5 vs 19.7 detection fps on the same clip).
+- Wall-clock and fps figures come from a shared PC with other jobs running, so they vary between runs (11.5, 14.4 and 19.7 detection fps on the same clip).
 
 Next step: stereo-inertial odometry (Basalt / OpenVINS / ORB-SLAM3) from `*_imu.csv` + `*_calibration_imu.yaml` to place the hands in world coordinates; then one pass per video with the blur pipeline (BUILD_PLAN 1.4).
