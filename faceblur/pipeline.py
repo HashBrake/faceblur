@@ -92,6 +92,8 @@ class AuditRecord:
     # The source's last frame was cut off mid-write. The copy holds every frame
     # that decodes, and this says how many source frames do not.
     source_frames_dropped: int = 0
+    # The watchdog stopped the video because this stage ran past its limit.
+    stopped_in_stage: str = ""
     join_attempts: int = 0
     reorder_delay: int = 0        # source B-frame delay in frames; copies need 0
     camera_shift_p95: float = 0.0     # source pixels per frame

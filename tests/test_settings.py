@@ -108,3 +108,31 @@ def test_every_tuple_setting_survives_a_json_round_trip():
         f"{tuples} are tuples in to_dict and will come back from JSON as lists. "
         f"Convert them in to_dict, beside det_sizes")
     assert json.loads(json.dumps(recorded)) == recorded
+
+
+def test_the_watchdog_is_on_by_default_and_recorded():
+    s = Settings()
+    assert s.watchdog_seconds_per_frame == (("detecting", 1.0), ("tracking", 0.05),
+                                            ("writing", 1.0), ("checking", 1.0))
+    assert s.watchdog_min_seconds == 600.0
+    d = s.to_dict()
+    assert d["watchdog_min_seconds"] == 600.0
+    assert d["watchdog_seconds_per_frame"] == [["detecting", 1.0], ["tracking", 0.05],
+                                               ["writing", 1.0], ["checking", 1.0]]
+
+
+def test_watchdog_settings_read_back_from_json_compare_equal():
+    s = Settings(watchdog_seconds_per_frame=[["tracking", 0.1]])
+    again = Settings(watchdog_seconds_per_frame=s.to_dict()["watchdog_seconds_per_frame"])
+    assert again == s
+    assert again.watchdog_seconds_per_frame == (("tracking", 0.1),)
+
+
+@pytest.mark.parametrize("changes", [
+    {"watchdog_min_seconds": -1.0},
+    {"watchdog_seconds_per_frame": (("tracking", -0.1),)},
+    {"watchdog_seconds_per_frame": (("joining", 1.0),)},
+])
+def test_bad_watchdog_settings_are_refused(changes):
+    with pytest.raises(SettingsError):
+        Settings(**changes)

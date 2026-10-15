@@ -15,6 +15,7 @@ pipeline.py stays as the one process, one video path.
 from __future__ import annotations
 
 import multiprocessing
+import multiprocessing.connection
 import os
 import shutil
 import statistics
@@ -102,8 +103,20 @@ class PoolSubmit:
 
 
 def init_pool_worker(workers: int = 1) -> None:
-    """Pool initialiser: split the cores between workers."""
+    """Pool initialiser: split the cores between workers, and end the worker
+    when the process that started it is gone."""
     import os
+
+    # The watchdog ends a stalled video by terminating the process that holds
+    # the pool, and a terminated process cannot shut its pool down. Without
+    # this its workers would sit on GPU memory until the machine restarts.
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+        def leave_with_parent(sentinel=parent.sentinel):
+            multiprocessing.connection.wait([sentinel])
+            os._exit(1)
+
+        threading.Thread(target=leave_with_parent, daemon=True).start()
 
     global _THREADS
     _THREADS = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
@@ -471,7 +484,9 @@ def run_video(src: Path, dst: Path, settings: Settings,
     record.detections = sum(len(f) for f in strong)
     record.verified_detections = sum(1 for f in strong for d in f if d.verified)
 
-    # ---- 2. track
+    # ---- 2. track. The zone and the screen hold below count as tracking too:
+    # the watchdog times stages by these names and needs no finer ones.
+    report("tracking", 0, n)
     per_frame, tracks = tracker_for(settings).run(
         strong, weak, shifts if settings.camera_comp else None, (info.height, info.width))
     record.tracks = len(tracks)
@@ -670,6 +685,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 record.second_chance_seeds += sum(len(v) for v in seeds.values())
                 for i, dets in seeds.items():
                     strong[i] = list(strong[i]) + list(dets)
+                report("tracking", 0, n)
                 per_frame, tracks = tracker_for(settings).run(
                     strong, weak, shifts if settings.camera_comp else None,
                     (info.height, info.width))
