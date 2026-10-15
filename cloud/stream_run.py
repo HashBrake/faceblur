@@ -8,13 +8,17 @@ background. Disk use stays at a few videos per card.
 
     python cloud/stream_run.py
 
-Configuration is read from the environment (see cloud/run.env.example):
-S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, BUCKET, IN_PREFIX (default "in"),
-OUT_PREFIX (default "out"), WORK (local scratch, default /tmp/faceblur),
-WORKERS (pipeline workers per card), RUN_ARGS (extra cli.py arguments),
-GPUS (default: every card nvidia-smi lists), SHARD (k/n: this machine's
-share when n machines run at once, default 0/1), LANES (videos worked on at
-once per card, default 1).
+Configuration is read from the environment when main() starts (see
+cloud/run.env.example): S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, BUCKET,
+REMOTE (the rclone root, default vs:BUCKET; a plain directory path works as
+a local remote), IN_PREFIX (default "in"), OUT_PREFIX (default "out"), WORK
+(local scratch, default /tmp/faceblur), WORKERS (pipeline workers per card),
+RUN_ARGS (extra cli.py arguments), GPUS (default: every card nvidia-smi
+lists), SHARD (k/n: this machine's share when n machines run at once,
+default 0/1), LANES (videos worked on at once per card, default 1), RCLONE
+(the rclone binary), PIPELINE_CMD (what runs on each video, default cli.py),
+CUDA_CHECK ("0" skips the per-card CUDA probe), and QUEUE, LEASE,
+SELF_DELETE, GN_SERVER_NAME for queue mode.
 
 Two lanes keep a card busy: a video spends about half its time in steps that
 use one core and no GPU (the tracker, the zone, the encode), and on the RTX
@@ -36,6 +40,8 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 HERE = Path(__file__).resolve().parent
@@ -44,44 +50,116 @@ sys.path.insert(0, str(HERE.parent))
 from faceblur.pipeline import output_path  # noqa: E402
 from faceblur.settings import VIDEO_EXT, Settings  # noqa: E402
 
-ENV = os.environ
-BUCKET = ENV["BUCKET"]
-IN = f"vs:{BUCKET}/{ENV.get('IN_PREFIX', 'in')}"
-OUT = f"vs:{BUCKET}/{ENV.get('OUT_PREFIX', 'out')}"
-WORK = Path(ENV.get("WORK", "/tmp/faceblur"))
-WORKERS = ENV.get("WORKERS", "6")
-LANES = int(ENV.get("LANES", "1"))
-RUN_ARGS = shlex.split(ENV.get("RUN_ARGS", "--quarantine"))
 SUFFIX = Settings().suffix
 
-# rclone reads a remote called "vs" from these, so no config file holds keys.
-ENV.update({"RCLONE_CONFIG_VS_TYPE": "s3", "RCLONE_CONFIG_VS_PROVIDER": "Other",
-            "RCLONE_CONFIG_VS_ENDPOINT": ENV["S3_ENDPOINT"],
-            "RCLONE_CONFIG_VS_ACCESS_KEY_ID": ENV["S3_ACCESS_KEY"],
-            "RCLONE_CONFIG_VS_SECRET_ACCESS_KEY": ENV["S3_SECRET_KEY"]})
+
+def on(value: str) -> bool:
+    return value not in ("", "0")
+
+
+@dataclass(frozen=True)
+class Config:
+    """Everything the run reads from its environment, read once in main().
+
+    Reading it at import time made the module impossible to load in a test;
+    with it here a test can point the run at a local directory and a fake
+    pipeline, and production runs exactly as before."""
+
+    remote: str
+    in_prefix: str = "in"
+    out_prefix: str = "out"
+    work: Path = Path("/tmp/faceblur")
+    workers: str = "6"
+    lanes: int = 1
+    run_args: list = field(default_factory=lambda: ["--quarantine"])
+    gpus: int | None = None
+    shard_k: int = 0
+    shard_n: int = 1
+    rclone: str = "rclone"
+    pipeline_cmd: list = field(default_factory=lambda: [sys.executable, str(HERE.parent / "cli.py")])
+    cuda_check: bool = True
+    # Queue mode. Only stored here; the queue runner reads them.
+    queue: bool = False
+    lease: int = 1800
+    self_delete: bool = False
+    gn_server_name: str = ""
+
+    @property
+    def inp(self) -> str:
+        return f"{self.remote}/{self.in_prefix}"
+
+    @property
+    def out(self) -> str:
+        return f"{self.remote}/{self.out_prefix}"
+
+    @property
+    def tag(self) -> str:
+        return f"shard{self.shard_k}of{self.shard_n}_" if self.shard_n > 1 else ""
+
+    @property
+    def log(self) -> Path:
+        return self.work / "stream_run.log"
+
+
+def config_from_env(env: Mapping[str, str] = os.environ) -> Config:
+    if not env.get("REMOTE") and not env.get("BUCKET"):
+        raise SystemExit("stream_run: set BUCKET (the vStorage bucket) or REMOTE (an rclone root)")
+    # SHARD=k/n: this machine takes share k of n; see share().
+    k, n = (int(x) for x in env.get("SHARD", "0/1").split("/"))
+    extra = {}
+    if env.get("PIPELINE_CMD"):
+        extra["pipeline_cmd"] = shlex.split(env["PIPELINE_CMD"])
+    return Config(
+        remote=env.get("REMOTE") or f"vs:{env['BUCKET']}",
+        in_prefix=env.get("IN_PREFIX", "in"),
+        out_prefix=env.get("OUT_PREFIX", "out"),
+        work=Path(env.get("WORK", "/tmp/faceblur")),
+        workers=env.get("WORKERS", "6"),
+        lanes=int(env.get("LANES", "1")),
+        run_args=shlex.split(env.get("RUN_ARGS", "--quarantine")),
+        gpus=int(env["GPUS"]) if env.get("GPUS") else None,
+        shard_k=k, shard_n=n,
+        rclone=env.get("RCLONE") or "rclone",
+        cuda_check=env.get("CUDA_CHECK", "1") != "0",
+        queue=on(env.get("QUEUE", "0")),
+        lease=int(env.get("LEASE", "1800")),
+        self_delete=on(env.get("SELF_DELETE", "0")),
+        gn_server_name=env.get("GN_SERVER_NAME", ""),
+        **extra)
+
+
+def vs_remote(env=os.environ) -> None:
+    """rclone reads a remote called "vs" from these, so no config file holds
+    keys. A local directory remote needs none of it, so nothing is set
+    without S3_ENDPOINT."""
+    if "S3_ENDPOINT" in env:
+        env.update({"RCLONE_CONFIG_VS_TYPE": "s3", "RCLONE_CONFIG_VS_PROVIDER": "Other",
+                    "RCLONE_CONFIG_VS_ENDPOINT": env["S3_ENDPOINT"],
+                    "RCLONE_CONFIG_VS_ACCESS_KEY_ID": env["S3_ACCESS_KEY"],
+                    "RCLONE_CONFIG_VS_SECRET_ACCESS_KEY": env["S3_SECRET_KEY"]})
+
 
 log_lock = threading.Lock()
-LOG = WORK / "stream_run.log"
 
 
-def say(text: str) -> None:
+def say(cfg: Config, text: str) -> None:
     line = f"[{time.strftime('%F %T')}] {text}"
     with log_lock:
         print(line, flush=True)
-        with open(LOG, "a", encoding="utf-8") as f:
+        with open(cfg.log, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
 
-def rclone(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    r = subprocess.run(["rclone", *args, "--retries", "5", "--low-level-retries", "20"],
+def rclone(cfg: Config, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    r = subprocess.run([cfg.rclone, *args, "--retries", "5", "--low-level-retries", "20"],
                        capture_output=True, text=True)
     if check and r.returncode != 0:
         raise RuntimeError(f"rclone {' '.join(args[:2])}: {r.stderr.strip()[-500:]}")
     return r
 
 
-def listing(remote: str) -> dict[str, int]:
-    r = rclone("lsjson", remote, "--recursive", "--files-only", check=False)
+def listing(cfg: Config, remote: str) -> dict[str, int]:
+    r = rclone(cfg, "lsjson", remote, "--recursive", "--files-only", check=False)
     if r.returncode != 0:
         return {}
     return {e["Path"]: e["Size"] for e in json.loads(r.stdout or "[]")}
@@ -98,26 +176,21 @@ def record_names(rel: str) -> tuple[str, str]:
 # from one bucket without taking the same video. The shares are balanced by
 # size over the whole listing, finished videos included, so every machine and
 # every restart computes the same split.
-SHARD = ENV.get("SHARD", "0/1")
-SHARD_K, SHARD_N = (int(x) for x in SHARD.split("/"))
-TAG = f"shard{SHARD_K}of{SHARD_N}_" if SHARD_N > 1 else ""
-
-
-def share(sizes: dict[str, int]) -> set[str]:
+def share(sizes: dict[str, int], k_ours: int, n: int) -> set[str]:
     """Largest first, each to the share with the least so far; ties by path."""
-    loads = [0] * SHARD_N
+    loads = [0] * n
     taken: set[str] = set()
     for rel in sorted(sizes, key=lambda r: (-sizes[r], r)):
         k = loads.index(min(loads))
         loads[k] += sizes[rel]
-        if k == SHARD_K:
+        if k == k_ours:
             taken.add(rel)
     return taken
 
 
-def gpu_count() -> int:
-    if ENV.get("GPUS"):
-        return int(ENV["GPUS"])
+def gpu_count(cfg: Config) -> int:
+    if cfg.gpus:
+        return cfg.gpus
     r = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
                        capture_output=True, text=True, check=True)
     return len(r.stdout.split())
@@ -128,12 +201,15 @@ CUDA_CHECK = ("import onnxruntime as o, sys; "
               "sys.exit(0 if s.get_providers()[0] == 'CUDAExecutionProvider' else 1)")
 
 
-def card_works(k: int) -> bool:
+def card_works(cfg: Config, k: int) -> bool:
     """onnxruntime falls back to the CPU on a card it cannot use and says so
     only in its log. A card on the CPU runs some fifty times slower and takes
-    cores from every other card, so it gets no work at all."""
+    cores from every other card, so it gets no work at all. A test with a fake
+    pipeline has no card to probe and turns the check off."""
+    if not cfg.cuda_check:
+        return True
     r = subprocess.run([sys.executable, "-c", CUDA_CHECK, str(HERE.parent / "models" / "yunet.onnx")],
-                       env=dict(ENV, CUDA_VISIBLE_DEVICES=str(k)), capture_output=True)
+                       env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(k)), capture_output=True)
     return r.returncode == 0
 
 
@@ -145,9 +221,9 @@ def on_cuda(record: Path) -> bool:
     return all(v == "CUDAExecutionProvider" for v in compute.values())
 
 
-def fetch(rel: str, dest: Path) -> None:
+def fetch(cfg: Config, rel: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rclone("copyto", f"{IN}/{rel}", str(dest), "--multi-thread-streams", "8")
+    rclone(cfg, "copyto", f"{cfg.inp}/{rel}", str(dest), "--multi-thread-streams", "8")
 
 
 class Disk:
@@ -184,11 +260,11 @@ def lane_dir(k: int, lane: int) -> str:
     return f"gpu{k}" if lane == 0 else f"gpu{k}_{lane}"
 
 
-def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
+def card(cfg: Config, k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
          disk: Disk) -> None:
-    base = WORK / lane_dir(k, lane)
-    name = f"card {k}" + (f" lane {lane}" if LANES > 1 else "")
-    env = dict(ENV, CUDA_VISIBLE_DEVICES=str(k))
+    base = cfg.work / lane_dir(k, lane)
+    name = f"card {k}" + (f" lane {lane}" if cfg.lanes > 1 else "")
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(k))
     nxt: tuple[str, threading.Thread, list] | None = None
 
     def start_fetch() -> tuple[str, threading.Thread, list] | None:
@@ -203,7 +279,7 @@ def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
             # being worked on now never waits for it.
             err.append(disk.take(sizes[rel]))
             try:
-                fetch(rel, base / "in" / rel)
+                fetch(cfg, rel, base / "in" / rel)
             except Exception as exc:          # reported when the file is reached
                 err.append(exc)
         t = threading.Thread(target=run, daemon=True)
@@ -227,13 +303,13 @@ def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
                 log.write(f"\n=== {time.strftime('%F %T')} {rel}\n")
                 log.flush()
                 code = subprocess.run(
-                    [sys.executable, str(HERE.parent / "cli.py"), str(src), "-o", str(out_dir),
-                     "--no-progress", "--workers", WORKERS, *RUN_ARGS],
+                    [*cfg.pipeline_cmd, str(src), "-o", str(out_dir),
+                     "--no-progress", "--workers", cfg.workers, *cfg.run_args],
                     env=env, stdout=log, stderr=subprocess.STDOUT).returncode
             # The copy first, then its record: the record is what says finished.
-            rclone("copy", str(base / "out"), OUT, "--exclude", "*.json",
+            rclone(cfg, "copy", str(base / "out"), cfg.out, "--exclude", "*.json",
                    "--exclude", "faceblur_*/**", "--exclude", "*.part", "--exclude", "*.unchecked")
-            rclone("copy", str(base / "out"), OUT, "--include", "*.mp4.json")
+            rclone(cfg, "copy", str(base / "out"), cfg.out, "--include", "*.mp4.json")
             delivered, held = record_names(rel)
             if (base / "out" / held).exists():
                 status = "held back"
@@ -242,50 +318,52 @@ def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
             else:
                 status = "failed"
             tally[status] = tally.get(status, 0) + 1
-            say(f"{name}: {rel} {status} (exit {code}) in {time.time() - started:.0f}s")
+            say(cfg, f"{name}: {rel} {status} (exit {code}) in {time.time() - started:.0f}s")
             record = base / "out" / (held if status == "held back" else delivered)
             if status != "failed" and not on_cuda(record):
-                say(f"{name}: STOPPED, {rel} ran on the CPU. The card takes no more work.")
+                say(cfg, f"{name}: STOPPED, {rel} ran on the CPU. The card takes no more work.")
                 return
         except Exception as exc:
             tally["failed"] = tally.get("failed", 0) + 1
-            say(f"{name}: {rel} failed: {exc}")
+            say(cfg, f"{name}: {rel} failed: {exc}")
         finally:
             src.unlink(missing_ok=True)
             shutil.rmtree(base / "out", ignore_errors=True)
             disk.give(reserved)
 
 
-def main() -> int:
-    WORK.mkdir(parents=True, exist_ok=True)
+def main(argv=None) -> int:
+    cfg = config_from_env()
+    vs_remote()
+    cfg.work.mkdir(parents=True, exist_ok=True)
     # The recorder's empty stubs (24 bytes) hold no frames and are delivered
     # as they are; leaving them out also keeps the share split the same on a
     # machine that lists the bucket while they are still arriving.
-    inputs = {p: s for p, s in listing(IN).items()
+    inputs = {p: s for p, s in listing(cfg, cfg.inp).items()
               if PurePosixPath(p).suffix.lower() in VIDEO_EXT and s >= 1024}
-    outputs = listing(OUT)
-    ours = share(inputs)
+    outputs = listing(cfg, cfg.out)
+    ours = share(inputs, cfg.shard_k, cfg.shard_n)
     todo = [p for p in inputs if p in ours
             and not any(r in outputs for r in record_names(p))]
     gb = sum(inputs[p] for p in todo) / 1e9
-    n = gpu_count()
-    say(f"{len(inputs)} videos in {IN}, {len(inputs) - len(todo)} finished, "
-        f"{len(todo)} to do ({gb:.0f} GB) on {n} cards, {LANES} lanes of {WORKERS} workers each, "
-        f"{' '.join(RUN_ARGS)}")
+    n = gpu_count(cfg)
+    say(cfg, f"{len(inputs)} videos in {cfg.inp}, {len(inputs) - len(todo)} finished, "
+        f"{len(todo)} to do ({gb:.0f} GB) on {n} cards, {cfg.lanes} lanes of {cfg.workers} workers each, "
+        f"{' '.join(cfg.run_args)}")
     jobs: "queue.Queue[str]" = queue.Queue()
     for p in sorted(todo, key=lambda p: inputs[p], reverse=True):
         jobs.put(p)
     tally: dict = {}
-    cards = [k for k in range(n) if card_works(k)]
+    cards = [k for k in range(n) if card_works(cfg, k)]
     for k in sorted(set(range(n)) - set(cards)):
-        say(f"card {k}: CUDA does not work on it, it takes no work")
+        say(cfg, f"card {k}: CUDA does not work on it, it takes no work")
     if not cards:
-        say("no card works with CUDA, stopping")
+        say(cfg, "no card works with CUDA, stopping")
         return 2
-    disk = Disk(WORK)
-    say(f"work disk: {disk.room / 1e9:.0f} GB to use at {WORK}")
-    threads = [threading.Thread(target=card, args=(k, lane, jobs, tally, inputs, disk), daemon=True)
-               for k in cards for lane in range(LANES)]
+    disk = Disk(cfg.work)
+    say(cfg, f"work disk: {disk.room / 1e9:.0f} GB to use at {cfg.work}")
+    threads = [threading.Thread(target=card, args=(cfg, k, lane, jobs, tally, inputs, disk), daemon=True)
+               for k in cards for lane in range(cfg.lanes)]
     started = time.time()
     for t in threads:
         t.start()
@@ -293,19 +371,19 @@ def main() -> int:
         next(t for t in threads if t.is_alive()).join(timeout=600)
         hours = (time.time() - started) / 3600
         finished = sum(tally.values())
-        say(f"progress: {finished}/{len(todo)} after {hours:.2f} h, {tally}")
-        rclone("copyto", str(LOG), f"{OUT}/_logs/{TAG}stream_run.log", check=False)
+        say(cfg, f"progress: {finished}/{len(todo)} after {hours:.2f} h, {tally}")
+        rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
     for k in range(n):
-        for lane in range(LANES):
+        for lane in range(cfg.lanes):
             d = lane_dir(k, lane)
-            rclone("copyto", str(WORK / d / "cli.log"), f"{OUT}/_logs/{TAG}{d}_cli.log",
+            rclone(cfg, "copyto", str(cfg.work / d / "cli.log"), f"{cfg.out}/_logs/{cfg.tag}{d}_cli.log",
                    check=False)
-    marker = WORK / "DONE"
+    marker = cfg.work / "DONE"
     marker.write_text(json.dumps({"tally": tally, "todo": len(todo),
                                   "hours": round((time.time() - started) / 3600, 2)}))
-    rclone("copyto", str(marker), f"{OUT}/_logs/{TAG}DONE.json", check=False)
-    rclone("copyto", str(LOG), f"{OUT}/_logs/{TAG}stream_run.log", check=False)
-    say(f"finished: {tally}")
+    rclone(cfg, "copyto", str(marker), f"{cfg.out}/_logs/{cfg.tag}DONE.json", check=False)
+    rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
+    say(cfg, f"finished: {tally}")
     return 0 if tally.get("failed", 0) == 0 else 1
 
 
