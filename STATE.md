@@ -277,12 +277,14 @@ sign in again**. The run itself does not delete the instance when it ends.
 
 ### Next, in order
 
-1. **Console sign-in** (owner): sessions last about 12 h whatever is done in
-   them. Then delete the finished VMs (`faceblur-5090-8` slice 2,
-   `faceblur-5090-c` slice 7, and the rest as they finish) with "Delete all
-   attached volumes" ticked. `cloud/gn_api.py` can do it without the console
-   once an IAM service account's `GN_CLIENT_ID`/`GN_CLIENT_SECRET` are in
-   `cloud/greennode.env` (the owner has to create the account).
+1. **Delete finished VMs through the API** (working since 2026-10-16 01:30):
+   `py -3.12 cloud/gn_api.py list` / `delete <name>` (deletes volumes too,
+   refuses names not starting with `faceblur-`). The IAM service account
+   `faceblur-automation` (the owner made it, with full access) has its
+   `GN_CLIENT_ID`/`GN_CLIENT_SECRET` and `GN_PORTAL_USER_ID=110156` in
+   `cloud/greennode.env`. The console (12 h sessions) is no longer needed for
+   this. Creating VMs through the API is possible too (`POST
+   /v2/{projectId}/servers`, the docs list every field); not written yet.
 2. A slice's failures are fine to leave when every one is in the cut-off list
    (`faceblur/in_repaired/`, blurred by the pilot VM): stop its container
    with `docker update --restart=no faceblur && docker stop faceblur` so it
