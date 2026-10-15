@@ -1,10 +1,13 @@
 # STATE, handover notes
 
-Last updated 2026-10-16 01:50. **All eight blur slices are done** (8 RTX 5090
+Last updated 2026-10-16 03:25. **All eight blur slices are done** (8 RTX 5090
 VMs, 2026-10-14 18:20 to 2026-10-16 01:45) and all eight VMs are deleted,
 the last three through the API. Left on the cloud: `faceblur-hands-pilot`,
-re-running the 2 cut-off videos of `AZER76400FF_19700101_000137` with the
-stitch fix (the other 7 cut-off videos are done). Then: check every video
+re-running the 2 cut-off videos of `AZER76400FF_19700101_000137` (the
+other 7 cut-off videos are done). The left one hung again in the stitch
+step after 1.7 h; the step was made incremental (see "The production run"),
+the left job killed at 03:02, and it re-runs with the new code once the
+right one finishes. Then: check every video
 has a record, delivery, the blurred link, cleanup. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
@@ -161,7 +164,13 @@ slices also try them and log a failure; those failures are expected. Delete
 stitch step (fixed in 1e62b27, deployed by docker cp into the running
 containers; any new container from image `:3` needs the same `docker cp`, which the
 pilot VM's first did not get, and lost 2 h on the same pair). The pair is in
-the cut-off list too, so the pilot VM re-runs it.
+the cut-off list too, so the pilot VM re-runs it. 2026-10-16: with that fix the
+left one still sat 1.7 h in the stitch step, which re-sorted every track and
+walked all of them after each merge. Now it keeps a heap of the tracks still
+to look at and finds candidates by first frame (same merges, same order and
+ties, tested against the plain version in `tests/test_stitch.py`; 30k+
+tracks in about 30 s). Deployed by docker cp to the pilot container
+(track.py md5 `0511904e5075`); new containers need the same.
 
 Hand toolkit pilot (2026-10-15): VM `faceblur-hands-pilot`, 116.118.92.130, same
 flavor, created 14:20; delete it with its volume when the pilot is done.

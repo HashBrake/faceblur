@@ -109,3 +109,40 @@ def test_thousands_of_tracks_in_seconds():
     start = time.time()
     tracker()._stitch(tracks)
     assert time.time() - start < 60
+
+
+def twins(seed):
+    """Every track twice, so equal scores decide which one is taken."""
+    out = []
+    for t in pieces(seed, faces=4, frames=600):
+        out.append(t)
+        out.append(Track(t.id + 10_000, dict(t.dets), confirmed=t.confirmed,
+                         last_confirmed=t.last_confirmed, best_conf=t.best_conf))
+    return out
+
+
+def test_equal_scores_go_where_the_plain_version_sent_them():
+    for seed in range(20):
+        for kw in ({}, {"camera": True}, {"sure_conf": 0.0, "stitch_gap": 60}):
+            t = tracker(**kw)
+            assert summary(plain_stitch(t, twins(seed))) == summary(t._stitch(twins(seed))), (seed, kw)
+
+
+def test_more_seeds_and_settings():
+    for seed in range(12, 60):
+        kw = [{}, {"camera": True}, {"stitch_gap": 5, "stitch_slack": 0.5},
+              {"sure_conf": 0.0, "stitch_gap": 60}, {"stitch_gap": 200, "sure_conf": 0.0}][seed % 5]
+        t = tracker(**kw)
+        a = plain_stitch(t, pieces(seed, faces=8, frames=1500, gap=(1, 80)))
+        b = t._stitch(pieces(seed, faces=8, frames=1500, gap=(1, 80)))
+        assert summary(a) == summary(b), (seed, kw)
+
+
+def test_tens_of_thousands_of_tracks_in_seconds():
+    # 2026-10-16: the version that re-sorted every track after every merge
+    # was still stitching one video of FF_000137 after 1.7 hours.
+    tracks = pieces(2, faces=60, frames=40000, gap=(1, 20))
+    assert len(tracks) > 30000
+    start = time.time()
+    tracker(sure_conf=0.0)._stitch(tracks)
+    assert time.time() - start < 30
