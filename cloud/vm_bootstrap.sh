@@ -22,7 +22,8 @@ for i in $(seq 1 40); do
     sleep 15
 done
 say "SSH up"
-"${SSH[@]}" 'sudo mkdir -p /root && sudo tee /root/faceblur.env >/dev/null && sudo chmod 600 /root/faceblur.env' < "$HERE/greennode.env"
+# The GreenNode API keys (GN_*) stay on this PC: a VM never needs them.
+grep -v "^GN_" "$HERE/greennode.env" | "${SSH[@]}" 'sudo mkdir -p /root && sudo tee /root/faceblur.env >/dev/null && sudo chmod 600 /root/faceblur.env'
 "${SSH[@]}" 'sudo tee /root/stream_run.py >/dev/null' < "$HERE/stream_run.py"
 "${SSH[@]}" 'sudo tee /root/vm_run.sh >/dev/null' < "$HERE/vm_run.sh"
 for step in "$@"; do
