@@ -1,9 +1,14 @@
 # STATE, handover notes
 
-Last updated 2026-10-08. **The tool is in production**: the whole Phase 0
-footage, 119 hours, is to be blurred on rented cloud GPUs and handed over as
-two download links. The raw link exists; the run is waiting for GPU capacity.
-"The production run" below is the live work and is read first.
+Last updated 2026-10-16 00:20. **The blur run is nearly done**: 8 RTX 5090
+VMs since 2026-10-14 18:20; slices 1, 3 and 4 done and their VMs deleted,
+slices 2 and 7 done and waiting for deletion (the console session ended
+23:00 and needs the owner to sign in), slices 0, 5 and 6 running, expected
+done about 04:00 to 05:00. The 9 cut-off sources are blurring on the pilot
+VM. Then delivery, links and cleanup. In parallel, the partner's hand toolkit
+(EgoSmith, HaWoR + MANO) is in a pilot on the same VM; if it looks good, 2 to
+3 h of footage goes through it for a showcase link. "The production run"
+below is the live work and is read first.
 
 Before that, 2026-10-01: the gate made crash safe (report 24.4) and the gates
 moved to the mask budget (report 25). 2026-09-26: a run that hung on a dead
@@ -162,6 +167,35 @@ To remove when the run is delivered: the eight VMs with their volumes, subnet
 `faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
 `faceblur_greennode` in the console.
 
+### The hand toolkit (EgoSmith, 2026-10-15)
+
+The partner's code, `egosmith_hand_mano_toolkit` (upload of 2026-10-15; not
+in this repo, it is theirs), estimates both hands per frame from the left
+camera: WiLoR's YOLO hand detector, then HaWoR, then MANO for 21 joints in
+camera coordinates, plus a line-only skeleton video. It needs MANO; the
+owner supplied `MANO_LEFT.pkl`/`MANO_RIGHT.pkl` 2026-10-16, kept in
+`cloud/mano/` (gitignored, licensed) and on the pilot VM in `/root/mano/`.
+HaWoR is CC BY-NC-ND and MANO non-commercial: the owner will settle the
+licence later ("ignore the licensing for now").
+
+- Its PyTorch 2.5.1/cu121 has no RTX 5090 kernels. `cloud/hands/Dockerfile`
+  builds it with PyTorch 2.7.1/cu128 (build context: the Dockerfile next to
+  the extracted toolkit folder). Built as `egosmith:cu128` on
+  `faceblur-hands-pilot` (116.118.92.130); environment check and its 9 tests
+  pass. Downloads from these VMs run at about 1.4 MB/s, so a build is ~40 min.
+- It processes only the first `*_camera_left*.mp4` of a recording folder, so
+  each part must be presented as its own folder, with the
+  `*_calibration_camera.yaml` beside it. It unpacks every frame to JPEG
+  (~50 GB per hour of video).
+- Run: `docker run --gpus all --ipc=host -v /root/mano/MANO_RIGHT.pkl:/opt/egosmith/_DATA/data/mano/MANO_RIGHT.pkl:ro -v /root/mano/MANO_LEFT.pkl:/opt/egosmith/_DATA/data_left/mano_left/MANO_LEFT.pkl:ro -v /var/egosmith:/data egosmith:cu128 bash scripts/run_camera_hand_skeleton_pipeline.sh --input-root /data/recordings --output-root /data/results`
+- Pilot: a 10 min cut of a blurred left video
+  (`AZER76400EV_19700105_003108`, part 1), started 2026-10-16 00:13 while the
+  VM also blurs. Result pending.
+- The owner asked (2026-10-16): if positive, run 2 to 3 h of left videos from
+  different devices, add a version with the skeleton over the blurred
+  footage, and publish them on a separate link (signed, 7 days, unless the
+  owner wants it permanent).
+
 ### Running it
 
 On a GreenNode AI Platform **notebook instance** with the image above. The
@@ -219,20 +253,30 @@ sign in again**. The run itself does not delete the instance when it ends.
 
 ### Next, in order
 
-1. **GPU capacity.** Waiting on the owner's answer from GreenNode: whether the
-   8x A40 is in stock and when the 4090 returns. Then the 20 minute single card
-   test, then the full run.
-2. Watch the run; when it ends, read the held back count and the failures in
-   `out/_logs/`.
-3. `python cloud/deliver.py "D:\Player One - Phase 0 full"`, read the dry run,
+1. **Console sign-in** (owner): sessions last about 12 h whatever is done in
+   them. Then delete the finished VMs (`faceblur-5090-8` slice 2,
+   `faceblur-5090-c` slice 7, and the rest as they finish) with "Delete all
+   attached volumes" ticked. `cloud/gn_api.py` can do it without the console
+   once an IAM service account's `GN_CLIENT_ID`/`GN_CLIENT_SECRET` are in
+   `cloud/greennode.env` (the owner has to create the account).
+2. A slice's failures are fine to leave when every one is in the cut-off list
+   (`faceblur/in_repaired/`, blurred by the pilot VM): stop its container
+   with `docker update --restart=no faceblur && docker stop faceblur` so it
+   does not retry them, then delete the VM.
+3. When everything has run: read `out/_logs/` (DONE markers, held back,
+   failed). Every real video must have a record; the pilot VM's run on
+   `in_repaired/` writes to the same `out/` names.
+4. `python cloud/deliver.py "D:\Player One - Phase 0 full"`, read the dry run,
    then `--apply`. It must end with 0 raw videos and 0 audio files found.
-4. `python cloud/links.py vs:faceblur-blurred "Player One - Phase 0 full (blurred)" --public --apply`
+5. `python cloud/links.py vs:faceblur-blurred "Player One - Phase 0 full (blurred)" --public --apply`
    gives the blurred link.
-5. One zip per device folder, on a cheap CPU notebook.
-6. **Delete every instance**, then the network volume `faceblur-test-nv`. Keep
-   `faceblur/in/` (the raw link's source). `faceblur/out/` can go once the
-   delivered tree is verified.
-7. Push whatever is committed by then.
+6. Hand toolkit showcase, if the pilot is positive (see "The hand toolkit").
+7. **Delete every instance** (incl. `faceblur-hands-pilot`), then subnet
+   `faceblur-1b`, SG `faceblur-ssh`, console SSH key `faceblur_greennode`, AI
+   Platform volume `faceblur-test-nv`, and `faceblur/in_repaired/`. Keep
+   `faceblur/in/`. `faceblur/out/` can go once the delivered tree is verified.
+8. Zips per device folder only if still wanted (video does not compress).
+9. Push whatever is committed by then.
 
 Open on the side:
 
