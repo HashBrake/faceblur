@@ -18,9 +18,14 @@ from faceblur.settings import Settings
 from faceblur.video import part_path
 from faceblur.watchdog import supervise
 
-QUICK = Settings(device="cpu", watchdog_min_seconds=1.0,
+# No floor, so the start-up stays untimed: a child importing the pipeline on a
+# busy machine can take longer than any limit short enough for a test. 100
+# frames at 0.01 s is a 1 s limit on a named stage.
+QUICK = Settings(device="cpu", watchdog_min_seconds=0.0,
                  watchdog_seconds_per_frame=(("detecting", 0.01), ("tracking", 0.01),
                                              ("writing", 0.01), ("checking", 0.01)))
+# A 1 s floor, which is also the start-up's limit.
+FLOOR = QUICK.with_changes(watchdog_min_seconds=1.0)
 
 
 # ------------------------------------------------------------ child entries
@@ -43,6 +48,20 @@ def finishes(src, dst, settings, workers, conn):
                          frames=10, error="", settings=settings.to_dict())
     conn.send(("record", record.to_dict()))
     conn.close()
+
+
+def never_reports(src, dst, settings, workers, conn):
+    """Hangs before the first stage, the way ffprobe can on a damaged file."""
+    (dst.parent / "pid.txt").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
+def finishes_slowly(src, dst, settings, workers, conn):
+    """Quiet for longer than FLOOR's limit before every message."""
+    time.sleep(1.5)
+    conn.send(("progress", "tracking", 0, 10))
+    time.sleep(1.5)
+    finishes(src, dst, settings, workers, conn)
 
 
 def dies(src, dst, settings, workers, conn):
@@ -115,8 +134,7 @@ def test_a_stage_past_its_limit_is_stopped_and_cleaned_up(tmp_path):
     assert "tracking" in record.error and "limit 1 s" in record.error
     assert record.source == "clip.mp4" and record.output == "clip_blurred.mp4"
     assert record.settings == QUICK.to_dict()
-    # 100 frames at 0.01 s is 1 s, which the floor of 1 s matches; the rest
-    # is the child's start-up and the poll.
+    # The rest is the child's start-up and the poll.
     assert elapsed < 1.0 + 8.0
     assert not part_path(dst).exists()
     assert not (tmp_path / "faceblur_xyz").exists()
@@ -150,9 +168,30 @@ def test_a_watchdog_that_is_off_does_not_stop_anything(tmp_path):
     off = Settings(device="cpu", watchdog_min_seconds=0.0,
                    watchdog_seconds_per_frame=(("detecting", 0.0), ("tracking", 0.0),
                                                ("writing", 0.0), ("checking", 0.0)))
-    record = supervise(finishes, tmp_path / "clip.mp4", tmp_path / "clip_blurred.mp4", off)
+    record = supervise(finishes_slowly, tmp_path / "clip.mp4", tmp_path / "clip_blurred.mp4",
+                       off)
 
-    assert record.status == STATUS_DONE
+    assert record.status == STATUS_DONE, record.error
+
+
+def test_a_child_that_never_reports_a_stage_is_stopped_at_the_floor(tmp_path):
+    started = time.monotonic()
+
+    record = supervise(never_reports, tmp_path / "clip.mp4", tmp_path / "clip_blurred.mp4",
+                       FLOOR)
+
+    elapsed = time.monotonic() - started
+    assert record.status == STATUS_FAILED
+    assert record.stopped_in_stage == "starting"
+    assert "starting" in record.error and "no stage was reported" in record.error
+    assert elapsed < 1.0 + 8.0
+    # On a busy machine the child can still be importing when the floor runs
+    # out, so it may never have reached the entry and written its PID. The
+    # process supervise started is gone either way.
+    assert not multiprocessing.active_children()
+    pid_file = tmp_path / "pid.txt"
+    if pid_file.exists() and pid_file.read_text().strip():
+        assert _wait_dead(int(pid_file.read_text()), 5)
 
 
 def test_pool_workers_leave_when_their_parent_is_killed(tmp_path):

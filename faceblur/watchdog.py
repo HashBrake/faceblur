@@ -140,12 +140,23 @@ def supervise(entry: Callable, src: Path, dst: Path, settings: Settings, workers
                     on_progress(now_in, done, total)
             elif not child.is_alive():
                 break
-            # A stage nobody named has no limit, and neither has the start-up
-            # before the first stage is reported.
+            spent = time.monotonic() - stage_started
+            if stage is None:
+                # Before the first stage the child is probing the file, and
+                # ffmpeg on a damaged file can hang there as surely as the
+                # tracker can. The floor alone is the limit; 0 leaves it open.
+                limit = settings.watchdog_min_seconds
+                if limit > 0 and spent > limit:
+                    _stop(child)
+                    remove_leftovers(dst)
+                    return failed(f"Watchdog stopped the video in the starting stage after "
+                                  f"{spent:.0f} s (limit {limit:.0f} s): no stage was "
+                                  f"reported", "starting")
+                continue
+            # A stage nobody named has no limit.
             if not per_frame.get(stage):
                 continue
             limit = max(settings.watchdog_min_seconds, per_frame[stage] * frames)
-            spent = time.monotonic() - stage_started
             if spent > limit:
                 _stop(child)
                 remove_leftovers(dst)
