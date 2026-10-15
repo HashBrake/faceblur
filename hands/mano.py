@@ -72,13 +72,21 @@ class _Stub:
         self.state = state
 
 
+_NUMPY_MODULES = {"numpy", "numpy.core.multiarray", "numpy.core.numeric", "numpy._core.multiarray", "numpy._core.numeric"}
+_NUMPY_NAMES = {"ndarray", "dtype", "_reconstruct", "scalar"}
+
+
 class _Unpickler(pickle.Unpickler):
+    """Constructs only stubs, builtins.set and numpy array reconstruction; anything else is refused."""
+
     def find_class(self, module, name):
         if module.startswith("chumpy") or module.startswith("scipy.sparse"):
             return _Stub
-        if module == "__builtin__":
-            module = "builtins"
-        return super().find_class(module, name)
+        if module in ("__builtin__", "builtins") and name == "set":
+            return set
+        if module in _NUMPY_MODULES and name in _NUMPY_NAMES:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"MANO pickle references {module}.{name}, which is not allowed")
 
 
 def _dense(obj) -> np.ndarray:

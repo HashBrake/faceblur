@@ -1,6 +1,9 @@
 """Tests for hands.mano (MANO loader, joints-only model and fits)."""
 from __future__ import annotations
 
+import os
+import pickle
+
 import numpy as np
 import pytest
 
@@ -23,6 +26,38 @@ def _random_pose(model, rng, scale=0.3):
 def test_missing_files_raise(tmp_path):
     with pytest.raises(FileNotFoundError, match="MANO files not found at"):
         load_mano("right", mano_dir=tmp_path)
+
+
+def _write_marker(path):
+    with open(path, "w") as fh:
+        fh.write("ran")
+
+
+class _Marker:
+    def __init__(self, path):
+        self.path = path
+
+    def __reduce__(self):
+        return (_write_marker, (self.path,))
+
+
+class _System:
+    def __reduce__(self):
+        return (os.system, ("echo pwned",))
+
+
+def test_rejects_os_system_pickle(tmp_path):
+    (tmp_path / "MANO_RIGHT.pkl").write_bytes(pickle.dumps(_System()))
+    with pytest.raises(pickle.UnpicklingError, match=r"(os|nt|posix)\.system"):
+        load_mano("right", mano_dir=tmp_path)
+
+
+def test_rejected_callable_is_not_run(tmp_path):
+    marker = tmp_path / "marker.txt"
+    (tmp_path / "MANO_RIGHT.pkl").write_bytes(pickle.dumps(_Marker(str(marker))))
+    with pytest.raises(pickle.UnpicklingError, match="_write_marker, which is not allowed"):
+        load_mano("right", mano_dir=tmp_path)
+    assert not marker.exists()
 
 
 def test_mp_from_mano_is_permutation():
