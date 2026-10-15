@@ -99,7 +99,7 @@ class FakeDetector:
         for label, X in zip(("left", "right"), truth(self.calls)):
             uv = project_rect(self.rect, self.rig, X)[0 if self.view == "left" else 1]
             uv = uv + self.rng.normal(0, 0.3, uv.shape)
-            out.append(Hand2D(uv, np.full(21, 0.9), label, 0.9, np.zeros((21, 3))))
+            out.append(Hand2D(uv, np.full(21, 0.9), label, 0.9, X - X.mean(axis=0)))
         self.calls += 1
         return out
 
@@ -149,9 +149,11 @@ def test_synthetic_end_to_end(synthetic_run):
     o = q["overall"]
     assert o["pass"]["reproj"] is True and o["pass"]["bone_cv"] is True
     assert q["left"]["valid_share"] >= 0.9 and q["right"]["valid_share"] >= 0.9
-    assert o["reproj_raw_px_median"] < 1.0
-    assert q["left"]["reproj_raw_px"]["median"] < 1.0 and q["left"]["reproj_raw_px"]["p90"] >= 0
-    assert report["overall"]["reproj_raw_px_median"] == o["reproj_raw_px_median"]
+    assert o["reproj_px_median"] < 1.0 and o["reproj_out_px_median"] is not None
+    assert q["left"]["reproj_px"]["median"] < 1.0 and q["left"]["reproj_px"]["p90"] >= 0
+    assert q["left"]["reproj_out_px"]["median"] >= 0
+    assert report["overall"]["reproj_px_median"] == o["reproj_px_median"]
+    assert o["bone_cv_max"] < 1e-9  # re-constrained after smoothing: exact bone lengths
 
     joints = np.array([[d[c][r] for c in JOINT_COLUMNS] for r in range(2 * T)]).reshape(2, T, 21, 3)
     errs = []
@@ -220,7 +222,7 @@ def test_real_smoke(recording_ev, tmp_path):
     assert q["overall"]["any_hand_valid_share"] > 0.5
     o = report["overall"]
     cv_raw = max(report[h]["bone_cv_raw_max"] or 0 for h in ("left", "right"))
-    print(f"\nREAL SMOKE: reproj median {o['reproj_px_median']} px (raw {o['reproj_raw_px_median']}), "
+    print(f"\nREAL SMOKE: reproj median {o['reproj_px_median']} px (output {o['reproj_out_px_median']}), "
           f"bone CV max raw {cv_raw} constrained {o['bone_cv_max']}, jitter {o['jitter_mm']} mm, "
           f"detection {report['clip']['detection_fps']} fps, processing {report['processing_fps']} fps, "
           f"valid L {report['left']['valid_share']} R {report['right']['valid_share']}")

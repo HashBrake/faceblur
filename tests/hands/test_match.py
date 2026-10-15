@@ -5,7 +5,7 @@ import pytest
 
 from hands.calib import build_rectification, load_calibration
 from hands.conftest import CALIB_YAML
-from hands.match import HandTracker, assign_identity, hand_position, match_views
+from hands.match import PALM, HandTracker, assign_identity, hand_position, match_views
 
 
 @pytest.fixture(scope="module")
@@ -60,14 +60,26 @@ def test_match_two_hands_reversed_order(rect, rig):
     assert all(c < 1.0 for *_, c in pairs)
 
 
+def test_palm_joints():
+    assert PALM == (0, 5, 9, 13, 17)
+
+
 def test_match_rejections(rect, rig):
     hL, hR = views(rect, rig, 0.0)
     assert match_views([hL], [], rect) == []
     assert len(match_views([hL], [hR], rect)) == 1
     neg = wrap(hL.keypoints + [50.0, 0.0])  # right view to the right of the left view
     assert match_views([hL], [neg], rect) == []
-    off = wrap(hR.keypoints + [0.0, 10.0])
+    off = wrap(hR.keypoints + [0.0, 30.0])
     assert match_views([hL], [off], rect) == []
+
+
+def test_match_palm_gate_ignores_fingertips(rect, rig):
+    hL, hR = views(rect, rig, 0.0)
+    tips = hR.keypoints.copy()
+    tips[[4, 8, 12, 16, 20]] += [0.0, 40.0]  # fingertips off by 40 px, palm agrees
+    pairs = match_views([hL], [wrap(tips)], rect)
+    assert len(pairs) == 1 and pairs[0][2] < 1.0
 
 
 def identity(rect, L, R, prev=None):

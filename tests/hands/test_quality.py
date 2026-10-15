@@ -37,9 +37,14 @@ def _data(reproj_scale=1.0, nan_frames=()):
         reproj[~valid] = np.nan
         for t in nan_frames:
             reproj[t, :3] = np.nan
+        raw_reproj = rng.uniform(0, 1.5, (T, 21)) * reproj_scale  # raw residual, differs from output
+        raw_j[5:8] = np.nan  # raw wrist missing: excluded from the raw statistics
+        raw_reproj[5:8] = rng.uniform(50, 60, (3, 21))
+        for t in nan_frames:
+            raw_reproj[t, :3] = np.nan
         hands[hand] = {"joints": out_j, "conf": rng.uniform(0.5, 1, (T, 21)), "valid": valid,
                        "interpolated": interp, "reproj_px": reproj}
-        raw[hand] = {"joints": raw_j}
+        raw[hand] = {"joints": raw_j, "reproj_px": raw_reproj}
     frames = {"frame": np.arange(T, dtype=np.int64),
               "timestamp_us": np.arange(T, dtype=np.int64) * 33333}
     return frames, hands, raw
@@ -48,6 +53,11 @@ def _data(reproj_scale=1.0, nan_frames=()):
 def _frame_means(h):
     keep = h["valid"] & ~h["interpolated"]
     return np.nanmean(h["reproj_px"][keep], axis=1)
+
+
+def _raw_frame_means(raw):
+    keep = np.isfinite(raw["joints"][:, 0]).all(axis=1)
+    return np.nanmean(raw["reproj_px"][keep], axis=1)
 
 
 def test_quality_report_values(tmp_path):
@@ -65,17 +75,25 @@ def test_quality_report_values(tmp_path):
         assert r["bone_cv_max"] < 1e-9
         assert 0.02 < r["bone_cv_raw_max"] < 0.05
         fm = _frame_means(hands[hand])
-        assert abs(r["reproj_px"]["median"] - np.median(fm)) < 1e-12
-        assert abs(r["reproj_px"]["p90"] - np.percentile(fm, 90)) < 1e-12
-        assert abs(r["reproj_px"]["mean"] - np.mean(fm)) < 1e-12
+        assert abs(r["reproj_out_px"]["median"] - np.median(fm)) < 1e-12
+        assert abs(r["reproj_out_px"]["p90"] - np.percentile(fm, 90)) < 1e-12
+        assert abs(r["reproj_out_px"]["mean"] - np.mean(fm)) < 1e-12
+        fr = _raw_frame_means(raw[hand])
+        assert len(fr) == T - 3
+        assert abs(r["reproj_px"]["median"] - np.median(fr)) < 1e-12
+        assert abs(r["reproj_px"]["p90"] - np.percentile(fr, 90)) < 1e-12
+        assert abs(r["reproj_px"]["mean"] - np.mean(fr)) < 1e-12
         assert r["jitter_mm"] > 0 and r["jitter_raw_mm"] > 0
         assert 0.5 < r["mean_conf"] < 1
     ref_mm = np.median(np.linalg.norm(
         hands["left"]["joints"][20:, 1] - hands["left"]["joints"][20:, 0], axis=1)) * 1000
     assert abs(rep["left"]["bone_lengths_mm"][0] - ref_mm) < 1e-9
     pooled = np.concatenate([_frame_means(hands[h]) for h in ("left", "right")])
+    pooled_raw = np.concatenate([_raw_frame_means(raw[h]) for h in ("left", "right")])
     o = rep["overall"]
-    assert abs(o["reproj_px_median"] - np.median(pooled)) < 1e-12
+    assert abs(o["reproj_out_px_median"] - np.median(pooled)) < 1e-12
+    assert abs(o["reproj_px_median"] - np.median(pooled_raw)) < 1e-12
+    assert o["reproj_px_median"] != o["reproj_out_px_median"]
     assert o["any_hand_valid_share"] == 0.9
     assert o["bone_cv_max"] < 1e-9
     assert o["targets"] == {"reproj_px_median": 3.0, "bone_cv_max": 0.05}
@@ -94,10 +112,12 @@ def test_quality_report_fail_flags_and_nan():
     hands["right"]["valid"][:] = False
     hands["right"]["joints"][:] = np.nan
     hands["right"]["reproj_px"][:] = np.nan
+    raw["right"]["joints"][:] = np.nan
     rep = quality_report(frames, hands, raw, (1600, 1300), 10.0, META)
     assert rep["overall"]["pass"] == {"reproj": False, "bone_cv": False}
+    assert rep["overall"]["reproj_px_median"] > 3.0
     r = rep["right"]
-    assert r["reproj_px"] is None
+    assert r["reproj_px"] is None and r["reproj_out_px"] is None
     assert r["bone_cv_max"] is None and all(v is None for v in r["bone_cv"])
     assert all(v is None for v in r["bone_lengths_mm"])
     assert r["jitter_mm"] is None and r["mean_conf"] is None

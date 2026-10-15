@@ -13,6 +13,11 @@ Identity score for "this pair is the wearer's LEFT hand" (higher = more left):
     label vote (0.9) and the position prior.
 Two agreeing wrong labels (3.6 between the two hands) beat the position prior (2.0)
 on their own; continuity is what corrects them over time.
+
+Matching cost: the MEDIAN row disagreement over the five PALM joints (wrist and the
+four finger MCPs). At 0.25-0.35 m the two views see the hand 23 deg apart and the
+fingertips' rows disagree by 25-47 px (p90) even for true pairs, while the palm stays
+within ~15 px (p90); wrong pairs have a palm median >= 4.6 px (p1), 12.8 px (p10).
 """
 from __future__ import annotations
 
@@ -21,14 +26,15 @@ from scipy.optimize import linear_sum_assignment
 
 from hands.triangulate import _intrinsics, row_disagreement, triangulate
 
+PALM = (0, 5, 9, 13, 17)
 POSITION_WEIGHT = 1.0
 CONTINUITY_WEIGHT = 40.0  # score per metre
 SINGLE_HAND_GATE_M = 0.15
 _INFEASIBLE = 1e9
 
 
-def match_views(hands_left, hands_right, rect, max_row_px=8.0, depth_range_m=(0.15, 2.0)):
-    """Pair left-view and right-view hands: list of (i, j, mean row disagreement px)."""
+def match_views(hands_left, hands_right, rect, max_row_px=20.0, depth_range_m=(0.15, 2.0)):
+    """Pair left-view and right-view hands: list of (i, j, median palm row disagreement px)."""
     if not hands_left or not hands_right:
         return []
     f, cxl, _, cxr, _, B = _intrinsics(rect)
@@ -36,10 +42,11 @@ def match_views(hands_left, hands_right, rect, max_row_px=8.0, depth_range_m=(0.
     cost = np.full((len(hands_left), len(hands_right)), _INFEASIBLE)
     for i, hl in enumerate(hands_left):
         for j, hr in enumerate(hands_right):
-            L, R = np.asarray(hl.keypoints, float), np.asarray(hr.keypoints, float)
+            L = np.asarray(hl.keypoints, float)[list(PALM)]
+            R = np.asarray(hr.keypoints, float)[list(PALM)]
             d = np.mean((L[:, 0] - cxl) - (R[:, 0] - cxr))
             if d_min <= d <= d_max:
-                cost[i, j] = row_disagreement(L, R).mean()
+                cost[i, j] = np.median(row_disagreement(L, R))
     rows, cols = linear_sum_assignment(cost)
     return [(int(i), int(j), float(cost[i, j])) for i, j in zip(rows, cols) if cost[i, j] <= max_row_px]
 

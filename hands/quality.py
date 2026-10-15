@@ -1,4 +1,15 @@
-"""Per-clip quality report (quality.json): validity, reprojection, bone CV, jitter."""
+"""Per-clip quality report (quality.json): validity, reprojection, bone CV, jitter.
+
+Two reprojection figures per hand:
+  * ``reproj_px``: the stereo reprojection error, i.e. the triangulation residual of the
+    RAW 2-D observations (how well the left and right views agree), over frames where
+    the raw wrist is finite. This is the stereo-consistency measure and drives
+    ``overall.pass.reproj``.
+  * ``reproj_out_px``: the OUTPUT joints' deviation from the same observations, over
+    valid, non-interpolated frames. The output is fused with the hand-shape prior,
+    smoothed and bone-constrained on purpose, so it departs from the noisy observations;
+    this is reported separately and is not a stereo-consistency measure.
+"""
 from __future__ import annotations
 
 import json
@@ -38,7 +49,7 @@ def _row_mean(r) -> np.ndarray:
 
 
 def _frame_reproj(h) -> np.ndarray:
-    """Per-frame mean over finite joints of reproj_px, restricted to valid, non-interpolated frames."""
+    """Per-frame mean over finite joints of the output reproj_px, valid, non-interpolated frames."""
     mean = _row_mean(h["reproj_px"])
     keep = np.asarray(h["valid"], bool) & ~np.asarray(h["interpolated"], bool) & np.isfinite(mean)
     return mean[keep]
@@ -58,7 +69,8 @@ def _hand_report(h, raw) -> dict:
     raw_valid = np.isfinite(raw_joints[:, 0]).all(axis=1)
 
     rp = _frame_reproj(h)
-    reproj = _stats(rp)
+    rm = _row_mean(raw["reproj_px"])
+    rp_raw = rm[raw_valid & np.isfinite(rm)]
     cv = bone_cv(joints)
     cv_raw = bone_cv(raw_joints)
     with np.errstate(all="ignore"), warnings.catch_warnings():
@@ -73,7 +85,8 @@ def _hand_report(h, raw) -> dict:
     out = {
         "valid_share": valid.mean() if T else None,
         "interpolated_share": interp.mean() if T else None,
-        "reproj_px": reproj,
+        "reproj_px": _stats(rp_raw),
+        "reproj_out_px": _stats(rp),
         "bone_cv": [_num(v) for v in cv],
         "bone_cv_raw": [_num(v) for v in cv_raw],
         "bone_cv_max": _nanmax(cv),
@@ -84,13 +97,9 @@ def _hand_report(h, raw) -> dict:
         "mean_conf": mean_conf,
         "frames_valid": int(valid.sum()),
         "frames_total": int(T),
-        "_reproj_frames": rp,
+        "_reproj_out_frames": rp,
+        "_reproj_frames": rp_raw,
     }
-    if "reproj_px" in raw:  # raw joints' reprojection, over frames where the raw wrist is finite
-        rm = _row_mean(raw["reproj_px"])
-        rp_raw = rm[raw_valid & np.isfinite(rm)]
-        out["reproj_raw_px"] = _stats(rp_raw)
-        out["_reproj_raw_frames"] = rp_raw
     return out
 
 
@@ -114,13 +123,13 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
     T = len(frames["frame"])
     report = {"clip": dict(meta), "processing_fps": fps_processing}
     any_valid = np.zeros(T, bool)
-    pooled, pooled_raw, cv_maxes, jitters = [], [], [], []
+    pooled, pooled_out, cv_maxes, jitters = [], [], [], []
     for hand in HANDS:
         if hand not in hands:
             continue
         r = _hand_report(hands[hand], raw_hands[hand])
         pooled.append(r.pop("_reproj_frames"))
-        pooled_raw.append(r.pop("_reproj_raw_frames", np.empty(0)))
+        pooled_out.append(r.pop("_reproj_out_frames"))
         any_valid |= np.asarray(hands[hand]["valid"], bool)
         if r["bone_cv_max"] is not None:
             cv_maxes.append(r["bone_cv_max"])
@@ -130,10 +139,10 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
     rp = np.concatenate(pooled) if pooled else np.empty(0)
     reproj_median = float(np.median(rp)) if len(rp) else None
     cv_max = max(cv_maxes) if cv_maxes else None
-    rp_raw = np.concatenate(pooled_raw) if pooled_raw else np.empty(0)
+    rp_out = np.concatenate(pooled_out) if pooled_out else np.empty(0)
     report["overall"] = {
         "reproj_px_median": reproj_median,
-        "reproj_raw_px_median": float(np.median(rp_raw)) if len(rp_raw) else None,
+        "reproj_out_px_median": float(np.median(rp_out)) if len(rp_out) else None,
         "bone_cv_max": cv_max,
         "any_hand_valid_share": any_valid.mean() if T else None,
         "jitter_mm": float(np.mean(jitters)) if jitters else None,

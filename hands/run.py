@@ -1,7 +1,9 @@
 """Pipeline driver: ``python -m hands.run RECORDING_DIR -o OUT [--part N] [--start S --duration S] [--mano]``.
 
-Pass 1 detects, matches and triangulates every stereo frame pair; per hand the
-raw joints are bone-constrained and Kalman/RTS-smoothed. Pass 2 re-reads the
+Pass 1 detects, matches and triangulates every stereo frame pair. Per hand the
+triangulated joints are fused with MediaPipe's world-landmark shape (hands.fuse),
+bone-constrained, Kalman/RTS-smoothed and bone-constrained again so the output
+bone lengths are exact. Pass 2 re-reads the
 part and writes the review video of the OUTPUT joints. Outputs in OUT:
 joints.parquet, quality.json, review.mp4 (+ mano.parquet, mano_shape.json).
 """
@@ -14,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from hands.calib import build_rectification, load_calibration
+from hands.fuse import fuse_hand
 from hands.match import HandTracker
 from hands.output import (ReviewWriter, project_rectified, write_joints_parquet, write_mano_parquet,
                           write_mano_shape_json)
@@ -21,7 +24,7 @@ from hands.quality import quality_report, write_quality_json
 from hands.skeleton import constrain_bones, reference_lengths
 from hands.smooth import smooth_joints
 from hands.timing import container_timestamps, find_part_files, stereo_frames
-from hands.triangulate import reprojection_error_original, triangulate_hand
+from hands.triangulate import reprojection_error_original, row_disagreement, triangulate_hand
 from hands.video import PartReader
 
 FPS = 30.0
@@ -69,7 +72,10 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
     det_l, det_r = factory(), factory()
     tracker = HandTracker(rect)
     raw = {h: {"joints": np.full((T, 21, 3), np.nan), "conf": np.zeros((T, 21)),
-               "uv_l": np.full((T, 21, 2), np.nan), "uv_r": np.full((T, 21, 2), np.nan)} for h in HANDS}
+               "uv_l": np.full((T, 21, 2), np.nan), "uv_r": np.full((T, 21, 2), np.nan),
+               "conf_det": np.zeros((T, 21)), "row_dis": np.full((T, 21), np.nan),
+               "world_l": np.full((T, 21, 3), np.nan), "world_r": np.full((T, 21, 3), np.nan),
+               "present": np.zeros(T, bool)} for h in HANDS}
     det_seconds = 0.0
     reader = PartReader(left_mp4, right_mp4, image_size, cts)
     for t, (_, img_l, img_r) in enumerate(reader.frames(pairs)):
@@ -82,6 +88,10 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
             r = raw[hand]
             r["joints"][t], r["conf"][t] = joints, conf
             r["uv_l"][t], r["uv_r"][t] = hl[i].keypoints, hr[j].keypoints
+            r["conf_det"][t] = np.minimum(hl[i].conf, hr[j].conf)
+            r["row_dis"][t] = row_disagreement(hl[i].keypoints, hr[j].keypoints)
+            r["world_l"][t], r["world_r"][t] = hl[i].world, hr[j].world
+            r["present"][t] = True
         if (t + 1) % PROGRESS_EVERY == 0:
             log(f"{t + 1}/{T} frames done, detection {(t + 1) / det_seconds:.1f} fps")
     reader.close()
@@ -94,11 +104,18 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
     hands, raw_hands = {}, {}
     for hand in HANDS:
         r = raw[hand]
-        lengths = reference_lengths(r["joints"], r["conf"])
-        constrained = constrain_bones(r["joints"], lengths)
-        joints_s, valid, interpolated = smooth_joints(constrained, r["conf"], fps=FPS)
-        hands[hand] = {"joints": joints_s, "conf": r["conf"], "valid": valid, "interpolated": interpolated,
-                       "reproj_px": _reproj_px(rect, rig, joints_s, r["uv_l"], r["uv_r"])}
+        fused, conf_f = np.full((T, 21, 3), np.nan), np.zeros((T, 21))
+        for t in np.flatnonzero(r["present"]):
+            fused[t], conf_f[t] = fuse_hand(r["joints"][t], r["conf_det"][t], r["row_dis"][t],
+                                            r["world_l"][t], r["world_r"][t])
+        conf_f = np.where(np.isfinite(fused).all(axis=2), conf_f, 0.0)
+        lengths = reference_lengths(fused, conf_f)
+        constrained = constrain_bones(fused, lengths)
+        joints_s, valid, interpolated = smooth_joints(constrained, conf_f, fps=FPS)
+        joints_out = constrain_bones(joints_s, lengths)  # exact output lengths after smoothing
+        hands[hand] = {"joints": joints_out, "conf": np.where(valid[:, None], conf_f, 0.0), "valid": valid,
+                       "interpolated": interpolated,
+                       "reproj_px": _reproj_px(rect, rig, joints_out, r["uv_l"], r["uv_r"])}
         raw_hands[hand] = {"joints": r["joints"],
                            "reproj_px": _reproj_px(rect, rig, r["joints"], r["uv_l"], r["uv_r"])}
     frames = {"frame": np.array([p.frame_left for p in pairs], np.int64),
@@ -153,7 +170,7 @@ def _fmt(x, spec=".2f"):
 
 def _summary(report: dict) -> str:
     o = report["overall"]
-    parts = [f"reproj median {_fmt(o['reproj_px_median'])} px (raw {_fmt(o.get('reproj_raw_px_median'))})",
+    parts = [f"reproj median {_fmt(o['reproj_px_median'])} px (output {_fmt(o['reproj_out_px_median'])})",
              f"bone CV max {_fmt(o['bone_cv_max'], '.3f')}"]
     for hand in HANDS:
         if hand in report:
