@@ -221,7 +221,7 @@ sign in again**. The run itself does not delete the instance when it ends.
 
 Open on the side:
 
-- **The raw link expires 2026-10-21 05:59 UTC** (renewed 2026-10-14; the
+- **The raw link expires 2026-10-22 04:16 UTC** (renewed 2026-10-15; the
   old one ended that day). A new one, from the repo root in the image, which
   has rclone and needs the repo on `PYTHONPATH`:
   `MSYS_NO_PATHCONV=1 docker run --rm --env-file cloud/greennode.env -v "$PWD:/w" -w /w -e PYTHONPATH=/w --entrypoint python vcr.vngcloud.vn/110156-faceblur/faceblur-cuda:3 cloud/links.py vs:faceblur/in "Player One - Phase 0 full" --expire 168h --apply`.
