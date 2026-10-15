@@ -6,10 +6,10 @@ import pytest
 from av.video.frame import PictureType
 
 from faceblur.video import VideoError, part_path
-from storage import encode
+from storage import checks, encode
 from storage.ffmpeg import nvenc_works
-from storage.probe import probe
-from conftest import audio_codec
+from storage.probe import frame_pts_seconds, probe
+from conftest import audio_codec, run_ffmpeg
 
 EXPECTED_ENCODER = {
     ("hevc", "nvenc"): "hevc_nvenc",
@@ -87,3 +87,30 @@ def test_encode_keeps_audio(video_with_audio, tmp_path):
     dst = tmp_path / "out.mp4"
     encode.encode_file(video_with_audio, dst, "hevc", "software", quality=28)
     assert audio_codec(dst) == "aac"
+
+
+@pytest.mark.parametrize("codec", encode.CODECS)
+def test_nvenc_sets_maxrate_software_does_not(codec):
+    nvenc = encode.codec_args(codec, "nvenc", 28)
+    software = encode.codec_args(codec, "software", 28)
+    assert "-maxrate" in nvenc and "-bufsize" in nvenc
+    assert "-maxrate" not in software and "-bufsize" not in software
+
+
+def test_encode_keeps_source_timestamps(tmp_path):
+    """The camera's 30.0085 fps on time base 1/90000 keeps every frame's pts.
+
+    ffmpeg rounds this rate to 30/1 for r_frame_rate; an encoder that takes its
+    time base from that writes exactly 30 fps and the copy drifts.
+    """
+    src = tmp_path / "camera_rate.mp4"
+    r = run_ffmpeg(["-y", "-loglevel", "error", "-f", "lavfi",
+                    "-i", "testsrc=size=320x240:rate=119130000/3969853:duration=4",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-video_track_timescale", "90000", str(src)])
+    assert r.returncode == 0, r.stderr
+    dst = tmp_path / "out.mp4"
+    encode.encode_file(src, dst, "hevc", "software", quality=28)
+    assert frame_pts_seconds(dst) == pytest.approx(frame_pts_seconds(src), abs=1e-6)
+    assert probe(dst).duration_s == pytest.approx(probe(src).duration_s, abs=1e-6)
+    assert checks.duration(probe(src), probe(dst)).passed

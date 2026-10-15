@@ -25,11 +25,18 @@ ENCODERS = ("auto", "nvenc", "software")
 GOP = 60
 
 
+# With `-b:v 0` and no `-maxrate`, the NVENC driver applies its own maximum
+# bitrate (about 10 Mb/s here), so every cq below ~24 gave the same size. An
+# explicit cap well above the H.264 sources' 25 Mb/s peak lets constant quality
+# decide the size across the useful range.
+NVENC_RATE_CAP = ["-maxrate", "60M", "-bufsize", "120M"]
+
+
 def codec_args(codec: str, encoder: str, quality: int, gop: int = GOP) -> list[str]:
     """The `-c:v ...` arguments for a resolved encoder (`nvenc` or `software`)."""
     if codec == "hevc" and encoder == "nvenc":
         return ["-c:v", "hevc_nvenc", "-preset", "p6", "-tune", "hq", "-rc", "vbr",
-                "-cq", str(quality), "-b:v", "0", "-g", str(gop), "-bf", "3",
+                "-cq", str(quality), "-b:v", "0", *NVENC_RATE_CAP, "-g", str(gop), "-bf", "3",
                 "-b_ref_mode", "middle", "-spatial-aq", "1", "-temporal-aq", "1",
                 "-tag:v", "hvc1"]
     if codec == "hevc" and encoder == "software":
@@ -38,7 +45,7 @@ def codec_args(codec: str, encoder: str, quality: int, gop: int = GOP) -> list[s
                 "-tag:v", "hvc1", "-threads", "4"]
     if codec == "av1" and encoder == "nvenc":
         return ["-c:v", "av1_nvenc", "-preset", "p6", "-tune", "hq", "-rc", "vbr",
-                "-cq", str(quality), "-b:v", "0", "-g", str(gop), "-bf", "3"]
+                "-cq", str(quality), "-b:v", "0", *NVENC_RATE_CAP, "-g", str(gop), "-bf", "3"]
     if codec == "av1" and encoder == "software":
         return ["-c:v", "libaom-av1", "-cpu-used", "8", "-row-mt", "1", "-crf", str(quality),
                 "-b:v", "0", "-g", str(gop), "-threads", "4"]
@@ -71,6 +78,13 @@ def encode_file(src: Path, dst: Path, codec: str = "hevc", encoder: str = "auto"
     args = ["-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a?",
             *codec_args(codec, resolved, quality, gop),
             "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
+            # Keep the source timestamps. Left alone, ffmpeg takes the encoder
+            # time base from r_frame_rate (30/1 for the camera's 30.0085 fps),
+            # so the copy drifts from the original and the data loaders would
+            # see frame i at another time than in the original. 90000 matches
+            # the camera files and faceblur/segments.py.
+            "-fps_mode", "passthrough", "-enc_time_base", "-1",
+            "-video_track_timescale", "90000",
             "-f", "mp4", str(part)]
     start = time.monotonic()
     try:
