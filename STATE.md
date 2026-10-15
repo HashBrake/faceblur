@@ -169,6 +169,26 @@ To remove when the run is delivered: the eight VMs with their volumes, subnet
 `faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
 `faceblur_greennode` in the console.
 
+### Build sessions from the build plan (2026-10-16)
+
+Four autonomous Claude Code sessions, one per part of
+`BUILD_PLAN_PROCESSING_AND_STORAGE.md`, each in its own git worktree and
+branch, all from main 3eb0100, local PC only (no cloud):
+
+| Session | Worktree | Branch | Kickoff prompt |
+|---|---|---|---|
+| A robustness (1.1) | `D:\Claude Projectsaceblur-robustness` | `build/robustness` | `D:\Claude Projects\kickoffs\A_robustness.txt` |
+| B blur speed (1.2) | `D:\Claude Projectsaceblur-blur-speed` | `build/blur-speed` | `...\kickoffs\B_blur-speed.txt` |
+| C stereo hands (1.3) | `D:\Claude Projectsaceblur-stereo-hands` | `build/stereo-hands` | `...\kickoffs\C_stereo-hands.txt` |
+| D hot storage (2) | `D:\Claude Projectsaceblur-hot-storage` | `build/hot-storage` | `...\kickoffs\D_hot-storage.txt` |
+
+Each worktree has the orchestration `CLAUDE.md` (Fable orchestrates, Opus
+builders commit) and its own PLAN/STATUS/DECISIONS/BUILD_REPORT ledgers; these
+are excluded through `.git/info/exclude`, so they never reach a commit. They
+share one GPU through `D:\Claude Projects\gpu_lock.py`. Merge order
+afterwards: A, B, D, C (A, B and D all touch `faceblur/` and `cli.py`; C is a
+new package). Items 1.4 (one pass) and 1.5 (hardware) wait for these.
+
 ### The hand toolkit (EgoSmith, 2026-10-15)
 
 The partner's code, `egosmith_hand_mano_toolkit` (upload of 2026-10-15; not
