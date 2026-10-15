@@ -45,3 +45,6 @@ cloud/*.env
 
 # MANO hand models: licensed, never committed
 cloud/mano/
+
+# Downloaded ffmpeg builds the storage tools prefer (storage/ffmpeg.py)
+tools/

@@ -1,0 +1,7 @@
+# Hot-storage tools (storage/). Install on top of requirements.txt.
+# Exact versions installed and tested on Python 3.12.8, Windows 11.
+# Regenerate with: .venv/Scripts/python.exe -m pip freeze, keeping the lines
+# that requirements.txt does not already list. Neither package pulls in a
+# dependency that requirements.txt lacks.
+av==19.0.1
+pyarrow==26.0.0
