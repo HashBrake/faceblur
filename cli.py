@@ -8,7 +8,7 @@
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
              [--no-third] [--no-camera] [--check-output] [--check-stride N]
              [--quarantine] [--quarantine-px N] [--second-chance N]
-             [--no-hand-rule]
+             [--no-hand-rule] [--watchdog-scale F]
              [--report PATH] [--no-progress] [--recursive]
 
 INPUT is a video file or a folder of videos. OUTPUT defaults to a folder named
@@ -43,6 +43,8 @@ from faceblur.settings import VIDEO_EXT, Settings, SettingsError, parse_det_size
 from faceblur.batch import (PoolSubmit, WorkerLost, init_pool_worker, run_video,  # noqa: E402
                             serial_submit)
 from faceblur.video import part_path, unchecked_path  # noqa: E402
+# The module, not its entry, so the entry is looked up when a video starts.
+from faceblur import watchdog  # noqa: E402
 
 
 def find_videos(src: Path, recursive: bool) -> list[Path]:
@@ -227,6 +229,41 @@ def run_parallel(jobs, settings, workers, reporter) -> list[dict]:
     return records
 
 
+def run_supervised(jobs, settings, workers, reporter) -> list[dict]:
+    """One video at a time, each in a child process the watchdog can end.
+
+    A video stopped for overrunning a stage gets one more go, because a stall
+    can come from the machine as much as from the file. If the second go is
+    stopped too, that record is kept and the batch moves on.
+    """
+    records: list[dict] = []
+    if workers > 1:
+        reporter.line(f"Running with {workers} workers.")
+    for number, (src, dst) in enumerate(jobs, 1):
+        reporter.line(f"[{number}/{len(jobs)}] {src.name}")
+
+        def on_progress(stage, done, total, name=src.name):
+            if total:
+                reporter.status(f"  {name}: {stage} {100 * done / total:5.1f}%")
+            else:
+                reporter.status(f"  {name}: {stage} frame {done}")
+
+        record = watchdog.supervise(watchdog.video_entry, src, dst, settings, workers,
+                                    on_progress=on_progress)
+        if record.stopped_in_stage:
+            reporter.clear()
+            reporter.line(f"  Watchdog stopped it in the {record.stopped_in_stage} stage; "
+                          f"trying once more")
+            record = watchdog.supervise(watchdog.video_entry, src, dst, settings, workers,
+                                        on_progress=on_progress)
+            if record.stopped_in_stage:
+                record.error += " (second attempt)"
+        reporter.clear()
+        reporter.line(describe(record, dst))
+        records.append(record.to_dict())
+    return records
+
+
 def build_parser() -> argparse.ArgumentParser:
     defaults = Settings()
     parser = argparse.ArgumentParser(
@@ -322,6 +359,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "By default MediaPipe's hand models are asked about every "
                              "box it flags, and a hand is recorded as one and does not "
                              "hold a copy back")
+    parser.add_argument("--watchdog-scale", type=float, default=1.0,
+                        help="multiply every watchdog limit by this (default: "
+                             "%(default)s). Each video runs in its own process, which "
+                             "is ended when a stage takes longer than its limit; "
+                             "0 turns the watchdog off and runs videos in this process")
     parser.add_argument("--report", default=None,
                         help="write one JSON file holding every audit record here")
     parser.add_argument("--recursive", action="store_true",
@@ -347,6 +389,14 @@ def default_workers() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Caught here, because Settings would name the scaled floor rather than
+    # the flag the user typed.
+    if args.watchdog_scale < 0:
+        print(f"faceblur: --watchdog-scale must be 0 or more, got {args.watchdog_scale}",
+              file=sys.stderr)
+        return 2
+    scale = args.watchdog_scale
 
     try:
         settings = Settings(
@@ -379,6 +429,10 @@ def main(argv: list[str] | None = None) -> int:
             quarantine_min_px=args.quarantine_px,
             second_chance=args.second_chance,
             hand_rule=args.hand_rule,
+            watchdog_seconds_per_frame=tuple(
+                (stage, seconds * scale)
+                for stage, seconds in Settings.watchdog_seconds_per_frame),
+            watchdog_min_seconds=Settings.watchdog_min_seconds * scale,
         )
     except (SettingsError, UnknownKind) as exc:
         print(f"faceblur: {exc}", file=sys.stderr)
@@ -411,8 +465,13 @@ def main(argv: list[str] | None = None) -> int:
     reporter.line(f"{len(jobs)} videos. Output folder: {out_dir}")
     started = time.time()
 
+    watchdog_on = settings.watchdog_min_seconds > 0 or any(
+        seconds > 0 for _, seconds in settings.watchdog_seconds_per_frame)
+
     try:
-        if workers == 1:
+        if watchdog_on:
+            records = run_supervised(jobs, settings, workers, reporter)
+        elif workers == 1:
             records = run_serial(jobs, settings, reporter)
         else:
             records = run_parallel(jobs, settings, workers, reporter)

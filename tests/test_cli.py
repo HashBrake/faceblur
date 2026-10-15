@@ -7,7 +7,8 @@ import shutil
 import pytest
 
 import cli
-from faceblur.pipeline import STATUS_DONE
+from faceblur import watchdog
+from faceblur.pipeline import STATUS_DONE, STATUS_SKIPPED, AuditRecord
 
 FAST = ["--det-sizes", "320", "--no-verify", "--min-track", "1", "--no-progress"]
 
@@ -160,3 +161,53 @@ def test_every_flag_the_plan_lists_is_accepted(batch, tmp_path):
     assert args.workers == 3
     assert args.recursive is True
     assert args.progress is False
+
+
+@pytest.fixture
+def paths(monkeypatch):
+    """Records which way main ran the batch, without running it."""
+    taken = []
+
+    def supervise(entry, src, dst, settings, workers=1, on_progress=None):
+        taken.append(("supervise", workers, settings))
+        return AuditRecord(source=src.name, output=dst.name, status=STATUS_SKIPPED)
+
+    monkeypatch.setattr(watchdog, "supervise", supervise)
+    monkeypatch.setattr(cli, "run_serial",
+                        lambda jobs, settings, reporter: taken.append(("serial",)) or [])
+    monkeypatch.setattr(cli, "run_parallel",
+                        lambda jobs, settings, workers, reporter:
+                        taken.append(("parallel", workers)) or [])
+    return taken
+
+
+@pytest.mark.parametrize("workers", ["1", "3"])
+def test_by_default_every_video_runs_under_the_watchdog(batch, tmp_path, paths, workers):
+    code = cli.main([str(batch), "-o", str(tmp_path / "out"), "--workers", workers, *FAST])
+
+    assert code == 0
+    assert [p[:2] for p in paths] == [("supervise", int(workers))] * 3
+
+
+def test_a_watchdog_scale_of_0_runs_in_this_process_as_before(batch, tmp_path, paths):
+    cli.main([str(batch), "-o", str(tmp_path / "out"), "--workers", "1",
+              "--watchdog-scale", "0", *FAST])
+    cli.main([str(batch), "-o", str(tmp_path / "out"), "--workers", "3",
+              "--watchdog-scale", "0", *FAST])
+
+    assert paths == [("serial",), ("parallel", 3)]
+
+
+def test_the_watchdog_scale_multiplies_every_limit(batch, tmp_path, paths):
+    cli.main([str(batch / "a.mp4"), "-o", str(tmp_path / "out"), "--workers", "1",
+              "--watchdog-scale", "0.5", *FAST])
+
+    settings = paths[0][2]
+    assert settings.watchdog_min_seconds == 300.0
+    assert dict(settings.watchdog_seconds_per_frame) == \
+        {"detecting": 0.5, "tracking": 0.025, "writing": 0.5, "checking": 0.5}
+
+
+def test_a_negative_watchdog_scale_reports_and_stops(batch, capsys):
+    assert cli.main([str(batch), "--watchdog-scale", "-1", *FAST]) == 2
+    assert "--watchdog-scale must be 0 or more" in capsys.readouterr().err

@@ -6,17 +6,24 @@ entries below live at module level where a spawned child can import them.
 from __future__ import annotations
 
 import ctypes
+import json
 import multiprocessing
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 
+import cli
+from faceblur import watchdog
 from faceblur.batch import init_pool_worker, run_video, serial_submit
 from faceblur.pipeline import STATUS_DONE, STATUS_FAILED, AuditRecord
 from faceblur.settings import Settings
 from faceblur.video import part_path
 from faceblur.watchdog import supervise
+from faceblur.watchdog import video_entry as real_video_entry
+
+FAST = ["--det-sizes", "320", "--no-verify", "--min-track", "1", "--no-progress"]
 
 # No floor, so the start-up stays untimed: a child importing the pipeline on a
 # busy machine can take longer than any limit short enough for a test. 100
@@ -67,6 +74,21 @@ def finishes_slowly(src, dst, settings, workers, conn):
 def dies(src, dst, settings, workers, conn):
     conn.send(("progress", "detecting", 0, 10))
     os._exit(3)
+
+
+def slow_clip_stalls(src, dst, settings, workers, conn):
+    """Stalls in tracking on any clip named slow, counting its attempts beside
+    the output; blurs every other clip for real."""
+    if "slow" not in src.name:
+        # Bound when this module was imported, before any monkeypatch, so it
+        # is the real entry in the parent and in the child alike.
+        real_video_entry(src, dst, settings, workers, conn)
+        return
+    with open(dst.parent / "attempts.txt", "a", encoding="utf-8") as attempts:
+        attempts.write(f"{os.getpid()}\n")
+    conn.send(("progress", "detecting", 20, 20))
+    conn.send(("progress", "tracking", 0, 20))
+    time.sleep(120)
 
 
 def _grandchild(folder):
@@ -209,3 +231,37 @@ def test_pool_workers_leave_when_their_parent_is_killed(tmp_path):
     child.join()
 
     assert _wait_dead(pid, 10)
+
+
+def test_the_cli_retries_a_stopped_video_once_and_finishes_the_batch(
+        video_silent, tmp_path, monkeypatch):
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    # Alphabetical order runs the slow clip first, so the fine one shows the
+    # batch carrying on after it.
+    shutil.copy(video_silent, folder / "aaa_slow.mp4")
+    shutil.copy(video_silent, folder / "bbb_fine.mp4")
+    out = tmp_path / "out"
+    report = tmp_path / "report.json"
+    monkeypatch.setattr(watchdog, "video_entry", slow_clip_stalls)
+    started = time.monotonic()
+
+    # 0.01 makes the floor 6 s, and so every stage's limit on a short clip.
+    code = cli.main([str(folder), "-o", str(out), "--workers", "1",
+                     "--watchdog-scale", "0.01", "--report", str(report), *FAST])
+
+    elapsed = time.monotonic() - started
+    assert code == 1
+    assert len((out / "attempts.txt").read_text(encoding="utf-8").splitlines()) == 2
+    records = {r["source"]: r for r in json.loads(report.read_text(encoding="utf-8"))}
+    assert len(records) == 2
+    slow, fine = records["aaa_slow.mp4"], records["bbb_fine.mp4"]
+    assert slow["status"] == STATUS_FAILED
+    assert slow["stopped_in_stage"] == "tracking"
+    assert "tracking" in slow["error"]
+    assert fine["status"] == STATUS_DONE, fine["error"]
+    assert (out / "bbb_fine_blurred.mp4").exists()
+    assert not list(out.glob("*.part"))
+    assert not list(out.glob("*.unchecked*"))
+    assert not list(out.glob("faceblur_*"))
+    assert elapsed < 60
