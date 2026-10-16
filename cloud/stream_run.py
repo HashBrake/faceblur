@@ -616,6 +616,9 @@ def main(argv=None) -> int:
     # the machine that wrote them goes.
     if cfg.self_delete:
         self_delete(cfg)
+        # Up again so the hook's own lines reach the bucket: if the machine
+        # stays, the reason can be read there without logging in to it.
+        rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
     return 0 if tally.get("failed", 0) == 0 else 1
 
 

@@ -403,6 +403,11 @@ def api():
     httpd.server_close()
 
 
+def bucket_log(tmp_path: Path) -> str:
+    (log,) = (tmp_path / "bucket" / "out" / "_logs").glob("*stream_run.log")
+    return log.read_text(encoding="utf-8")
+
+
 def self_delete_run(tmp_path: Path, env_extra: dict) -> tuple[subprocess.CompletedProcess, Path]:
     exe = need_rclone()
     bucket, fake = make_bucket(tmp_path, {"a.mp4": 3000, "b.mp4": 2000})
@@ -426,6 +431,7 @@ def test_self_delete_deletes_this_machine_after_the_done_marker(tmp_path, api):
     text = log.read_text(encoding="utf-8")
     assert "self-delete: deleting this machine, faceblur-test" in text
     assert "self-delete: the API accepted" in text
+    assert "self-delete: deleting this machine, faceblur-test" in bucket_log(tmp_path)
 
 
 def test_no_self_delete_sends_no_request(tmp_path, api):
@@ -441,6 +447,7 @@ def test_self_delete_refuses_a_name_outside_the_scope(tmp_path, api):
     assert r.returncode == 0, r.stdout + r.stderr
     assert api.requests == []
     assert "refusing" in log.read_text(encoding="utf-8")
+    assert "refusing" in bucket_log(tmp_path)
 
 
 def test_self_delete_without_credentials_sends_no_request(tmp_path, api):
@@ -449,6 +456,7 @@ def test_self_delete_without_credentials_sends_no_request(tmp_path, api):
     assert r.returncode == 0, r.stdout + r.stderr
     assert api.requests == []
     assert "GN_CLIENT_ID/GN_CLIENT_SECRET/GN_PROJECT_ID missing" in log.read_text(encoding="utf-8")
+    assert "GN_CLIENT_ID/GN_CLIENT_SECRET/GN_PROJECT_ID missing" in bucket_log(tmp_path)
 
 
 def test_self_delete_logs_an_api_error_and_does_not_raise(sr, tmp_path, api):
