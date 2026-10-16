@@ -104,3 +104,36 @@ Both ratios are at or below 2.0: the bound holds. Seeking the copy is faster tha
 Plain `CAP_PROP_POS_FRAMES` was exact on 100 of 100 seeks on the HEVC copy, despite its B-frames, so no reader-side remedy was needed. The same held on the synthetic libx265 clip in `tests/test_storage_randaccess.py` (300 frames, gop 60, B-frames).
 
 Why HEVC seeks compare as they do: a seek decodes from the keyframe at or before the target, so its cost grows with the distance to that keyframe. The sequential PyAV pass counted 67 keyframes in the copy (one every 60 frames) against 28 in the source (one every 150 frames, mean interval 144.4), so the copy decodes on average about 30 frames per seek against about 75 for the source, which outweighs HEVC's higher per-frame decode cost.
+
+## CSV → Parquet (T08)
+
+`storage/csv2parquet.py` turns the IMU (`*_imu.csv`) and timestamp (`*_pts.csv`) side files into Parquet without losing a byte.
+
+Schemas, written with `pyarrow.parquet`, zstd level 9, dictionary encoding on:
+
+- IMU: `timestamp_us` int64, `x`, `y`, `z` float64, `type` dictionary<int32, string>.
+- pts (camera left, camera right, audio): `timestamp_us` int64.
+
+The schema metadata key `csv2parquet` holds a JSON object with what a CSV parser forgets, detected from each file rather than assumed: the exact header line (the IMU header `timestamp_us\t,x\t,y\t,z\t,type` keeps its tabs), the line terminator, the decimal places of each float column (taken from the first data row), whether the file ends with a terminator, the column names and a format version (1).
+
+Lossless means byte-identical: after each file is written, the Parquet is read back from disk, the CSV is regenerated from it in batches and compared with the source chunk by chunk, so no whole file is held twice. If a single byte differs the Parquet is deleted and the file is reported `failed`. That makes the converter refuse, rather than approximate, anything the stored facts cannot reproduce: a float with a different number of decimals than the first row, scientific notation (`1e-05`), a CRLF line in an LF file, leading zeros or a plus sign, empty fields, an unknown header. Negative zero (`-0.000000`) survives, since float64 keeps the sign. A file without a final newline round-trips byte for byte (the flag is stored); a header-only file is converted too.
+
+```
+python -m storage.csv2parquet PATH... [--tree ROOT] [--out DIR] [--apply]
+```
+
+Files given and every `*_imu.csv` / `*_pts.csv` under `--tree` (recursive) are converted; other files are skipped with a message. The Parquet goes beside the CSV, or with `--out` mirrored under DIR at its path relative to `--tree` (a file given outside the tree lands at its own name). `--apply` deletes the CSV after a passing round trip, and only when the Parquet is beside it, never with `--out` elsewhere. One line per file (status, bytes before and after, ratio after/before), a totals line, exit 0 only when every file passed.
+
+### Real recording folder
+
+`D:\Player One - Phase 0 full\AZER76400FF\Orbbec_Ego_AZER76400FF_19700104_222421`, converted with `--tree` to `--out` in the data folder (`faceblur-hot-storage-data\parquet\...`), on the RTX 3070 PC, CPU only. Wall time per file is a separate timed `convert` of that file alone (write, read back, full byte comparison).
+
+| file | rows | size before (bytes) | size after (bytes) | ratio | round trip ok | wall s |
+|---|---|---|---|---|---|---|
+| `..._imu.csv` | 2,380,160 | 112,888,986 | 14,490,683 | 0.128 | yes | 6.55 |
+| `..._audio_pts.csv` | 27,889 | 362,570 | 132,748 | 0.366 | yes | 0.26 |
+| `..._camera_left_part0001_pts.csv` | 35,622 | 463,099 | 165,986 | 0.358 | yes | 0.21 |
+| `..._camera_right_part0001_pts.csv` | 35,620 | 463,073 | 165,981 | 0.358 | yes | 0.15 |
+| **total** | 2,479,291 | 114,177,728 | 14,955,398 | **0.131** | 4/4 | 5.55 (one CLI run) |
+
+The CLI run over the folder exited 0 in 5.55 s with a peak working set of 447 MB. A second process, without the storage code, regenerated each CSV from its Parquet in plain Python (`f"{v:.6f}"` per value) and its sha256 matched the source for all four files. Sizes and modification times of all nine files in the read-only recording folder were the same before and after; `--apply` was not used, so every CSV is still in place.
