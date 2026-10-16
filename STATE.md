@@ -1076,4 +1076,56 @@ In the review video, the skeletons lie on the hands in confident frames (frame 3
 - Frame 0 of each part is skipped.
 - Wall-clock and fps figures come from a shared PC with other jobs running, so they vary between runs (11.5, 14.4 and 19.7 detection fps on the same clip).
 
-Next step: stereo-inertial odometry (Basalt / OpenVINS / ORB-SLAM3) from `*_imu.csv` + `*_calibration_imu.yaml` to place the hands in world coordinates; then one pass per video with the blur pipeline (BUILD_PLAN 1.4).
+### World coordinates / odometry setup (T20)
+
+`hands/odometry/` runs ORB-SLAM3 (stereo-inertial, Kannala-Brandt lenses) on a recording window and returns the IMU/body pose in a gravity-aligned world (z up) for every frame.
+
+- **Licence:** ORB-SLAM3 is GPLv3. We use it as a separate executable that only writes a trajectory file; none of its code is linked into `hands/`. The owner decides before any commercial use.
+- **Route: Docker, not WSL.** Ubuntu-22.04 in WSL has no passwordless sudo, so apt cannot run there.
+
+**Build the image (once).** `hands/odometry/Dockerfile` runs `build_orbslam3.sh`, which pins Pangolin v0.8 and ORB-SLAM3 commit `4452a3c` and builds with `-j4`. The image is 1.05 GB on C:. The first build took 48 min, of which apt downloads over this PC's link took 39 min and the ORB-SLAM3 build 7 min.
+
+```
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- docker build -t faceblur-orbslam3:4452a3c "D:\Claude Projects\faceblur-stereo-hands\hands\odometry"
+```
+
+ORB-SLAM3 patches applied by the script:
+1. C++14 instead of C++11.
+2. Upstream bug: the KannalaBrandt8 `Camera2` read `Camera1.k1..k4`.
+3. The "Not enough motion for initializing" map reset applies to monocular only. On this clip it reset the map about 50 times, because the wearer stands at a task and the head moves less than 2 cm per two keyframes. Stereo gives the scale.
+4. `SaveTrajectoryEuRoC` no longer re-anchors poses to the first keyframe, so it writes the gravity-aligned world.
+5. No `-march=native`, which caused a "double free" in `Optimizer::PoseOptimization` (Eigen alignment).
+6. A CMake target for the headless driver `stereo_inertial_kb.cc`.
+
+**Run it.**
+
+```
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- .venv\Scripts\python.exe -m hands.odometry.run_orbslam3 "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120_world" --part 1 --start 600 --duration 120
+```
+
+The run writes:
+- `export/`: TUM-VI layout.
+  - `cam0/`, `cam1/`: original grayscale PNG frames, about 7 GB for 2 minutes.
+  - `times.txt`: one timestamp per line, in ns.
+  - `imu.csv`: EuRoC format, calibrated, padded by 1 s on each side.
+- `settings.yaml`: the ORB-SLAM3 settings generated from our calibration.
+- `trajectory.txt`: one line per frame, `t_ns tx ty tz qx qy qz qw`, the body (IMU) pose in the world.
+- `kf_traj.txt`, `orbslam3.log`, `odometry.json`.
+
+All timestamps are on the IMU clock. Image times are the left csv timestamps plus Kalibr's `timeshift_cam_imu` (-12.431 ms). To get the left camera pose, multiply by `IMU.T_b_c1` (= inv(`T_cam_imu`)).
+
+**Result on EV 003108, part 1, 600-720 s:**
+
+| Measure | Value |
+|---|---|
+| Frames with a pose | 3597 / 3600 (the first 3 come before initialisation) |
+| Maps | 1 |
+| Tracking losses / map resets | 0 / 0 |
+| Gravity check | 0.44°: angle between world +z and the accelerometer mean rotated into the world |
+| Path length | 13.2 m (7.7 m sampled at 1 Hz) |
+| Net displacement | 0.21 m |
+| Bounding box | about 0.42 x 0.62 x 0.25 m: head motion of someone working in one place |
+| Export time | 215 s |
+| ORB-SLAM3 run time | 622 s, about 5x slower than real time. Tracking takes only 35 ms per frame; the rest is mostly PNG reads through the Docker bind mount, and the driver paces to real time. |
+
+Next step: transform `joints.parquet` (left camera frame) into the world with `trajectory.txt` (`T_w_b · T_b_c1`, interpolated at the left frame time + shift); then one pass per video with the blur pipeline (BUILD_PLAN 1.4).
