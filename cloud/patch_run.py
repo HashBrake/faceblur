@@ -286,8 +286,12 @@ def card(k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
             tally["failed"] = tally.get("failed", 0) + 1
             say(f"{name}: {rel} failed: {exc}")
         finally:
-            for d in ("src", "copy", "out"):
-                shutil.rmtree(base / d, ignore_errors=True)
+            # This pair's files only. The next pair is already downloading
+            # into the same folders, and removing the folders deleted it under
+            # the download (2026-10-16: every pair after a finished one
+            # failed with "Could not read this video").
+            for f in (src, copy, out, Path(str(out) + ".json")):
+                f.unlink(missing_ok=True)
             disk.give(reserved)
 
 
