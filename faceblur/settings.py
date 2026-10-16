@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 ENGINES = ("yunet", "centerface", "both")
 DEVICES = ("auto", "gpu", "cpu")
 ENCODERS = ("auto", "nvenc", "x264")
+CODECS = ("h264", "hevc")
 MODES = ("blur", "pixelate", "solid")
 # The progress stage names, which are also the stages the watchdog times.
 WATCHDOG_STAGES = ("detecting", "tracking", "writing", "checking")
@@ -386,6 +387,27 @@ class Settings:
     encoder: str = "auto"
     # NVENC constant quality, the counterpart of crf. 16 is near lossless.
     nvenc_cq: int = 16
+    # Hot storage: the blurred copy re-encoded to HEVC by `storage.convert`.
+    # NVENC constant quality 28 is the most compression that stays above the
+    # VMAF floor of 95 on every sample, on both GPUs measured: min VMAF 96.2 at
+    # 0.19 of the H.264 size on the RTX 3070 (docs/hot_storage_curve.md), 96.5
+    # at 0.18 on the RTX 5090 (docs/hot_storage_curve_5090.md). cq 30 falls to
+    # 94.5 and 95.0, under or on the floor.
+    hevc_cq: int = 28
+    # libx265 (preset medium) when NVENC is not there. Its scale is not
+    # NVENC's, so it was measured on 004100, where cq 28 scores VMAF 96.6
+    # (docs/hot_storage_convert.md): crf 22 scores 96.5 at 0.15 of the H.264
+    # size, crf 20 97.9 at 0.21, crf 24 falls to 94.5.
+    hevc_crf: int = 22
+    # The brief: a keyframe at least every 60 frames, about 2 s at 30 fps.
+    # HEVC only (`codec` "hevc"); the H.264 cadence is `encode_gop_seconds`
+    # below, which does not apply to HEVC pieces.
+    gop: int = 60
+    # Codec of the blurred copy. h264 is the delivered format today. hevc is
+    # the hot-storage format, written with the settings above; it is encoded
+    # whole, because a stream copy of an H.264 source cannot be joined to HEVC
+    # pieces.
+    codec: str = "h264"
     suffix: str = "_blurred"
     replace_existing: bool = False
     # A frame masked beyond this share is flagged in the audit record.
@@ -408,7 +430,8 @@ class Settings:
     # at its keyframes, and without a set length NVENC put one only at each
     # piece's start: on the 004100 sample 11 seeds became 684 re-encoded
     # frames of 984 and the round saved nothing (DECISIONS D18). One second
-    # is the cadence the camera files already have.
+    # is the cadence the camera files already have. H.264 only: HEVC pieces
+    # (`codec` "hevc") keep the calibrated `gop` frames above.
     encode_gop_seconds: float = 1.0
     # Concurrent NVENC encodes. GeForce drivers from 2024 allow 8; 6 is safe.
     nvenc_sessions: int = 6
@@ -584,6 +607,8 @@ class Settings:
             raise SettingsError(f"device must be one of {DEVICES}, got {self.device!r}")
         if self.encoder not in ENCODERS:
             raise SettingsError(f"encoder must be one of {ENCODERS}, got {self.encoder!r}")
+        if self.codec not in CODECS:
+            raise SettingsError(f"codec must be one of {CODECS}, got {self.codec!r}")
         if not 0.0 < self.conf <= 1.0:
             raise SettingsError(f"conf must be above 0 and at most 1, got {self.conf}")
         if self.chunk_seconds < 0 or self.min_copy_seconds < 0:
@@ -799,6 +824,12 @@ class Settings:
             if per_frame < 0:
                 raise SettingsError(f"watchdog seconds per frame must be 0 or more, "
                                     f"got {per_frame} for {stage}")
+        if not 0 <= self.hevc_cq <= 51:
+            raise SettingsError(f"hevc_cq must be between 0 and 51, got {self.hevc_cq}")
+        if not 0 <= self.hevc_crf <= 51:
+            raise SettingsError(f"hevc_crf must be between 0 and 51, got {self.hevc_crf}")
+        if not 1 <= self.gop <= 60:
+            raise SettingsError(f"gop must be between 1 and 60, got {self.gop}")
 
     def with_changes(self, **changes) -> "Settings":
         return replace(self, **changes)
@@ -820,7 +851,8 @@ class Settings:
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
             "tail_trend",
             "ellipse_w", "ellipse_h", "pad", "feather",
-            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
+            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "codec", "hevc_cq", "hevc_crf",
+            "gop", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "encode_gop_seconds", "nvenc_sessions", "hwaccel",
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",

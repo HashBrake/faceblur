@@ -211,6 +211,7 @@ def test_the_watchdog_scale_multiplies_every_limit(batch, tmp_path, paths):
 def test_a_negative_watchdog_scale_reports_and_stops(batch, capsys):
     assert cli.main([str(batch), "--watchdog-scale", "-1", *FAST]) == 2
     assert "--watchdog-scale must be 0 or more" in capsys.readouterr().err
+
 def _settings_of_a_run(tmp_path, monkeypatch, *flags):
     """The Settings main() hands to the run, without running anything."""
     folder = tmp_path / "in"
@@ -290,3 +291,45 @@ def test_help_runs(capsys):
                  "--adaptive-stride", "--no-adaptive-stride", "--adaptive-stride-max",
                  "--encode-gop"):
         assert flag in out
+
+@pytest.mark.parametrize("encoder", ["auto", "x264"])
+def test_codec_hevc_writes_an_hevc_copy_that_verifies(video_silent, tmp_path, encoder):
+    """`--codec hevc` writes the whole copy in HEVC. With `--encoder x264`, the
+    CPU fallback, the encoder is libx265: still HEVC, never H.264."""
+    from faceblur import segments
+    from faceblur.settings import Settings
+    from faceblur.verify import check
+    from storage.probe import probe
+
+    out_dir = tmp_path / "out"
+    code = cli.main([str(video_silent), "-o", str(out_dir), "--workers", "1",
+                     "--codec", "hevc", "--encoder", encoder, *FAST])
+    assert code == 0
+    out = out_dir / "silent_blurred.mp4"
+    facts = probe(out)
+    assert facts.codec == "hevc"
+    assert facts.frames == 20
+    assert segments.verify(out, 20, 1.9) == ""
+    report = check(video_silent, out, Settings(device="cpu", det_sizes=(320,), verify=False))
+    assert report["residual_faces"] == 0
+    assert report["frames_checked"] == 20
+    record = json.loads((out_dir / "silent_blurred.mp4.json").read_text(encoding="utf-8"))
+    assert record["settings"]["codec"] == "hevc"
+
+
+def test_the_default_codec_is_still_h264(video_silent, tmp_path):
+    from storage.probe import probe
+
+    out_dir = tmp_path / "out"
+    assert cli.main([str(video_silent), "-o", str(out_dir), "--workers", "1", *FAST]) == 0
+    assert probe(out_dir / "silent_blurred.mp4").codec == "h264"
+    record = json.loads((out_dir / "silent_blurred.mp4.json").read_text(encoding="utf-8"))
+    assert record["settings"]["codec"] == "h264"
+
+
+def test_the_codec_flag_is_accepted(batch, tmp_path):
+    parser = cli.build_parser()
+    assert parser.parse_args([str(batch), "-o", str(tmp_path)]).codec == "h264"
+    assert parser.parse_args([str(batch), "-o", str(tmp_path), "--codec", "hevc"]).codec == "hevc"
+    with pytest.raises(SystemExit):
+        parser.parse_args([str(batch), "-o", str(tmp_path), "--codec", "av1"])

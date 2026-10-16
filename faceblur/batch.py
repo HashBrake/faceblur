@@ -321,7 +321,9 @@ def encode_job(job: dict) -> dict:
     last_error = ""
     for encoder_name in encoders:
         encoder = SegmentEncoder(out, info, settings.crf, settings.preset,
-                                 encoder_name, settings.nvenc_cq, settings.encode_gop_seconds)
+                                 encoder_name, settings.nvenc_cq, settings.encode_gop_seconds,
+                                 codec=settings.codec, hevc_cq=settings.hevc_cq,
+                                 hevc_crf=settings.hevc_crf, gop=settings.gop)
         masked = []
         # One share per frame per kind, beside the union share. A kind that
         # first appears part way through the segment is padded back to zero,
@@ -623,7 +625,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # Copied pieces must carry the same reordering delay as the encoded ones,
     # which have none. A source with B-frames is encoded whole.
     record.reorder_delay = reorder_delay(src)
-    want_copy = settings.copy_clean and record.reorder_delay == 0
+    want_copy = settings.copy_clean and record.reorder_delay == 0 and settings.codec == "h264"
     # A copy the gate will judge is written to a holding name and only moved
     # once, to `dst` or to quarantine, after the check has spoken. Moving it
     # into place first and checking it there meant a process that died during

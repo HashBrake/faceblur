@@ -3254,3 +3254,356 @@ input shape, if a recall run accepts its detections; the check phase on the
 the second write, which on `004310` could copy a few stretches of 60 to 81
 frames, at most about 3 % of that file's wall, and is not worth changing a
 setting both writes share.
+
+## 27. Hot storage: HEVC and Parquet (2026-10-16)
+
+The delivered dataset is large, and most of it is H.264 video written near
+lossless (crf 12 / cq 16) so that the output side check can compare it with
+its source. This section is the build on branch `build/hot-storage` (tasks
+T01 to T11), which asks one question: how much smaller can the hot copy be,
+with no visible loss and with any frame still quick to fetch. Every number
+below is copied from a measurement file, named above each table.
+`docs/hot_storage_convert.md` is the task by task log this section
+summarises.
+
+### 27.1 The question and the answer
+
+The brief's rule: VMAF at least 95 against the H.264 input, and a mean size
+at most 70 percent of it. A keyframe at most every 60 frames, nothing
+replaced without every check passing, and a dry run by default.
+
+**The default is HEVC on NVENC at cq 28, a keyframe every 60 frames, 3
+B-frames.** On a machine without NVENC the fallback is libx265 at crf 22.
+The four blurred sample copies go from **927.0 MB to 178.5 MB, 0.193 of
+their size**, with the worst file at VMAF 96.19. The rule is met with
+margin on both sides: 0.193 against 0.70, and 96.19 against 95.
+
+The settings live in `faceblur/settings.py` as `hevc_cq = 28`,
+`hevc_crf = 22` and `gop = 60` (DECISIONS D15). The side files go to
+Parquet without losing a byte, at 0.131 of their size on one real recording
+(27.5), and the blur pipeline can write the hot format directly with
+`--codec hevc` (27.6).
+
+### 27.2 The size-vs-VMAF curves
+
+`python -m storage.calibrate` encodes each of the four blurred H.264 sample
+copies at every quality on a grid and scores each encode against its input.
+VMAF is libvmaf in ffmpeg with its built-in model `vmaf_v0.6.1`, the pooled
+mean of the JSON log. The calibration scores every file whole. The converter
+uses the same measure with a sampling rule: the whole file up to 180 s, else
+three 60 s windows spread over the start, middle and end. All four samples
+are under 180 s (31.2 to 132.3 s), so every score here is a whole file
+score. The chosen quality is the one with the smallest mean size ratio among
+those whose **worst** file still scores at least 95 (D6).
+
+RTX 3070, the local PC, ffmpeg 7.1 (gyan.dev, via imageio-ffmpeg), from
+`docs/hot_storage_curve.md`:
+
+| HEVC NVENC cq | mean size ratio | min VMAF | mean VMAF | encode fps |
+|---|---|---|---|---|
+| 20 | 0.54 | 99.1 | 99.5 | 152.1 |
+| 22 | 0.42 | 98.8 | 99.3 | 159.2 |
+| 24 | 0.32 | 98.2 | 98.8 | 159.9 |
+| 26 | 0.25 | 97.4 | 98.2 | 160.3 |
+| **28** | **0.19** | **96.2** | 97.1 | 160.7 |
+| 30 | 0.15 | 94.5 | 95.6 | 160.7 |
+| 32 | 0.11 | 92.2 | 93.4 | 160.5 |
+| 34 | 0.09 | 89.2 | 90.6 | 160.6 |
+
+| AV1 libaom crf, file 004100 only (the smallest by bytes) | size ratio | VMAF | encode fps |
+|---|---|---|---|
+| 24 | 0.13 | 97.0 | 1.7 |
+| 30 | 0.08 | 94.4 | 2.0 |
+| 36 | 0.05 | 90.2 | 2.3 |
+
+RTX 5090, one GreenNode VM, ffmpeg n8.1.3 (BtbN static build), from
+`docs/hot_storage_curve_5090.md` and `.json`:
+
+| cq | HEVC NVENC mean size ratio | HEVC min VMAF | AV1 NVENC mean size ratio | AV1 min VMAF |
+|---|---|---|---|---|
+| 20 | 0.53 | 99.2 | 0.68 | 99.7 |
+| 22 | 0.41 | 98.8 | 0.55 | 99.6 |
+| 24 | 0.31 | 98.3 | 0.45 | 99.5 |
+| 26 | 0.24 | 97.6 | 0.37 | 99.3 |
+| **28** | **0.18** | **96.5** | 0.30 | 99.1 |
+| 30 | 0.14 | 94.98 | 0.24 | 98.8 |
+| 32 | 0.11 | 92.8 | 0.20 | 98.4 |
+| 34 | 0.08 | 90.0 | 0.16 | 97.8 |
+| 36 | | | 0.14 | 96.9 |
+| **38** | | | **0.11** | **95.7** |
+| 40 | | | 0.09 | 94.3 |
+| 42 | | | 0.08 | 92.6 |
+| 44 | | | 0.07 | 90.6 |
+
+**Both GPUs choose cq 28**, so there was no tie to break (D15): min VMAF
+96.2 at 0.19 on the 3070, 96.5 at 0.18 on the 5090. One step further, cq
+30, misses the floor on both: 94.5 on the 3070, and 94.98 on the 5090, just under
+it. The two GPUs track
+each other closely, at most a hundredth of size and under one point of VMAF apart at
+every cq.
+
+**AV1 is reported, not chosen.** It is smaller at the same floor: cq 38 on
+the 5090 gives 0.11 at min VMAF 95.7, and libaom crf 24 on the 3070 gives
+0.13 at VMAF 97.0 on the one file it was run on, at 1.7 frames a second. It
+is not the default for three reasons: the brief rules it out; the 3070 has
+no AV1 NVENC, so a local AV1 copy is a software encode at 1.7 to 2.3 fps
+(D2); and the random access test (27.4) was run on HEVC only, so whether
+OpenCV's bundled ffmpeg seeks an AV1 copy exactly is not measured.
+
+The 5090 numbers came from one GreenNode VM, used for 1.9 VM-hours and
+deleted the same morning, inside the owner's addendum (D10, D13). Its first
+run was invalid: the encoder then wrote an exact 30 fps clock instead of the
+camera's 30.0085 fps, so the 132 s file drifted against its source and
+scored about 87.9 at every quality. That was fixed in T05a (D14) and the
+curve measured again; the first run is kept, annotated, as
+`docs/hot_storage_curve_5090_run1_invalid.md`.
+
+### 27.3 The converter
+
+`python -m storage.convert SRC` re-encodes one file and, by default, only
+proves that it could. It encodes to `<stem>.hevc.tmp.mp4` beside the source,
+runs the checks, appends a row to the manifest and deletes the copy. With
+`--apply`, and only when every check passed, the copy replaces the source
+under the same name by one rename on the same drive, so there is never a
+moment without a whole file at that path.
+
+The checks, in order: the same frame count; the same duration to within half
+a frame (D11; the brief says one frame, but a copy one frame short would pass
+that); the copy decodes end to end without a single error, by PyAV and by an
+ffmpeg null decode; VMAF at least 95. Timestamps are passed through, not
+regenerated (`-fps_mode passthrough -enc_time_base -1
+-video_track_timescale 90000`), so frame N of the copy sits at the same time
+as frame N of the source (D14), and the decode check reads the clock the
+same way (D16). Exit 0 when every check passed, 1 when one failed, 2 on bad
+input.
+
+The real run, on the RTX 3070, all defaults (NVENC, cq 28, gop 60): a dry
+run on each of the four blurred copies, then `--apply` on copies of them in
+`converted\`. From `docs/hot_storage_convert.md`, with the bytes and VMAF
+checked against `converted\hot_storage_manifest.parquet`:
+
+| file | H.264 bytes | HEVC bytes | ratio | VMAF | apply wall (s) |
+|---|---|---|---|---|---|
+| `003939` | 207,741,232 | 40,701,778 | 0.196 | 96.56 | 75.2 |
+| `004100` | 105,690,318 | 20,726,307 | 0.196 | 96.58 | 67.2 |
+| `004310` | 128,927,603 | 22,105,463 | 0.171 | 96.19 | 63.8 |
+| `005035` | 484,598,171 | 94,929,745 | 0.196 | 99.11 | 143.0 |
+| **total** | **926,957,324** | **178,463,293** | **0.193** | | 349.2 |
+
+All eight commands exited 0. The manifest holds 8 rows, 4 `dry-run` and 4
+`applied`, every one with `checks_passed` true, `encoder` nvenc, `quality`
+28. The dry run and the apply pass produced byte-identical encodes, the
+VMAF of each file equals its cq 28 point on the 3070 curve, and the four
+sources were left unchanged. Wall time includes the encode and every check.
+
+The manifest after T11 (D21): one row per conversion run, appended, never
+rewritten. `path` is relative to the manifest's own folder, in POSIX form,
+when the file is inside it, and the path as given otherwise. `status` is
+`dry-run`, `applied` or `failed`. The `applied` row is written only after
+the rename has succeeded, so a rename that fails (a read-only file, a file
+held open) leaves the source, deletes the copy and writes no row. The tree
+listing, `python -m storage.manifest TREE`, writes a `listed` row for every
+file under the tree; run over a manifest that already holds conversion rows,
+it keeps them unchanged and replaces only its own earlier `listed` rows.
+The run above predates T11, so its rows carry absolute paths.
+
+### 27.4 Random access
+
+`python -m storage.randaccess` decodes both files in order with each
+library, then seeks 100 seeded frame indices (seed 0) and compares the hash
+of each fetched frame with that library's own sequential decode. File
+`005035`, 3971 frames, the HEVC copy against its H.264 source, from
+`faceblur-hot-storage-data\t07\randaccess_005035.json`:
+
+| library | exact, HEVC | exact, H.264 | mean ms, HEVC | mean ms, H.264 | ratio |
+|---|---|---|---|---|---|
+| OpenCV (`CAP_PROP_POS_FRAMES`) | 100/100 | 100/100 | 80.0 | 137.8 | 0.58 |
+| PyAV (`seek`, decode forward) | 100/100 | 100/100 | 242.7 | 727.6 | 0.33 |
+
+**Every seek was exact, and seeking the copy is faster than seeking the
+source.** The brief allows twice as slow. The reason is the keyframe
+interval: the copy has 67 keyframes, one every 60 frames, and the source 28,
+one every 144.4 on average (150 nominal), so a seek in the copy decodes
+fewer frames from its keyframe, which outweighs HEVC's dearer frames. Plain
+`CAP_PROP_POS_FRAMES` was exact despite the B-frames, so no reader side
+remedy was needed.
+
+### 27.5 CSV to Parquet
+
+`python -m storage.csv2parquet` turns the IMU (`*_imu.csv`) and timestamp
+(`*_pts.csv`, which includes `*_audio_pts.csv`) side files into Parquet,
+zstd level 9. One real recording folder,
+`Orbbec_Ego_AZER76400FF_19700104_222421`, written to the data folder, from
+`docs/hot_storage_convert.md` and `faceblur-hot-storage-data\t08\run.json`:
+
+| file | rows | bytes before | bytes after | ratio | round trip |
+|---|---|---|---|---|---|
+| `..._imu.csv` | 2,380,160 | 112,888,986 | 14,490,683 | 0.128 | byte-identical |
+| `..._audio_pts.csv` | 27,889 | 362,570 | 132,748 | 0.366 | byte-identical |
+| `..._camera_left_part0001_pts.csv` | 35,622 | 463,099 | 165,986 | 0.358 | byte-identical |
+| `..._camera_right_part0001_pts.csv` | 35,620 | 463,073 | 165,981 | 0.358 | byte-identical |
+| **total** | 2,479,291 | 114,177,728 | 14,955,398 | **0.131** | 4/4 |
+
+The run took 5.55 s with a peak working set of 447 MB, and left the
+read-only recording folder exactly as it was.
+
+**Lossless here means byte for byte** (D3). The Parquet schema metadata
+carries what a CSV parser forgets: the exact header line (the IMU header
+keeps its tabs, `timestamp_us\t,x\t,y\t,z\t,type`), the line terminator,
+the decimal places of each float column, and whether the file ends with a
+terminator. After each file is written it is read back from disk, the CSV is
+regenerated from it and compared with the source; one differing byte deletes
+the Parquet and reports the file failed. So the tool refuses rather than
+approximates what the stored facts cannot reproduce: a float with a
+different number of decimals than the first row, scientific notation, CRLF
+lines in an LF file, leading zeros or a plus sign, empty fields, an unknown
+header. A second process, in plain Python without the storage code, also
+regenerated all four CSVs and matched their sha256.
+
+The Parquet goes beside its CSV, or with `--out DIR` under DIR at the same
+path relative to `--tree` (D17). `--apply` deletes a CSV after a passing
+round trip, and only when its Parquet sits beside it, never with `--out`
+elsewhere, so a recording is never split between two places.
+
+### 27.6 `--codec hevc` in the blur pipeline
+
+`cli.py --codec {h264,hevc}` (setting `codec`, default `h264`) picks the
+codec of the blurred copy. h264 is unchanged, the same ffmpeg command line
+byte for byte. hevc writes the copy directly in the hot format, so no second
+pass is needed. The HEVC arguments come from `storage.encode.codec_args`,
+the function the calibration was measured with, rather than a second copy
+that could drift (D18): NVENC at `hevc_cq` 28, or libx265 at `hevc_crf` 22,
+a keyframe every `gop` 60 frames, B-frames on. With hevc no stretch is
+stream-copied, because a copied H.264 piece cannot be joined to HEVC pieces.
+`codec`, `hevc_cq`, `hevc_crf` and `gop` go into the audit record.
+
+The real run, file `004100` (984 frames) on the RTX 3070, from
+`docs/hot_storage_convert.md` and `faceblur-hot-storage-data\t09\results.json`:
+
+| | value |
+|---|---|
+| HEVC copy | 21,133,541 bytes, 0.200 of the H.264 copy (105,690,318) |
+| frames, source / copy | 984 / 984 |
+| duration, source / copy | 32.778 s / 32.778 s |
+| `segments.verify` | clean, also with the length check |
+| pipeline | 1 join attempt, 0 frames copied, wall 184.1 s (detect 124.1, encode 47.2) |
+| `faceblur.verify`, faces | 7 on untouched pixels, against 11 on the H.264 copy |
+| `faceblur.verify`, zone gate | 881 of 984 frames over 1 percent, worst 9.84 percent |
+
+**Faces are no worse**: 7 against 11, and both copies fail the face gate at
+default settings, so the codec adds no misses. **The zone gate holds the HEVC
+copy back** (D19). It counts the zone pixels that moved more than the frame's
+median noise plus four levels between the source and the copy, and stops a
+copy above 1 percent of the zone. That limit was set on near-lossless H.264
+copies, where a clean copy reads 0.1 to 0.5 percent (17.3). A lossy HEVC
+encode moves edge and texture pixels far beyond the median, so the gate reads
+codec noise as damage.
+
+Which HEVC quality does the gate as it stands accept? The same check at
+stride 4 (246 of 984 frames), from
+`faceblur-hot-storage-data\t09\sweep\sweep_results.json`. The cq 16, 20 and
+24 files are the H.264 copy re-encoded; the cq 28 file is the pipeline
+output:
+
+| file | bytes | / H.264 copy | zone frames over | worst zone share | faces flagged |
+|---|---|---|---|---|---|
+| H.264 copy (reference) | 105,690,318 | 1.000 | 0 / 246 | 0.080 % | 2 |
+| HEVC cq 16 | 99,928,081 | 0.945 | 0 / 246 | 0.898 % | 4 |
+| HEVC cq 20 | 59,996,264 | 0.568 | 37 / 246 | 1.880 % | 3 |
+| HEVC cq 24 | 35,282,331 | 0.334 | 145 / 246 | 4.106 % | 4 |
+| HEVC cq 28 | 21,133,541 | 0.200 | 216 / 246 | 7.834 % | 4 |
+
+**Only cq 16 passes, at 0.945 of the size**, and only just, 0.90 percent
+against the 1 percent limit. The gate and a storage-size copy cannot both be
+had as things stand. The fix is a zone gate that is robust to codec noise
+(a high-percentile noise floor, re-calibrated on lossy copies) in
+`faceblur/verify.py`. It changes the gate for every delivered copy, so it is
+outside this build and not done here. Until then a run with `--codec hevc`
+and `--check-output` or `--quarantine` holds every copy back for `zone`.
+
+### 27.7 How to reproduce
+
+Every command from the repository root. `DATA` stands for a folder outside
+the repository, for example `D:\Claude Projects\faceblur-hot-storage-data`;
+`FILE`, `SOURCE` and `RECORDING_DIR` for a file or folder in it. Anything
+that encodes or times on the shared PC goes through the GPU lock.
+
+```
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements-storage.txt
+```
+
+The curve, on a folder of blurred H.264 copies:
+
+```
+.venv\Scripts\python.exe -m storage.calibrate DATA\blurred --out docs\hot_storage_curve --codecs hevc,av1 --hevc-qualities 20,22,24,26,28,30,32,34 --av1-qualities 24,30,36 --av1-files 1 --stage all --workdir DATA\calib
+```
+
+Convert, a dry run first, then for real on a copy:
+
+```
+.venv\Scripts\python.exe -m storage.convert DATA\blurred\FILE.mp4 --manifest DATA\converted\hot_storage_manifest.parquet
+.venv\Scripts\python.exe -m storage.convert DATA\converted\FILE.mp4 --apply --manifest DATA\converted\hot_storage_manifest.parquet
+```
+
+List a tree in its manifest (keeps the converter's rows):
+
+```
+.venv\Scripts\python.exe -m storage.manifest DATA\converted -o DATA\converted\hot_storage_manifest.parquet
+```
+
+Random access, the copy against its source:
+
+```
+.venv\Scripts\python.exe -m storage.randaccess DATA\converted\FILE.mp4 --source DATA\blurred\FILE.mp4 --seeks 100 --seed 0 --json DATA\t07\randaccess.json
+```
+
+CSV to Parquet: a whole recording mirrored elsewhere, or beside the CSVs
+and deleting them after a passing round trip:
+
+```
+.venv\Scripts\python.exe -m storage.csv2parquet --tree RECORDING_DIR --out DATA\parquet
+.venv\Scripts\python.exe -m storage.csv2parquet --tree RECORDING_DIR --apply
+```
+
+The blur pipeline writing HEVC, and the check of its copy:
+
+```
+.venv\Scripts\python.exe cli.py SOURCE.mp4 -o DATA\t09\out --codec hevc --workers 2 --no-progress
+.venv\Scripts\python.exe -m faceblur.verify SOURCE.mp4 DATA\t09\out\SOURCE_blurred.mp4 --json DATA\t09\verify_hevc.json
+```
+
+The tests:
+
+```
+.venv\Scripts\python.exe -m pytest tests
+```
+
+### 27.8 Limits and what is next
+
+- **No AV1 NVENC on the 3070.** AV1 there is libaom at 1.7 to 2.3 fps, so
+  the local AV1 curve is one file and the 5090 curve is the only full one.
+- **The VMAF model has a ceiling.** `vmaf_v0.6.1` does not reach 100 on
+  identical low-motion input: a 320x240 test clip against itself scores
+  about 98.6 (`storage/ffmpeg.py`, STATUS T01). Scores near the top of the
+  curve compare with each other, not with 100.
+- **The zone gate does not accept lossy copies** (27.6).
+- **Only one recording's side files were converted.** Its IMU file is
+  112.9 MB. The full recordings' IMU files are larger, the largest
+  1,285,067,201 bytes (1.29 GB, from a listing of
+  `D:\Player One - Phase 0 full`), and none of those was converted or timed.
+- **The pts files compress to about 0.36 only.** Most of the 0.131 comes
+  from the IMU file.
+- **Manifest appends are not locked.** One converter at a time per manifest,
+  by design (D21).
+- **libvmaf's log path breaks on an apostrophe in `%TEMP%`**, because the
+  path is single-quoted inside the filter string. Not handled (D21).
+- **In batch mode `--codec hevc` is still pieces.** The file is encoded as
+  5 s pieces joined at keyframes, exactly as h264 is, and a piece NVENC
+  refuses falls back to libx265 beside NVENC pieces. `segments.verify` is
+  the join gate, as for h264 (D21).
+
+**Suggested next step: the zone gate.** A noise-robust, re-calibrated zone
+gate in `faceblur/verify.py` is what stands between `--codec hevc` and a
+pipeline that writes, checks and ships the hot copy in one pass.

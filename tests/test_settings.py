@@ -30,7 +30,29 @@ def test_defaults_are_the_precision_first_ones():
     assert s.mask_budget == 0.05
 
 
+def test_hot_storage_defaults_are_the_calibrated_ones():
+    s = Settings()
+    assert s.hevc_cq == 28
+    assert s.hevc_crf == 22
+    assert s.gop == 60
+
+
+def test_the_blurred_copy_is_h264_unless_asked():
+    assert Settings().codec == "h264"
+    assert Settings(codec="hevc").codec == "hevc"
+    d = Settings(codec="hevc").to_dict()
+    assert d["codec"] == "hevc"
+    assert (d["hevc_cq"], d["hevc_crf"], d["gop"]) == (28, 22, 60)
+
+
 @pytest.mark.parametrize("changes", [
+    {"hevc_cq": 52},
+    {"hevc_cq": -1},
+    {"hevc_crf": 52},
+    {"hevc_crf": -1},
+    {"gop": 61},
+    {"gop": 0},
+    {"codec": "av1"},
     {"engine": "yolo"},
     {"mode": "smudge"},
     {"conf": 0.0},
@@ -76,7 +98,8 @@ def test_to_dict_holds_every_setting_the_audit_record_needs():
     d = Settings().to_dict()
     for key in ("engine", "conf", "det_sizes", "verify", "max_face_frac",
                 "min_track", "max_gap", "tail", "ellipse_w", "ellipse_h",
-                "pad", "feather", "mode", "strength", "crf", "preset", "mask_budget"):
+                "pad", "feather", "mode", "strength", "crf", "preset", "mask_budget",
+                "codec"):
         assert key in d
 
 

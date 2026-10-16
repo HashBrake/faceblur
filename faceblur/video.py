@@ -46,21 +46,32 @@ def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-@lru_cache(maxsize=1)
-def nvenc_available() -> bool:
-    """True when the bundled ffmpeg can encode with the NVIDIA encoder here."""
+@lru_cache(maxsize=None)
+def nvenc_available(encoder: str = "h264_nvenc") -> bool:
+    """True when the bundled ffmpeg can encode with this NVIDIA encoder here."""
     try:
         r = subprocess.run(
             [ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "color=size=256x256:rate=1",
-             "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
+             "-frames:v", "1", "-c:v", encoder, "-f", "null", "-"],
             capture_output=True, timeout=30, **_no_window())
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def video_codec_args(encoder: str, crf: int, preset: str, nvenc_cq: int) -> list[str]:
-    """The ffmpeg video codec arguments for the chosen encoder."""
+def video_codec_args(encoder: str, crf: int, preset: str, nvenc_cq: int, codec: str = "h264",
+                     hevc_cq: int = 28, hevc_crf: int = 22, gop: int = 60) -> list[str]:
+    """The ffmpeg video codec arguments for the chosen encoder and codec."""
+    if codec == "hevc":
+        # The hot-storage arguments, from the one place they are defined and
+        # calibrated. B-frames are on: an HEVC copy is never joined to a stream
+        # copied piece of the source. The CPU fallback name "x264" means
+        # libx265 here.
+        from storage.encode import codec_args
+
+        use_nvenc = encoder == "nvenc" or (encoder == "auto" and nvenc_available("hevc_nvenc"))
+        return codec_args("hevc", "nvenc" if use_nvenc else "software",
+                          hevc_cq if use_nvenc else hevc_crf, gop)
     # No B-frames. A segment that is joined to a stream copied piece of the
     # source must carry the same frame reordering delay as that piece, or the
     # concat demuxer places the two a few frames apart. Copies are only made
@@ -213,7 +224,8 @@ class Encoder:
     """
 
     def __init__(self, src: Path, dst: Path, info: VideoInfo, crf: int, preset: str,
-                 encoder: str = "x264", nvenc_cq: int = 16):
+                 encoder: str = "x264", nvenc_cq: int = 16, codec: str = "h264",
+                 hevc_cq: int = 28, hevc_crf: int = 22, gop: int = 60):
         self.dst = Path(dst)
         self.dst.parent.mkdir(parents=True, exist_ok=True)
         # ffmpeg writes a .part file. It becomes the real file only when the
@@ -226,7 +238,7 @@ class Encoder:
             "-s", f"{info.width}x{info.height}", "-r", f"{info.fps}", "-i", "-",
             "-i", str(src),
             "-map", "0:v:0", "-map", "1:a?",
-            *video_codec_args(encoder, crf, preset, nvenc_cq),
+            *video_codec_args(encoder, crf, preset, nvenc_cq, codec, hevc_cq, hevc_crf, gop),
             "-pix_fmt", "yuv420p", "-c:a", "copy",
             "-movflags", "+faststart", "-f", "mp4", str(self.part),
         ]

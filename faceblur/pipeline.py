@@ -361,7 +361,7 @@ def process_video(
     masked: list[float] = []
     by_kind: dict[str, list[float]] = {}
     encoder = Encoder(src, dst, p.info, settings.crf, settings.preset,
-                      settings.encoder, settings.nvenc_cq)
+                      settings.encoder, settings.nvenc_cq, codec=settings.codec, hevc_cq=settings.hevc_cq, hevc_crf=settings.hevc_crf, gop=settings.gop)
     try:
         for index, frame in enumerate(read_frames(src)):
             if _cancelled(cancel):

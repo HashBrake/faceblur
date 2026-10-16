@@ -247,23 +247,27 @@ class SegmentEncoder:
     """Encodes one segment's frames to a video only file, same rate as the source."""
 
     def __init__(self, out: Path, info: VideoInfo, crf: int, preset: str,
-                 encoder: str, nvenc_cq: int, gop_seconds: float | None = None):
+                 encoder: str, nvenc_cq: int, gop_seconds: float | None = None,
+                 codec: str = "h264", hevc_cq: int = 28, hevc_crf: int = 22, gop: int = 60):
         self.out = Path(out)
-        codec = video_codec_args(encoder, crf, preset, nvenc_cq)
-        # A fixed keyframe cadence, no scene cut keyframes: the scoped second
-        # chance cuts this copy at its keyframes (Settings.encode_gop_seconds).
-        # None leaves the encoder's own default, as before.
-        gop = []
-        if gop_seconds is not None:
+        args = video_codec_args(encoder, crf, preset, nvenc_cq, codec, hevc_cq, hevc_crf, gop)
+        # H.264: a fixed keyframe cadence, no scene cut keyframes: the scoped
+        # second chance cuts this copy at its keyframes
+        # (Settings.encode_gop_seconds). None leaves the encoder's own
+        # default, as before. HEVC keeps the calibrated hot-storage cadence of
+        # `gop` frames (Settings.gop) that `storage.encode.codec_args` already
+        # put in `args`; `gop_seconds` does not apply to it.
+        cadence = []
+        if gop_seconds is not None and codec == "h264":
             g = str(max(1, round(info.fps * gop_seconds)))
-            if "h264_nvenc" in codec:
-                gop = ["-g", g, "-no-scenecut", "1"]
+            if "h264_nvenc" in args:
+                cadence = ["-g", g, "-no-scenecut", "1"]
             else:
-                gop = ["-g", g, "-keyint_min", g, "-sc_threshold", "0"]
+                cadence = ["-g", g, "-keyint_min", g, "-sc_threshold", "0"]
         cmd = [ffmpeg_exe(), "-hide_banner", "-y", "-v", "error",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{info.width}x{info.height}",
                "-r", f"{info.fps:.6f}", "-i", "-",
-               *codec, *gop,
+               *args, *cadence,
                "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
                "-f", "mp4", str(self.out)]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
