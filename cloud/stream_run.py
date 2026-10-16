@@ -610,8 +610,10 @@ def main(argv=None) -> int:
     marker.write_text(json.dumps({"tally": tally, "todo": len(todo),
                                   "hours": round((time.time() - started) / 3600, 2)}))
     rclone(cfg, "copyto", str(marker), f"{cfg.out}/_logs/{cfg.tag}DONE.json", check=False)
-    rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
+    # Said before the upload, so the bucket's log ends on the line a reader
+    # looks for even when no self-delete upload follows.
     say(cfg, f"finished: {tally}")
+    rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
     # Last of all, so the DONE marker and the log are in the bucket before
     # the machine that wrote them goes.
     if cfg.self_delete:

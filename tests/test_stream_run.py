@@ -180,6 +180,8 @@ def test_shard_run_on_a_local_remote(sr, tmp_path):
         done = json.loads((out / "_logs" / f"shard{k}of2_DONE.json").read_text())
         assert done["tally"] == {"delivered": n} and done["todo"] == n
         assert (out / "_logs" / f"shard{k}of2_stream_run.log").is_file()
+        assert "finished:" in (out / "_logs" / f"shard{k}of2_stream_run.log").read_text(
+            encoding="utf-8")
         assert (out / "_logs" / f"shard{k}of2_gpu0_cli.log").is_file()
 
     before = calls.read_text(encoding="utf-8")

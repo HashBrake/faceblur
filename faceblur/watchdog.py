@@ -28,6 +28,13 @@ POLL_SECONDS = 0.5
 SEND_SECONDS = 0.5
 
 
+def _seconds(spent: float) -> str:
+    """Time spent, short but never rounded down to 0 s: one decimal below
+    10 s, whole seconds above. The limit itself prints with :g, exactly as it
+    was set, because a 0.3 s floor printed as "limit 0 s" read as no limit."""
+    return f"{spent:.1f}" if spent < 10 else f"{spent:.0f}"
+
+
 def new_pool(workers: int):
     """The detector pool, built the way the CLI builds it."""
     context = multiprocessing.get_context("spawn")
@@ -150,7 +157,7 @@ def supervise(entry: Callable, src: Path, dst: Path, settings: Settings, workers
                     _stop(child)
                     remove_leftovers(dst)
                     return failed(f"Watchdog stopped the video in the starting stage after "
-                                  f"{spent:.0f} s (limit {limit:.0f} s): no stage was "
+                                  f"{_seconds(spent)} s (limit {limit:g} s): no stage was "
                                   f"reported", "starting")
                 continue
             # A stage nobody named has no limit.
@@ -161,7 +168,7 @@ def supervise(entry: Callable, src: Path, dst: Path, settings: Settings, workers
                 _stop(child)
                 remove_leftovers(dst)
                 return failed(f"Watchdog stopped the video in the {stage} stage after "
-                              f"{spent:.0f} s (limit {limit:.0f} s)", stage)
+                              f"{_seconds(spent)} s (limit {limit:g} s)", stage)
     finally:
         receiver.close()
     # The pipe broke or the child ended without a record.

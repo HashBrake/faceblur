@@ -216,6 +216,15 @@ def test_a_child_that_never_reports_a_stage_is_stopped_at_the_floor(tmp_path):
         assert _wait_dead(int(pid_file.read_text()), 5)
 
 
+def test_a_sub_second_floor_is_printed_as_it_was_set(tmp_path):
+    # A 0.3 s floor once printed as "limit 0 s", and 0 means no limit.
+    record = supervise(never_reports, tmp_path / "clip.mp4", tmp_path / "clip_blurred.mp4",
+                       QUICK.with_changes(watchdog_min_seconds=0.3))
+
+    assert record.status == STATUS_FAILED
+    assert "limit 0.3 s" in record.error, record.error
+
+
 def test_pool_workers_leave_when_their_parent_is_killed(tmp_path):
     context = multiprocessing.get_context("spawn")
     child = context.Process(target=holds_a_worker, args=(str(tmp_path),))
