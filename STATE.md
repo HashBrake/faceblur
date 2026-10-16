@@ -42,7 +42,7 @@ the pinhole camera the toolkit used. In `vs:faceblur/hands_showcase/`
 link, **expires 2026-10-23 12:47 UTC**; the link is not kept in git.
 **Build sessions A-D finished 2026-10-16** (all DONE, ~3.7 VM-hours, ~$3.3).
 Owner's decisions the same evening: merge all four into `main` (order A, B,
-D, C; being done in worktree `D:\Claude Projectsaceblur-merge`, branch
+D, C; being done in worktree `D:\Claude Projects\faceblur-merge`, branch
 `merge/builds`, then fast-forward `main`); accept B's speedups as defaults
 (recall identical; the verify count differs by one detector hit on 2 of 4
 files); turn on A's self-delete hook **with the current full-access API
