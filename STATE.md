@@ -61,7 +61,19 @@ not the source timestamps: they were re-timed at a constant rate, losing the
 step at each dropped sensor frame, so anything pairing them with the `*_pts.csv`
 (stereo, IMU) is off by one frame after a gap. Remuxing with timestamps from
 the csv (stream copy) fixes a copy. Not yet known how many delivered copies
-are affected; to check before the public delivery. In parallel, the partner's
+are affected; to check before the public delivery.
+**Correction 2026-10-17 (demo run):** none of the blurred copies keep the
+camera's frame times, old or new (re-timed, up to 7-27 ms off after a
+constant shift); pair by frame index with the raw `*_pts.csv` until the
+pipeline keeps source pts. **Pipeline demo** (owner, 2026-10-16): merged main
+`f2e4e5b` on 4 recordings (B2 004332, FF 221215, D5 021054, B2 054241) on
+`faceblur-demo-1` (4.3 VM-h, deleted); outputs in `vs:faceblur/pipeline_demo/`
+(187 files, 19.9 GB) with a 7-day link **expiring 2026-10-23 21:28 UTC**;
+numbers in `D:\Claude Projects\pipeline_demo\comparison.json` and the
+owner's Claude Doc "FaceBlur pipeline: before and after the improvements".
+Findings: blur 9-21 % faster on the fair test, same faces left; patch removes
+them but also blurs gloved hands and objects (not re-checked); HEVC 0.19-0.24
+of size at VMAF 95.1-98.4; Parquet 0.13-0.42; stereo hands weak on gloves. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). The robustness build on branch
