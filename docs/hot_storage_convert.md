@@ -69,3 +69,38 @@ After the run, `probe()` on each file in `converted/` reports codec `hevc` with 
 ### Decode check fix
 
 The first attempt of this run failed every file on `decodes_cleanly`: ffmpeg's null-output decode reported `non monotonically increasing dts to muxer`. The same message appears for the untouched H.264 sources, so it is not a defect of the encodes. By default ffmpeg puts the null muxer's timestamps on a 1/30 grid from `r_frame_rate`; the camera's 30.0085 fps clock then puts two frames on one tick. The check now decodes with `-fps_mode passthrough -enc_time_base -1`, as the encoder already does, and a test with a clock slightly faster than 30 fps covers it. That attempt's manifest was discarded with the rest of `converted/` before the run above.
+
+## Random access (T07)
+
+Driver `faceblur-hot-storage-data/t07/run.py`, run once through the GPU lock together with the full test suite:
+
+```
+python -m storage.randaccess <converted/..._005035_...> --source <blurred/..._005035_...> \
+  --seeks 100 --seed 0 --json <t07/randaccess_005035.json>
+```
+
+File 005035 (3971 frames, 132.3 s): the NVENC HEVC copy (cq 28, gop 60, B-frames) against its H.264 source. Seed 0, 100 frame indices from `random.Random(0)`, the same for both files and both libraries. Each seek is timed from the seek call to the decoded BGR frame, with one reader reused across the 100 seeks; a seek is exact when the frame's SHA-256 equals that library's own sequential decode at that index. The run exited 0 in 287 s.
+
+### OpenCV (`CAP_PROP_POS_FRAMES` + `read()`)
+
+| file | frames seen | exact seeks | mean seek (ms) | median seek (ms) |
+|---|---|---|---|---|
+| HEVC copy | 3971 | 100/100 | 80.0 | 79.3 |
+| H.264 source | 3971 | 100/100 | 137.8 | 142.0 |
+
+Ratio HEVC / H.264 mean: **0.58**.
+
+### PyAV (`container.seek(pts, backward=True)`, decode forward to the pts)
+
+| file | frames seen | exact seeks | mean seek (ms) | median seek (ms) |
+|---|---|---|---|---|
+| HEVC copy | 3971 | 100/100 | 242.7 | 252.6 |
+| H.264 source | 3971 | 100/100 | 727.6 | 756.5 |
+
+Ratio HEVC / H.264 mean: **0.33**.
+
+Both ratios are at or below 2.0: the bound holds. Seeking the copy is faster than seeking the source.
+
+Plain `CAP_PROP_POS_FRAMES` was exact on 100 of 100 seeks on the HEVC copy, despite its B-frames, so no reader-side remedy was needed. The same held on the synthetic libx265 clip in `tests/test_storage_randaccess.py` (300 frames, gop 60, B-frames).
+
+Why HEVC seeks compare as they do: a seek decodes from the keyframe at or before the target, so its cost grows with the distance to that keyframe. The sequential PyAV pass counted 67 keyframes in the copy (one every 60 frames) against 28 in the source (one every 150 frames, mean interval 144.4), so the copy decodes on average about 30 frames per seek against about 75 for the source, which outweighs HEVC's higher per-frame decode cost.
