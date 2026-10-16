@@ -62,22 +62,28 @@ def convert(src: Path, apply: bool = False, codec: str = "hevc", encoder: str = 
         log(report.describe())
         passed = report.passed
         status = ("applied" if apply else "dry-run") if passed else "failed"
+        manifest = Path(manifest) if manifest else src.parent / MANIFEST_NAME
+        try:
+            row_path = src.resolve().relative_to(manifest.resolve().parent).as_posix()
+        except ValueError:
+            row_path = str(src)
         row = ManifestRow(
-            path=str(src), sha256_before=sha_before,
+            path=row_path, sha256_before=sha_before,
             sha256_after=sha256_of(tmp) if passed else sha_before,
             size_before=before.size_bytes, size_after=result.size_bytes,
             codec_before=before.codec, codec_after=codec, frames=report.frames,
             duration_s=report.duration_s, vmaf=report.vmaf_mean, vmaf_min=report.vmaf_min,
             checks_passed=passed, status=status, encoder=result.encoder,
             quality=quality, converted_at=now_utc())
-        append_row(Path(manifest) if manifest else src.parent / MANIFEST_NAME, row)
+        if apply and passed:
+            # Rename first: a row says "applied" only for a file that was replaced.
+            os.replace(tmp, src)
+        append_row(manifest, row)
         ratio = result.size_bytes / before.size_bytes if before.size_bytes else 0.0
         vmaf_text = "n/a" if report.vmaf_mean is None else f"{report.vmaf_mean:.2f}"
         log(f"{status}: {src.name} {before.size_bytes} -> {result.size_bytes} bytes "
             f"({ratio:.2f} of the source), VMAF {vmaf_text}")
-        if apply and passed:
-            os.replace(tmp, src)
-        elif not keep:
+        if not (apply and passed) and not keep:
             tmp.unlink(missing_ok=True)
         return row, report
     except BaseException:
@@ -104,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-seconds", type=float, default=60.0)
     try:
         args = parser.parse_args(argv)
+        if args.windows < 1:
+            parser.error("--windows must be at least 1")
     except SystemExit as exc:
         return 0 if exc.code == 0 else 2
     if not args.src.is_file():
@@ -114,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
                          quality=args.quality, gop=args.gop, manifest=args.manifest,
                          keep=args.keep, floor=args.floor, windows=args.windows,
                          window_s=args.window_seconds)
-    except (SameCodecError, VideoError) as exc:
+    except (SameCodecError, VideoError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     return 0 if row.checks_passed else 1

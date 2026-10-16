@@ -117,3 +117,22 @@ def test_replace_retries_a_held_file(tmp_path, monkeypatch):
     monkeypatch.setattr(manifest.time, "sleep", lambda s: None)
     manifest.write_rows(tmp_path / "m.parquet", [_row()])
     assert len(calls) == 3 and manifest.read_rows(tmp_path / "m.parquet") == [_row()]
+
+
+def test_tree_listing_keeps_converter_rows(tmp_path, video_silent):
+    from storage import convert
+    root = tmp_path / "tree"
+    root.mkdir()
+    shutil.copy(video_silent, root / "clip.mp4")
+    (root / "notes.txt").write_text("hello")
+    applied, _ = convert.convert(root / "clip.mp4", apply=True, encoder="software",
+                                 quality=20, floor=90, log=lambda _: None)
+    assert applied.status == "applied" and applied.path == "clip.mp4"
+    for _ in range(2):
+        rows = manifest.read_rows(manifest.build_tree_manifest(root))
+        assert rows[0] == applied
+        listed = rows[1:]
+        assert [(r.path, r.status) for r in listed] == [("clip.mp4", "listed"),
+                                                        ("notes.txt", "listed")]
+        assert listed[0].sha256_before == applied.sha256_after
+        assert listed[0].codec_before == "hevc"

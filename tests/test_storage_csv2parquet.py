@@ -131,3 +131,40 @@ def test_explicit_other_csv_is_skipped(tmp_path, capsys):
     assert c2p.main([str(other)]) == 0
     assert "skipped" in capsys.readouterr().out
     assert not other.with_suffix(".parquet").exists()
+
+
+def test_unwritable_target_is_a_failed_result(tmp_path):
+    src = _write(tmp_path / "r_pts.csv", PTS)
+    blocker = _write(tmp_path / "blocker", b"a file, not a folder")
+    r = c2p.convert(src, blocker / "r_pts.parquet", apply=True)
+    assert not r.ok and r.error
+    assert src.read_bytes() == PTS
+
+
+def test_undeletable_csv_keeps_the_parquet(tmp_path, monkeypatch):
+    src = _write(tmp_path / "u_pts.csv", PTS)
+    out = src.with_suffix(".parquet")
+    real = c2p.Path.unlink
+
+    def unlink(self, *a, **k):
+        if self == src:
+            raise PermissionError(5, "Access is denied")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(c2p.Path, "unlink", unlink)
+    r = c2p.convert(src, out, apply=True)
+    assert not r.ok and "could not be removed" in r.error
+    assert src.exists() and out.exists() and c2p.to_csv_bytes(pq.read_table(out)) == PTS
+
+
+def test_tree_continues_after_a_failure(tmp_path, capsys):
+    tree = tmp_path / "tree"
+    _write(tree / "a" / "a_pts.csv", PTS)
+    _write(tree / "b" / "b_pts.csv", PTS)
+    out = tmp_path / "out"
+    _write(out / "a", b"a file where the folder should be")
+    assert c2p.main(["--tree", str(tree), "--out", str(out)]) == 1
+    assert (out / "b" / "b_pts.parquet").exists()
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("failed") and "a_pts.csv" in line for line in lines)
+    assert "2 files, 1 failed" in lines[-1]

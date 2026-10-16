@@ -202,15 +202,21 @@ def convert(path: Path, out: Path, apply: bool = False) -> Result:
         _write(path, out)
         if not _round_trip_ok(path, out):
             error = "the regenerated CSV differs from the source"
-    except (FormatError, pa.ArrowException, UnicodeDecodeError) as exc:
+    except (FormatError, pa.ArrowException, UnicodeDecodeError, OSError) as exc:
         error = f"{type(exc).__name__}: {exc}"
     if error:
         out.unlink(missing_ok=True)
         return Result(path, out, before, 0, 0.0, False, error)
     after = out.stat().st_size
+    ratio = after / before if before else 0.0
     if apply and out.resolve().parent == path.resolve().parent:
-        path.unlink()
-    return Result(path, out, before, after, after / before if before else 0.0, True)
+        try:
+            path.unlink()
+        except OSError as exc:
+            # The Parquet is good and stays; only the CSV is still there.
+            return Result(path, out, before, after, ratio, False,
+                          f"the CSV could not be removed: {type(exc).__name__}: {exc}")
+    return Result(path, out, before, after, ratio, True)
 
 
 def _wanted(path: Path) -> bool:

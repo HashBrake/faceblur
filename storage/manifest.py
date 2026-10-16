@@ -140,14 +140,22 @@ def _listed_row(root: Path, file: Path, stamp: str) -> ManifestRow:
 
 
 def build_tree_manifest(root: Path, out: Path | None = None) -> Path:
-    """List every regular file under `root` in one manifest, sorted by path."""
+    """List every regular file under `root` in one manifest, sorted by path.
+
+    The converter's rows already in `out` (every status but "listed") are kept
+    first, unchanged; only the earlier listing is replaced.
+    """
     root = Path(root)
     out = Path(out) if out is not None else root / MANIFEST_NAME
     stamp = now_utc()
     own = out.resolve()
+    try:
+        kept = [r for r in read_rows(out) if r.status != "listed"]
+    except pa.ArrowInvalid:
+        kept = []  # not a manifest at all: nothing in it to keep
     rows = [_listed_row(root, f, stamp) for f in sorted(root.rglob("*"))
             if f.is_file() and f.suffix != ".part" and f.resolve() != own]
-    write_rows(out, rows)
+    write_rows(out, kept + rows)
     return out
 
 

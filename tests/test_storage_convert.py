@@ -40,7 +40,7 @@ def test_dry_run(tmp_path, video_long):
     assert row.size_after > 0 and row.frames == 120
     assert row.sha256_before == sha and row.sha256_after != sha
     assert row.encoder == "software" and row.quality == 20
-    assert row.path == str(src)
+    assert row.path == src.name  # beside its manifest: the bare name
 
 
 def test_convert_returns_row(tmp_path, video_silent):
@@ -169,3 +169,50 @@ def test_nvenc_default_is_hevc_cq(tmp_path, video_silent, monkeypatch):
     with pytest.raises(RuntimeError):
         convert.convert(src, manifest=tmp_path / "m.parquet")
     assert seen["encoder"] == "nvenc" and seen["quality"] == convert.Settings().hevc_cq
+
+
+def test_failed_rename_writes_no_row(tmp_path, video_silent, monkeypatch):
+    src = _copy(video_silent, tmp_path)
+    data = src.read_bytes()
+
+    def refuse(a, b):
+        raise PermissionError(5, "Access is denied")
+
+    monkeypatch.setattr(convert.os, "replace", refuse)
+    with pytest.raises(PermissionError):
+        convert.convert(src, apply=True, encoder="software", quality=20, floor=90,
+                        log=lambda _: None)
+    assert src.read_bytes() == data
+    assert _leftovers(tmp_path) == []
+    assert manifest.read_rows(tmp_path / "manifest.parquet") == []
+
+
+def test_row_path_relative_or_absolute(tmp_path, video_silent):
+    (tmp_path / "rec").mkdir()
+    src = _copy(video_silent, tmp_path / "rec")
+    row, _ = convert.convert(src, encoder="software", quality=20, floor=90, log=lambda _: None)
+    assert row.path == "clip.mp4"
+    assert manifest.read_rows(tmp_path / "rec" / "manifest.parquet") == [row]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    row, _ = convert.convert(src, encoder="software", quality=20, floor=90,
+                             manifest=elsewhere / "m.parquet", log=lambda _: None)
+    assert row.path == str(src)
+
+
+def test_windows_must_be_positive(tmp_path, video_silent):
+    src = _copy(video_silent, tmp_path)
+    assert convert.main([str(src), *OPTS, "--windows", "0"]) == 2
+    assert not (tmp_path / "manifest.parquet").exists()
+
+
+def test_os_error_is_a_message(tmp_path, video_silent, monkeypatch, capsys):
+    src = _copy(video_silent, tmp_path)
+
+    def denied(*a, **k):
+        raise PermissionError(5, "Access is denied", str(src))
+
+    monkeypatch.setattr(convert, "convert", denied)
+    assert convert.main([str(src), *OPTS]) == 2
+    err = capsys.readouterr().err
+    assert "Access is denied" in err and "Traceback" not in err
