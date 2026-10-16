@@ -173,3 +173,25 @@ python -m faceblur.verify <source> <copy>
 Faces: the HEVC copy has no misses that the H.264 copy lacks. It has fewer (7 against 11), and both copies fail the face gate at default settings, so the codec adds no face misses. The two lists differ frame by frame because a lossy copy changes the "applied" share that `verify` measures on each box.
 
 Zone gate: this one fails on HEVC only. It counts zone pixels that moved between the source and the copy, and its 1 percent threshold assumes a near-lossless copy (H.264 crf 12 / cq 16). At cq 28 the compression noise alone moves up to 9.8 percent of the zone's pixels. With `--check-output` or `--quarantine`, every HEVC copy would therefore be held back for `zone`. This needs a follow-up: compare the zone against a reference that knows the codec, or skip that gate for lossy storage copies. It is not changed here.
+
+### Zone gate against HEVC quality
+
+How much HEVC quality can the existing zone gate take? It flags a frame when more than `zone_gate_changed = 0.010` of the zone's pixels move by more than the frame's median re-encode noise plus `FLAT_DIFF` (4 levels). The cq 16, 20 and 24 files below are second-generation encodes: the H.264 blurred copy re-encoded with `storage.encode.encode_file(h264_copy, dst, "hevc", "nvenc", quality=Q, gop=60)`. They are not pipeline outputs. The cq 28 row is the T09 pipeline output. All five files were checked against the original source with the same command, on the RTX 3070, through the GPU lock:
+
+```
+python -m faceblur.verify <source 004100 .mp4> <file> --stride 4 --json verify_<name>.json
+```
+
+VMAF was not measured in this sweep. At stride 4, 246 of the 984 frames are checked.
+
+| file | bytes | / H.264 copy | zone frames over / checked | worst zone share | faces flagged | verify exit |
+|---|---|---|---|---|---|---|
+| H.264 copy (pipeline, cq 16 / crf 12) | 105,690,318 | 1.000 | 0 / 246 | 0.080 % | 2 | 1 (face) |
+| HEVC cq 16, second generation | 99,928,081 | 0.945 | 0 / 246 | 0.898 % | 4 | 1 (face) |
+| HEVC cq 20, second generation | 59,996,264 | 0.568 | 37 / 246 | 1.880 % | 3 | 1 (zone, face) |
+| HEVC cq 24, second generation | 35,282,331 | 0.334 | 145 / 246 | 4.106 % | 4 | 1 (zone, face) |
+| HEVC cq 28, pipeline (T09) | 21,133,541 | 0.200 | 216 / 246 | 7.834 % | 4 | 1 (zone, face) |
+
+(The full-stride check of the cq 28 copy above found 881 of 984 frames over, worst 9.84 %.)
+
+Only cq 16 passes the gate, and only just: its worst zone share is 0.90 %, against the 1 % limit. It saves about 5 % of the H.264 copy's size. From cq 20 down, the gate holds the copy back, and the number of frames over grows steadily with cq. The gate was calibrated on near-lossless H.264 copies, where a clean copy reads 0.10 to 0.50 percent (report 17.3, `faceblur/settings.py`). The calibrated storage quality (cq 28) is therefore far outside the range the gate was built for. Keeping the gate as it is and getting storage-size files are mutually exclusive. With hevc, either the gate learns about lossy copies (for example, compare against a reference encoded at the same quality, or let the threshold follow the codec), or the copy stays near-lossless at cq 16 and gives up the size saving. The flagged-face count (2 to 4 at this stride) does not grow with cq.
