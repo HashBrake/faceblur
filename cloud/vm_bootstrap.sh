@@ -26,6 +26,10 @@ say "SSH up"
 grep -v "^GN_" "$HERE/greennode.env" | "${SSH[@]}" 'sudo mkdir -p /root && sudo tee /root/faceblur.env >/dev/null && sudo chmod 600 /root/faceblur.env'
 "${SSH[@]}" 'sudo tee /root/stream_run.py >/dev/null' < "$HERE/stream_run.py"
 "${SSH[@]}" 'sudo tee /root/vm_run.sh >/dev/null' < "$HERE/vm_run.sh"
+# The patch pass runs this checkout's faceblur package and patch_run.py, not
+# the image's older copies (see `patch` in vm_run.sh).
+"${SSH[@]}" 'sudo tee /root/patch_run.py >/dev/null' < "$HERE/patch_run.py"
+tar -C "$HERE/.." --exclude=__pycache__ -cf - faceblur     | "${SSH[@]}" 'sudo rm -rf /root/faceblur_pkg && sudo mkdir -p /root/faceblur_pkg && sudo tar -C /root/faceblur_pkg -xf -'
 for step in "$@"; do
     say "$step"
     "${SSH[@]}" "sudo SHARD=$SHARD WORKERS=${WORKERS:-8} LANES=${LANES:-1} bash /root/vm_run.sh $step" 2>&1 | sed "s/^/  /"

@@ -12,7 +12,8 @@
 # times the detection pass at several process counts on the card. `run`
 # starts stream_run.py in a detached container that survives a dropped SSH
 # session; a restart skips what is finished. stream_run.py is mounted over
-# the image's copy, which predates the SHARD and disk room commits.
+# the image's copy, which predates the SHARD and disk room commits. `patch`
+# starts cloud/patch_run.py the same way, with this checkout's code mounted.
 set -euo pipefail
 set -a; . /root/faceblur.env; set +a
 IMAGE=${IMAGE:-vcr.vngcloud.vn/110156-faceblur/faceblur-cuda:3}
@@ -72,6 +73,15 @@ run)
         --entrypoint python "$IMAGE" cloud/stream_run.py
     say "started share $SHARD; log: tail -f $WORK/stream_run.log"
     ;;
+patch)
+    # The patch pass over held back copies (faceblur/patch.py). Image :3
+    # predates it, so this checkout's faceblur package and patch_run.py are
+    # mounted over the image's copies; the models stay the image's.
+    : "${SHARD:?SHARD=k/n, k from 0}"
+    docker rm -f faceblur-patch 2>/dev/null || true
+    docker run -d --name faceblur-patch --restart on-failure:3 --gpus all --ipc=host         --env-file /root/faceblur.env -e SHARD="$SHARD" -e WORKERS="${WORKERS:-6}" -e LANES="${LANES:-1}"         -e WORK=/work/patch         -v "$WORK:/work" -v /root/faceblur_pkg/faceblur:/app/faceblur:ro         -v /root/patch_run.py:/app/cloud/patch_run.py:ro         --entrypoint python "$IMAGE" cloud/patch_run.py
+    say "started patch share $SHARD; log: docker logs -f faceblur-patch"
+    ;;
 *)
-    echo "usage: vm_run.sh setup | calibrate | run"; exit 2 ;;
+    echo "usage: vm_run.sh setup | calibrate | run | patch"; exit 2 ;;
 esac
