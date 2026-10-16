@@ -217,3 +217,30 @@ def test_the_eval_cache_directory_follows_the_environment(tmp_path):
     got = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
                          capture_output=True, text=True, check=True).stdout.strip()
     assert Path(got) == REPO / "eval" / "cache"
+
+
+# ---------------------------------------------------------------- settings and keys
+
+def test_the_baseline_is_scored_without_the_adaptive_stride():
+    from faceblur.settings import Settings
+    base = bench.baseline_settings()
+    assert base.adaptive_stride is False
+    assert base == Settings(adaptive_stride=False)
+
+
+def test_the_branch_is_scored_with_its_production_defaults():
+    from faceblur.settings import Settings
+    assert bench.branch_settings() == Settings()
+
+
+def test_the_new_record_fields_are_reported_and_none_on_older_records():
+    new = ("overlap_check_seconds", "second_chance_reencoded_frames",
+           "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept")
+    assert set(new) <= set(bench.RECORD_KEYS)
+    branch = bench.file_entry({"wall_seconds": 10, "overlap_check_seconds": 2.5,
+                               "second_chance_reencoded_frames": 30,
+                               "frames_skipped_adaptive": 100, "second_chance_seeds": 7,
+                               "second_chance_seeds_kept": 1}, None, None)
+    assert [branch[k] for k in new] == [2.5, 30, 100, 7, 1]
+    baseline = bench.file_entry({"wall_seconds": 10}, None, None)
+    assert all(baseline[k] is None for k in new)

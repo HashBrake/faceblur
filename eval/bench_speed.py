@@ -62,13 +62,16 @@ _EPS = 1e-9               # 1 - 7/10 is 0.29999999999999993 in floats
 def baseline_settings():
     """What the baseline is scored with in the recall harness.
 
-    The same `Settings()` as the branch at T01. Later tasks that change a
-    default edit `branch_settings` and leave this one alone, so the recall
-    gate keeps comparing against what 3eb0100 shipped.
+    `Settings(adaptive_stride=False)` reproduces 3eb0100's masks exactly (D15):
+    the tracker, the detector's candidate filters, the zone and the plain
+    stride are unchanged on this branch, and the adaptive stride (T07) is the
+    only default since then that changes which frames are detected. The other
+    new defaults (second-chance scope, overlapped check, GOP, ROI work) touch
+    the encode and the check, never the masks the recall harness scores.
     """
     sys.path.insert(0, str(REPO))
     from faceblur.settings import Settings
-    return Settings()
+    return Settings(adaptive_stride=False)
 
 
 def branch_settings():
@@ -376,7 +379,9 @@ def all_pass(gates: dict) -> bool | None:
 
 
 RECORD_KEYS = ("wall_seconds", "detect_seconds", "encode_seconds", "check_seconds",
-               "second_chance_seconds", "second_chance_rounds", "frames", "quarantined")
+               "second_chance_seconds", "second_chance_rounds", "frames", "quarantined",
+               "overlap_check_seconds", "second_chance_reencoded_frames",
+               "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept")
 RECALL_KEYS = ("recall", "recall_by_size", "exposed_40", "exposed_24_40", "continuity",
                "masked_mean")
 
