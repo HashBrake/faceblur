@@ -1138,3 +1138,166 @@ before changing anything a pass measured.
 | `models/README.md` | every model: source, sha256, input layout, output layout |
 | `docs/report.md` | every measurement, one section per pass |
 | `docs/audits/` | by eye labels, committed. H1's are the first that can be re-scored |
+
+## Stereo hands (hands/, 2026-10-16)
+
+`hands/` turns one Orbbec Ego stereo recording into per-frame 3-D hand skeletons (21 joints per hand, MediaPipe order). Each stereo pair is rectified from the Kannala-Brandt fisheye model at ±60°, MediaPipe Hands runs on each view, left and right detections are matched by palm position, and the joints are triangulated back in the ORIGINAL left camera frame, in metres. The noisy triangulation is fused with MediaPipe's own 3-D hand shape as a prior, bone lengths are fixed once per recording, and a Kalman filter with RTS smoothing cleans the track and fills gaps of up to 10 frames.
+
+Two options add to this:
+- `--mano`: a MANO fit (pose and shape parameters per hand). MANO is licensed for non-commercial use only.
+- `--world`: the head pose for every frame from ORB-SLAM3 stereo-inertial odometry (`hands/odometry/`, run in Docker), and the joints in that gravity-aligned world frame.
+
+### Set up and run
+
+```
+py -3.12 -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements-hands.txt
+.venv\Scripts\python.exe -m pytest tests/hands -q -m "not real_footage"
+```
+
+Run from the worktree root (`-m hands.run` needs it as the current folder). On the shared PC every run goes through the GPU lock, with ABSOLUTE paths inside it (relative paths fail inside the lock script):
+
+```
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120_r2" --part 1 --start 600 --duration 120 --world --mano
+```
+
+Flags:
+- `--part N`, `--start S`, `--duration S`: the recording window (part number, seconds from the part's first left timestamp, length; default to the end of the part).
+- `--mano`: also fit MANO. MANO files (`MANO_LEFT.pkl`, `MANO_RIGHT.pkl`) are read from `cloud/mano/` of the main repo (override with `--mano-dir` or `MANO_DIR`). They are never copied, and nothing derived from them goes into git.
+- `--world [--trajectory PATH]`: also write `pose.parquet` and `joints_world.parquet`. The trajectory comes from, in order: `--trajectory PATH` (copied into the output folder), an existing `OUT/trajectory.txt`, or a new ORB-SLAM3 run in Docker. That last case needs Docker, the image below, and `--duration` (the odometry window). Without a trajectory and without Docker, `--world` stops with an error before detection starts.
+- `--crop`: run MediaPipe (static-image mode) on a square crop around each previous-frame hand instead of the full frame. Off by default because it measured worse (see the results table).
+
+The `_r2` run above reused the T20 trajectory: `trajectory.txt`, `odometry.json` and `settings.yaml` were copied from `hands_out/EV_003108_p1_600_120_world` into the new folder first, so Docker was not needed.
+
+### World coordinates / odometry setup (T20)
+
+`hands/odometry/` runs ORB-SLAM3 (stereo-inertial, Kannala-Brandt lenses) on a recording window and returns the IMU/body pose in a gravity-aligned world (z up) for every frame. `hands/imu.py` loads the IMU csv (streaming), the Kalibr IMU calibration and the camera-IMU time shift, and writes the EuRoC export.
+
+- **Licence:** ORB-SLAM3 and Pangolin are GPLv3. We use ORB-SLAM3 as a separate executable that only writes a trajectory file; none of its code is linked into `hands/`. The owner decides before any commercial use.
+- **Route: Docker, not WSL.** Ubuntu-22.04 in WSL has no passwordless sudo, so apt cannot run there.
+
+**Build the image (once).** `hands/odometry/Dockerfile` runs `build_orbslam3.sh`, which pins Pangolin v0.8 and ORB-SLAM3 commit `4452a3c` and builds with `-j4`. The image is 1.05 GB on C:. The first build took 48 min, of which apt downloads over this PC's link took 39 min and the ORB-SLAM3 build 7 min.
+
+```
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- docker build -t faceblur-orbslam3:4452a3c "D:\Claude Projects\faceblur-stereo-hands\hands\odometry"
+```
+
+ORB-SLAM3 patches applied by the script:
+1. C++14 instead of C++11.
+2. Upstream bug: the KannalaBrandt8 `Camera2` read `Camera1.k1..k4`.
+3. The "Not enough motion for initializing" map reset applies to monocular only. On this clip it reset the map about 50 times, because the wearer stands at a task and the head moves less than 2 cm per two keyframes. Stereo gives the scale.
+4. `SaveTrajectoryEuRoC` no longer re-anchors poses to the first keyframe, so it writes the gravity-aligned world.
+5. No `-march=native`, which caused a "double free" in `Optimizer::PoseOptimization` (Eigen alignment).
+6. A CMake target for the headless driver `stereo_inertial_kb.cc`.
+
+**Run the odometry alone** (`hands.run --world` calls it itself when there is no trajectory):
+
+```
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.odometry.run_orbslam3 "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120_world" --part 1 --start 600 --duration 120
+```
+
+The run writes:
+- `export/`: TUM-VI layout.
+  - `cam0/`, `cam1/`: original grayscale PNG frames, about 7 GB for 2 minutes.
+  - `times.txt`: one timestamp per line, in ns.
+  - `imu.csv`: EuRoC format, calibrated, padded by 1 s on each side.
+- `settings.yaml`: the ORB-SLAM3 settings generated from our calibration.
+- `trajectory.txt`: one line per frame, `t_ns tx ty tz qx qy qz qw`, the body (IMU) pose in the world.
+- `kf_traj.txt`, `orbslam3.log`, `odometry.json` (frame counts, losses, maps, resets, path length, gravity angle, export and run seconds).
+
+All timestamps are on the IMU clock. Image times are the left csv timestamps plus Kalibr's `timeshift_cam_imu` (-12.431 ms). The left camera pose is `T_world_cam = T_w_b · T_b_c1`: `T_w_b` is interpolated at the left frame time plus the shift, and `T_b_c1` is `IMU.T_b_c1` (= inv(`T_cam_imu`)).
+
+### Outputs (one folder per run, outside the repo)
+
+- `joints.parquet`: one row per frame per hand.
+  - `frame`: left-video frame index.
+  - `timestamp_us`: left timestamp.
+  - `hand`: `left` or `right`.
+  - `valid`: a skeleton is output for this frame.
+  - `interpolated`: the frame is gap-filled, not observed.
+  - `reproj_px`: the raw stereo residual, in original-image px.
+  - `j00_x`..`j20_z`: joints in metres, in the left camera frame, MediaPipe joint order.
+  - `c00`..`c20`: per-joint confidence.
+- `quality.json`: per-hand and overall validity, raw and output reprojection, fingertip row disagreement p90 (`fingertip_row_p90_px`, raw left/right detections), bone CV (raw and output), bone lengths, jitter, mean confidence, clip metadata and timings (`detection_fps`, `processing_fps`, `mano_seconds`), and pass/fail against the targets. With `--world` it also has:
+  - a `world` section: `pose_coverage`, `frames_with_pose`, `trajectory_length_m`, `head_speed_mps_median`, `head_speed_mps_p95`, `gravity_angle_deg`, `lost_events`, `maps_in_atlas`, `tool`, `trajectory`;
+  - per hand, `world_valid_share`: the share of frames with a valid skeleton AND a camera pose.
+- `review.mp4`: 1600x650, rectified left and right views side by side, with the output skeleton projected (left hand green, right hand orange). With `--world`, a 220 px top-down inset at the bottom right of the left view shows the head trace so far (cyan), the current position (red dot), the heading (red line) and the box side length.
+- `mano.parquet` (with `--mano`): per frame and hand, `valid`, the 48 MANO pose values and the translation.
+- `mano_shape.json` (with `--mano`): 10 betas per hand for the recording, and the fit `rmse_mm` per hand.
+- `pose.parquet` (with `--world`): one row per frame: `frame`, `timestamp_us`, `pose_valid`, and `tx`, `ty`, `tz`, `qx`, `qy`, `qz`, `qw` of `T_world_cam` (the left camera in the world).
+- `joints_world.parquet` (with `--world`): the `joints.parquet` schema plus `pose_valid`, with the joints in world metres (gravity-aligned, z up).
+- `trajectory.txt`, `odometry.json`, `settings.yaml` (with `--world`); also `export/`, `kf_traj.txt` and `orbslam3.log` when ORB-SLAM3 ran in this folder.
+
+### Results: EV 003108, part 1, 600-720 s (3600 frames)
+
+All numbers come from one run with everything on (`--world --mano`, crop off): `hands_out/EV_003108_p1_600_120_r2` (`quality.json`, `mano_shape.json`), except where a footnote names another source. Its `joints.parquet` is identical to the earlier `_final` run (maximum absolute joint difference 0.0, same NaNs, all other columns equal), and its `joints_world.parquet` and `pose.parquet` are identical to the T21 `_world` run.
+
+| Measure | Value | Against the brief |
+|---|---|---|
+| Raw stereo reprojection, median (both hands) | 2.85 px | Meets < 3 px |
+| Raw reprojection, left hand: median / p90 | 3.74 / 8.66 px | Left hand alone misses (fewer, lower-confidence views; mean conf 0.40) |
+| Raw reprojection, right hand: median / p90 | 2.31 / 5.91 px | Meets (mean conf 0.62) |
+| Output deviation from observations, median (left / right) | 11.85 px (14.58 / 9.95) | Not a target; the prior and smoothing pull fingertips away from noisy observations on purpose |
+| Fingertip row disagreement p90, raw (left / right) | 30.4 / 20.3 px | The two views' 2-D fingertips disagree (see the notes) |
+| Bone CV, output max | 9.3e-16 | Meets < 5 % (lengths fixed per recording) |
+| Bone CV, raw max (left / right) | 1.40 / 0.607 | Raw triangulation is far from rigid; before the depth gate the left value was 24.07 |
+| Implausible (far-depth) joints gated (left / right) | 0.033 % / 0 % (0.000328 / 0.0) | Triangulated joints with depth outside 0.1-2.0 m are set to NaN |
+| Valid share (left / right) | 0.896 / 0.965 | |
+| Interpolated share (left / right) | 0.210 / 0.046 | |
+| Any hand valid / both hands valid¹ | 0.987 / 0.874 | |
+| Jitter, raw (left / right) | 62.5 / 18.0 mm | |
+| Jitter, smoothed (left / right, mean) | 5.48 / 2.62 mm (4.05) | |
+| Median wrist depth (left / right)¹ | 0.353 / 0.337 m | |
+| p99 joint-to-wrist distance¹ | 0.142 m (max 0.153) | Plausible hand size, no exploded skeletons |
+| MANO rmse (left / right) | 8.94 / 6.83 mm | |
+| MANO valid share (left / right)¹ | 0.896 / 0.965 | Same frames as the joints |
+| MANO fit (both hands, 3600 frames) | 250 s, about 37 ms per hand-frame (6699 valid hand-frames, shape fit included) | Analytic Jacobian (T18); see the old-vs-new table below |
+| Pose coverage / frames with pose | 0.999 / 3597 of 3600 | The first 3 frames come before ORB-SLAM3 initialises |
+| World valid share (left / right) | 0.895 / 0.964 | Valid skeleton and a pose |
+| Trajectory length | 13.2 m | Head motion of someone working in one place (net displacement 0.21 m²) |
+| Head speed, median / p95 | 0.093 / 0.277 m/s | |
+| Gravity angle | 0.44° | Angle between world +z and the accelerometer mean rotated into the world |
+| Tracking losses / maps | 0 / 1 | No map resets |
+| Odometry export / ORB-SLAM3 run time³ | 215 s / 622 s | About 5x slower than real time (see the limitations) |
+| Detection fps (two views) | 12.3 | Shared PC under load (see the timings caveat) |
+| Processing fps (whole run, MANO included) | 6.5 | Same caveat |
+| Crop-based detection (`--crop`) vs full frame⁴ | raw reproj pooled 2.96 vs 2.85 px (left 4.05 vs 3.74, right 2.47 vs 2.31); fingertip row p90 left 32.1 vs 30.4, right 20.6 vs 20.3 px; both hands valid 0.795 vs 0.874; detection 7.2 vs 11.5 fps, processing 5.7 vs 7.8 fps | Worse on every measure: kept as an option, default off |
+
+¹ Computed from `_r2/joints.parquet` and `_r2/mano.parquet` (not stored in `quality.json`).
+² From the T20 trajectory analysis of `hands_out/EV_003108_p1_600_120_world`, not in `quality.json`.
+³ From `odometry.json`, copied with the trajectory from the T20 run `hands_out/EV_003108_p1_600_120_world`; the `_r2` run did not re-run ORB-SLAM3.
+⁴ T17, measured back to back on the same clip: `hands_out/EV_003108_p1_600_120_crop` against a full-frame re-run (`hands_out/EV_003108_p1_600_120_nocrop_t17`, identical quality numbers to `_r2`). MediaPipe already crops its landmark ROI at native resolution, so cropping gains nothing, and static-image palm detection on crops loses frames and costs speed.
+
+Timings caveat: every wall-clock and fps figure comes from a shared PC with other jobs running. The quality numbers are deterministic (identical across runs); the timings are not. The same clip has measured 11.5 to 19.7 detection fps; the `_r2` run was on a busy PC (12.3).
+
+T18 MANO speed-up: the pose fit uses the analytic Jacobian of the kinematic chain and the 5 tip vertices instead of finite differences (51 extra forward passes per iteration), and the chain runs one tree level at a time. Old against new code on identical input (the `_final` joints, interpolated frames at conf 0.5), same busy PC:
+
+| Hand | Old | New | rmse old / new | Max joint difference |
+|---|---|---|---|---|
+| Left (3224 frames) | 501 s, 155 ms per frame | 91 s, 28 ms per frame | 8.939 / 8.939 mm | 6.0 mm (mean 0.004, p99 0.14 mm) |
+| Right (3475 frames) | 303 s, 87 ms per frame | 72 s, 21 ms per frame | 6.826 / 6.826 mm | 7.4 mm (mean 0.006, p99 0.16 mm) |
+
+A few frames converge to a slightly different local optimum, so the maximum differs by a few mm, but the mean is under 0.01 mm. Inside full pipeline runs the fit is slower because of machine load (37 ms per hand-frame in `_r2`, 41 ms in the T18 `_mano2` run). The shape fit (10 betas, 3 calls) still uses finite differences.
+
+`--mano` and `--world` do not change `joints.parquet`: `_r2` (both on) and `_final` (both off) are identical.
+
+The depth gate changes the left-hand output a little. Against the T11 run, the left bone lengths move by at most 0.006 mm, and 38 left-hand frames (left frames 20660-20785) move by more than 1 mm (max 77 mm). The right hand, `valid` and `interpolated` are identical.
+
+Notes on the raw reprojection:
+- The pooled median meets the target, but the left hand alone does not, and the p90 values are well above 3 px.
+- The calibration round trip is exact, so the residual is not a calibration problem. At 0.25-0.35 m the two cameras see the hand 23° apart, and MediaPipe's per-view landmarks disagree by about 5 px on the palm and 25-45 px on the fingertips. The residual is therefore a property of the 2-D model's view dependence.
+
+In the review video, the skeletons lie on the hands in confident frames (frame 3599: both hands). Low-confidence frames show a partial or degenerate left skeleton (first clip frame, mean conf 0.28). Where a hand is half hidden (the right hand on the bucket rim at frame 1800), the frame is invalid.
+
+### Known limitations
+
+- MediaPipe's handedness label is unreliable. Hand identity comes from position plus continuity.
+- When the two views disagree, the fingertips mostly come from the 3-D prior, not from stereo.
+- The output bone CV is near 0 because bone lengths are fixed once per recording, not because the triangulation is rigid (raw CV up to 1.40).
+- Known detection misses, such as review frame 1800 (the right hand on the bucket rim is not detected), are limits of the 2-D detector, not of the odometry.
+- Frame 0 of each part is skipped.
+- ORB-SLAM3 runs about 5x slower than real time (622 s for 120 s). Tracking takes only 35 ms per frame; most of the rest is PNG reads through the Docker bind mount and the example driver's real-time pacing.
+- World coordinates are the odometry's local gravity-aligned frame for each run (origin at the first keyframe, z up). They are not a shared room frame: two recordings, or two windows of one recording, have different origins and headings.
+- Licences: ORB-SLAM3 and Pangolin are GPLv3, used as a separate executable; MANO is non-commercial. The owner decides before any commercial use.
+- Wall-clock and fps figures vary with the load on the shared PC (see the timings caveat).
+
+Next step: one pass per video shared with the blur pipeline (BUILD_PLAN 1.4); a stronger 2-D hand keypoint model (RTMPose or HRNet hand) for the fingertip disagreement between views; faster odometry I/O (frames fed from WSL-local disk or from memory, no real-time pacing); a shared room frame across recordings (anchor to the first part, loop closure, or a fiducial).

@@ -1,0 +1,188 @@
+"""Tests for hands.mano (MANO loader, joints-only model and fits)."""
+from __future__ import annotations
+
+import os
+import pickle
+
+import numpy as np
+import pytest
+
+from hands.mano import (MP_FROM_MANO, TIP_VERTICES, fit_pose, fit_sequence, forward_joints, forward_joints_jac,
+                        load_mano)
+
+# Inverse map: MANO-ordered (21,) index -> MediaPipe position.
+MANO_FROM_MP = np.argsort(MP_FROM_MANO)
+# MANO chains (3 joints each) in tip order thumb, index, middle, ring, pinky.
+CHAINS = [[13, 14, 15], [1, 2, 3], [4, 5, 6], [10, 11, 12], [7, 8, 9]]
+
+
+def _model(mano_dir, side="right"):
+    return load_mano(side, mano_dir=mano_dir)
+
+
+def _random_pose(model, rng, scale=0.3):
+    return np.concatenate([rng.normal(0, 0.5, 3), model.hands_mean + rng.normal(0, scale, 45)])
+
+
+def test_missing_files_raise(tmp_path):
+    with pytest.raises(FileNotFoundError, match="MANO files not found at"):
+        load_mano("right", mano_dir=tmp_path)
+
+
+def _write_marker(path):
+    with open(path, "w") as fh:
+        fh.write("ran")
+
+
+class _Marker:
+    def __init__(self, path):
+        self.path = path
+
+    def __reduce__(self):
+        return (_write_marker, (self.path,))
+
+
+class _System:
+    def __reduce__(self):
+        return (os.system, ("echo pwned",))
+
+
+def test_rejects_os_system_pickle(tmp_path):
+    (tmp_path / "MANO_RIGHT.pkl").write_bytes(pickle.dumps(_System()))
+    with pytest.raises(pickle.UnpicklingError, match=r"(os|nt|posix)\.system"):
+        load_mano("right", mano_dir=tmp_path)
+
+
+def test_rejected_callable_is_not_run(tmp_path):
+    marker = tmp_path / "marker.txt"
+    (tmp_path / "MANO_RIGHT.pkl").write_bytes(pickle.dumps(_Marker(str(marker))))
+    with pytest.raises(pickle.UnpicklingError, match="_write_marker, which is not allowed"):
+        load_mano("right", mano_dir=tmp_path)
+    assert not marker.exists()
+
+
+def test_mp_from_mano_is_permutation():
+    assert sorted(MP_FROM_MANO) == list(range(21))
+    assert len(TIP_VERTICES) == 5
+
+
+def test_loader_shapes(mano_dir):
+    m = _model(mano_dir)
+    assert m.v_template.shape == (778, 3)
+    assert m.shapedirs.shape == (778, 3, 10)
+    assert m.posedirs.shape == (778, 3, 135)
+    assert m.J_regressor.shape == (16, 778)
+    assert m.weights.shape == (778, 16)
+    assert m.kintree_table.shape == (2, 16)
+    assert m.hands_mean.shape == (45,)
+    assert m.hands_components.shape == (45, 45)
+    for a in (m.v_template, m.shapedirs, m.posedirs, m.J_regressor, m.weights):
+        assert a.dtype == np.float64
+    np.testing.assert_allclose(m.J_regressor.sum(axis=1), 1.0, atol=1e-6)
+    assert m.kintree_table[0, 0] in (4294967295, -1)
+    assert all(m.kintree_table[0, k] < k for k in range(1, 16))
+
+
+def test_rest_pose(mano_dir):
+    m = _model(mano_dir)
+    mp = forward_joints(m, np.zeros(10), np.zeros(48), np.zeros(3))
+    mano21 = mp[MANO_FROM_MP]
+    np.testing.assert_allclose(mano21[:16], m.J_regressor @ m.v_template, atol=1e-9)
+    # Tips are the rest vertices and each lies nearest its own chain's distal joint.
+    np.testing.assert_allclose(mano21[16:], m.v_template[TIP_VERTICES], atol=1e-12)
+    distal = np.array([mano21[c[-1]] for c in CHAINS])
+    for f in range(5):
+        d = np.linalg.norm(distal - mano21[16 + f], axis=1)
+        assert np.argmin(d) == f
+    for a, b in [(1, 2), (2, 3), (3, 4)]:
+        assert np.linalg.norm(mp[b] - mp[a]) < 0.06
+    assert np.linalg.norm(mp[8] - mp[0]) > np.linalg.norm(mp[5] - mp[0])
+
+
+def test_fit_pose_recovers_known_pose(mano_dir):
+    m = _model(mano_dir)
+    rng = np.random.default_rng(0)
+    errs = []
+    for _ in range(3):
+        betas = rng.normal(0, 0.5, 10)
+        pose = _random_pose(m, rng)
+        trans = np.array([0.05, -0.03, 0.5])
+        gt = forward_joints(m, betas, pose, trans)
+        p, t, rmse = fit_pose(m, betas, gt, np.ones(21))
+        err = np.linalg.norm(forward_joints(m, betas, p, t) - gt, axis=1).mean()
+        errs.append(err)
+        assert rmse < 0.005
+    print(f"fit_pose mean joint errors (mm): {np.round(np.array(errs) * 1000, 3)}")
+    assert max(errs) < 0.005
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+def test_analytic_jacobian_matches_finite_differences(mano_dir, side):
+    m = _model(mano_dir, side)
+    rng = np.random.default_rng(4)
+    betas = rng.normal(0, 0.5, 10)
+    pose = _random_pose(m, rng)
+    pose[6:9] = 0.0  # one joint at the rest pose (zero-angle branch of the rotation derivative)
+    x = np.concatenate([pose, [0.05, -0.03, 0.5]])
+    joints, jac = forward_joints_jac(m, betas, x[:48], x[48:])
+    np.testing.assert_allclose(joints, forward_joints(m, betas, x[:48], x[48:]), atol=1e-12)
+    h = 1e-6
+    fd = np.stack([(forward_joints(m, betas, (x + h * e)[:48], (x + h * e)[48:])
+                    - forward_joints(m, betas, (x - h * e)[:48], (x - h * e)[48:])) / (2 * h)
+                   for e in np.eye(51)], axis=-1)
+    assert jac.shape == (21, 3, 51)
+    assert np.abs(jac - fd).max() < 1e-6 * np.abs(fd).max()
+
+
+def test_fit_pose_ignores_nan_joints(mano_dir):
+    m = _model(mano_dir)
+    rng = np.random.default_rng(1)
+    pose = _random_pose(m, rng, 0.2)
+    gt = forward_joints(m, np.zeros(10), pose, np.array([0, 0, 0.4]))
+    obs, conf = gt.copy(), np.ones(21)
+    obs[[4, 8]] = np.nan
+    conf[[4, 8]] = 0
+    p, t, rmse = fit_pose(m, np.zeros(10), obs, conf)
+    assert np.isfinite(rmse) and rmse < 0.005
+    assert np.isfinite(p).all() and np.isfinite(t).all()
+
+
+def test_fit_sequence_recovers_walk(mano_dir):
+    m = _model(mano_dir)
+    rng = np.random.default_rng(2)
+    T = 40
+    betas = rng.normal(0, 0.5, 10)
+    pose = _random_pose(m, rng)
+    trans = np.array([0.05, -0.03, 0.5])
+    joints = np.empty((T, 21, 3))
+    for i in range(T):
+        pose = pose + rng.normal(0, 0.03, 48)
+        trans = trans + rng.normal(0, 0.003, 3)
+        joints[i] = forward_joints(m, betas, pose, trans)
+    out = fit_sequence(m, joints, np.ones((T, 21)), np.ones(T, bool))
+    fit = np.stack([forward_joints(m, out["betas"], out["pose"][i], out["trans"][i]) for i in range(T)])
+    err = np.linalg.norm(fit - joints, axis=-1).mean()
+    print(f"fit_sequence mean joint error {err * 1000:.3f} mm, {out['seconds'] / T:.4f} s/frame")
+    assert out["pose"].shape == (T, 48) and out["trans"].shape == (T, 3) and out["rmse_m"].shape == (T,)
+    assert err < 0.005
+
+
+def test_fit_sequence_invalid_frames_nan(mano_dir):
+    m = _model(mano_dir)
+    rng = np.random.default_rng(3)
+    T = 6
+    joints = np.stack([forward_joints(m, np.zeros(10), _random_pose(m, rng, 0.1), [0, 0, 0.4]) for _ in range(T)])
+    valid = np.array([1, 1, 0, 1, 0, 1], bool)
+    out = fit_sequence(m, joints, np.ones((T, 21)), valid, n_shape_frames=3)
+    assert np.isnan(out["pose"][~valid]).all() and np.isnan(out["rmse_m"][~valid]).all()
+    assert np.isfinite(out["pose"][valid]).all()
+    assert "seconds" in out
+
+
+def test_left_mirrors_right(mano_dir):
+    r = forward_joints(_model(mano_dir, "right"), np.zeros(10), np.zeros(48), np.zeros(3))
+    lm = load_mano("left", mano_dir=mano_dir)
+    assert lm.side == "left"
+    left = forward_joints(lm, np.zeros(10), np.zeros(48), np.zeros(3))
+    assert np.abs(left[:, 0] + r[:, 0]).max() < 0.01
+    np.testing.assert_allclose(left[:, 1:], r[:, 1:], atol=0.01)
