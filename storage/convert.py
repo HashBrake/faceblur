@@ -17,7 +17,7 @@ from faceblur.settings import Settings
 from faceblur.video import VideoError, part_path
 from storage import checks
 from storage.checks import CheckReport
-from storage.encode import CODECS, ENCODERS, GOP, encode_file
+from storage.encode import CODECS, ENCODERS, encode_file, resolve_encoder
 from storage.manifest import MANIFEST_NAME, ManifestRow, append_row, now_utc, sha256_of
 from storage.probe import probe
 
@@ -26,8 +26,15 @@ class SameCodecError(ValueError):
     """The source is already in the target codec."""
 
 
-def default_quality() -> int:
-    return getattr(Settings, "hevc_cq", 24)
+def default_quality(codec: str, encoder: str) -> int:
+    """The calibrated quality for a codec on an encoder already resolved from `auto`.
+
+    NVENC and libx265 use different scales, so each has its own setting. AV1 is
+    not a default and keeps a placeholder.
+    """
+    if codec == "hevc":
+        return Settings().hevc_cq if encoder == "nvenc" else Settings().hevc_crf
+    return 24
 
 
 def temp_path(src: Path, codec: str) -> Path:
@@ -36,11 +43,14 @@ def temp_path(src: Path, codec: str) -> Path:
 
 
 def convert(src: Path, apply: bool = False, codec: str = "hevc", encoder: str = "auto",
-            quality: int | None = None, gop: int = GOP, manifest: Path | None = None,
+            quality: int | None = None, gop: int | None = None, manifest: Path | None = None,
             keep: bool = False, floor: float = 95.0, windows: int = 3,
             window_s: float = 60.0, log=print) -> tuple[ManifestRow, CheckReport | None]:
     src = Path(src)
-    quality = default_quality() if quality is None else quality
+    if quality is None:
+        encoder = resolve_encoder(codec, encoder)
+        quality = default_quality(codec, encoder)
+    gop = Settings().gop if gop is None else gop
     before = probe(src)
     if before.codec == codec:
         raise SameCodecError(f"{src} is already {codec}")
@@ -86,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--codec", choices=CODECS, default="hevc")
     parser.add_argument("--encoder", choices=ENCODERS, default="auto")
     parser.add_argument("--quality", type=int, default=None)
-    parser.add_argument("--gop", type=int, default=GOP)
+    parser.add_argument("--gop", type=int, default=None)
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--keep", action="store_true", help="keep the converted copy")
     parser.add_argument("--floor", type=float, default=95.0)

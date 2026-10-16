@@ -81,6 +81,19 @@ def test_decodes_cleanly(hevc_copy):
     assert "120" in check.detail
 
 
+def test_decodes_cleanly_accepts_a_clock_a_little_faster_than_30(tmp_path):
+    """Like the camera's 30.0085 fps: strictly increasing timestamps that a 1/30
+    grid would put two frames on one tick. The file is fine and must pass."""
+    clip = tmp_path / "fast_clock.mp4"
+    r = run_ffmpeg(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=30",
+                    "-frames:v", "240", "-vf", "settb=1/90000,setpts=N*2990",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough",
+                    "-enc_time_base", "-1", "-video_track_timescale", "90000", str(clip)])
+    assert r.returncode == 0, r.stderr
+    check = checks.decodes_cleanly(clip)
+    assert check.passed, check.detail
+
+
 def test_decodes_cleanly_fails_on_truncated(video_silent, tmp_path):
     data = video_silent.read_bytes()
     cut = tmp_path / "cut.mp4"

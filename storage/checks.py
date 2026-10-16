@@ -79,8 +79,11 @@ def decodes_cleanly(path: Path) -> Check:
     if decoded != expected:
         return Check("decodes_cleanly", False, f"decoded {decoded} frames of {expected}")
     try:
-        r = run(["-v", "error", "-i", str(path), "-map", "0:v:0", "-f", "null", "-"],
-                timeout=6 * 3600)
+        # Passthrough timestamps: by default the null muxer gets them on a 1/30
+        # grid from r_frame_rate, and the camera's 30.0085 fps puts two frames
+        # on one tick, which ffmpeg reports as an error the file does not have.
+        r = run(["-v", "error", "-i", str(path), "-map", "0:v:0", "-fps_mode", "passthrough",
+                 "-enc_time_base", "-1", "-f", "null", "-"], timeout=6 * 3600)
     except (OSError, subprocess.SubprocessError) as exc:
         return Check("decodes_cleanly", False, f"ffmpeg decode failed: {exc}")
     errors = r.stderr.decode(errors="replace").strip()

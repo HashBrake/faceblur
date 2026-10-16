@@ -366,6 +366,20 @@ class Settings:
     encoder: str = "auto"
     # NVENC constant quality, the counterpart of crf. 16 is near lossless.
     nvenc_cq: int = 16
+    # Hot storage: the blurred copy re-encoded to HEVC by `storage.convert`.
+    # NVENC constant quality 28 is the most compression that stays above the
+    # VMAF floor of 95 on every sample, on both GPUs measured: min VMAF 96.2 at
+    # 0.19 of the H.264 size on the RTX 3070 (docs/hot_storage_curve.md), 96.5
+    # at 0.18 on the RTX 5090 (docs/hot_storage_curve_5090.md). cq 30 falls to
+    # 94.5 and 95.0, under or on the floor.
+    hevc_cq: int = 28
+    # libx265 (preset medium) when NVENC is not there. Its scale is not
+    # NVENC's, so it was measured on 004100, where cq 28 scores VMAF 96.6
+    # (docs/hot_storage_convert.md): crf 22 scores 96.5 at 0.15 of the H.264
+    # size, crf 20 97.9 at 0.21, crf 24 falls to 94.5.
+    hevc_crf: int = 22
+    # The brief: a keyframe at least every 60 frames, about 2 s at 30 fps.
+    gop: int = 60
     suffix: str = "_blurred"
     replace_existing: bool = False
     # A frame masked beyond this share is flagged in the audit record.
@@ -707,6 +721,12 @@ class Settings:
             raise SettingsError(f"strength must be at least 1, got {self.strength}")
         if not 0 <= self.crf <= 51:
             raise SettingsError(f"crf must be between 0 and 51, got {self.crf}")
+        if not 0 <= self.hevc_cq <= 51:
+            raise SettingsError(f"hevc_cq must be between 0 and 51, got {self.hevc_cq}")
+        if not 0 <= self.hevc_crf <= 51:
+            raise SettingsError(f"hevc_crf must be between 0 and 51, got {self.hevc_crf}")
+        if not 1 <= self.gop <= 60:
+            raise SettingsError(f"gop must be between 1 and 60, got {self.gop}")
 
     def with_changes(self, **changes) -> "Settings":
         return replace(self, **changes)

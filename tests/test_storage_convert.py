@@ -133,4 +133,39 @@ def test_audio_survives(tmp_path, video_with_audio):
 
 
 def test_default_quality():
-    assert convert.default_quality() == getattr(convert.Settings, "hevc_cq", 24)
+    s = convert.Settings()
+    assert convert.default_quality("hevc", "nvenc") == s.hevc_cq == 28
+    assert convert.default_quality("hevc", "software") == s.hevc_crf
+    assert convert.default_quality("av1", "nvenc") == 24
+
+
+def test_software_default_is_hevc_crf(tmp_path, video_silent, monkeypatch):
+    """`auto` is resolved once, and the quality and the encoder used agree."""
+    src = _copy(video_silent, tmp_path)
+    monkeypatch.setattr(convert, "resolve_encoder", lambda codec, encoder: "software")
+    seen = {}
+    real = convert.encode_file
+
+    def spy(src_, dst, **kwargs):
+        seen.update(kwargs)
+        return real(src_, dst, **kwargs)
+
+    monkeypatch.setattr(convert, "encode_file", spy)
+    row, _ = convert.convert(src, floor=90, manifest=tmp_path / "m.parquet", log=lambda _: None)
+    assert seen["encoder"] == "software" and seen["gop"] == convert.Settings().gop == 60
+    assert row.encoder == "software" and row.quality == convert.Settings().hevc_crf
+
+
+def test_nvenc_default_is_hevc_cq(tmp_path, video_silent, monkeypatch):
+    src = _copy(video_silent, tmp_path)
+    monkeypatch.setattr(convert, "resolve_encoder", lambda codec, encoder: "nvenc")
+    seen = {}
+
+    def stop(src_, dst, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop before encoding")
+
+    monkeypatch.setattr(convert, "encode_file", stop)
+    with pytest.raises(RuntimeError):
+        convert.convert(src, manifest=tmp_path / "m.parquet")
+    assert seen["encoder"] == "nvenc" and seen["quality"] == convert.Settings().hevc_cq

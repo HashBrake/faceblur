@@ -30,7 +30,20 @@ def test_defaults_are_the_precision_first_ones():
     assert s.mask_budget == 0.05
 
 
+def test_hot_storage_defaults_are_the_calibrated_ones():
+    s = Settings()
+    assert s.hevc_cq == 28
+    assert s.hevc_crf == 22
+    assert s.gop == 60
+
+
 @pytest.mark.parametrize("changes", [
+    {"hevc_cq": 52},
+    {"hevc_cq": -1},
+    {"hevc_crf": 52},
+    {"hevc_crf": -1},
+    {"gop": 61},
+    {"gop": 0},
     {"engine": "yolo"},
     {"mode": "smudge"},
     {"conf": 0.0},
