@@ -49,7 +49,19 @@ files); turn on A's self-delete hook **with the current full-access API
 keys** on the VMs (owner told the risk: a VM with the keys can manage every
 server in the project), as an opt-in per run; compare C's stereo tracker
 with EgoSmith on the four showcase clips (results under
-`hands_showcase/<clip>/stereo/`). In parallel, the partner's
+`hands_showcase/<clip>/stereo/`).
+**Hand comparison result (2026-10-17):** EgoSmith finds hands far more
+often than the stereo tracker (C) on all four showcase clips (either hand:
+52.6/45.5/90.0/71.3 % against 1.5/1.6/51.5/38.3 %); MediaPipe misses gloved
+hands (D5, FF) and hands below the +-60 deg rectified view. Where C finds a
+hand its skeleton fits as well or better and it is metric 3-D. The showcase
+keeps EgoSmith's `overlay.mp4` as the lead; C's files are in `stereo/`.
+**Timing finding:** some blurred copies (97, B2 here) keep every frame but
+not the source timestamps: they were re-timed at a constant rate, losing the
+step at each dropped sensor frame, so anything pairing them with the `*_pts.csv`
+(stereo, IMU) is off by one frame after a gap. Remuxing with timestamps from
+the csv (stream copy) fixes a copy. Not yet known how many delivered copies
+are affected; to check before the public delivery. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). The robustness build on branch
