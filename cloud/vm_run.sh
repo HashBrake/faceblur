@@ -11,8 +11,10 @@
 # and checks that the card runs CUDA and the encoder inside it. `calibrate`
 # times the detection pass at several process counts on the card. `run`
 # starts stream_run.py in a detached container that survives a dropped SSH
-# session; a restart skips what is finished. stream_run.py is mounted over
-# the image's copy, which predates the SHARD and disk room commits. `patch`
+# session; a restart skips what is finished. It takes SHARD=k/n, or QUEUE=1
+# with no SHARD, and passes LEASE, SELF_DELETE and GN_SERVER_NAME through.
+# stream_run.py is mounted over the image's copy, which predates the SHARD
+# and disk room commits, and so is gn_api.py when it was copied in. `patch`
 # starts cloud/patch_run.py the same way, with this checkout's code mounted.
 set -euo pipefail
 set -a; . /root/faceblur.env; set +a
@@ -64,14 +66,20 @@ calibrate)
     done
     ;;
 run)
-    : "${SHARD:?SHARD=k/n, k from 0}"
+    if [ "${QUEUE:-0}" != "1" ]; then : "${SHARD:?SHARD=k/n, k from 0, or QUEUE=1}"; fi
+    # The image's gn_api.py predates the library the self-delete hook loads.
+    mounts=()
+    if [ -f /root/gn_api.py ]; then mounts=(-v /root/gn_api.py:/app/cloud/gn_api.py:ro); fi
     docker rm -f faceblur 2>/dev/null || true
     docker run -d --name faceblur --restart on-failure:3 --gpus all --ipc=host \
-        --env-file /root/faceblur.env -e SHARD="$SHARD" -e WORKERS="${WORKERS:-5}" -e LANES="${LANES:-1}" \
+        --env-file /root/faceblur.env -e SHARD="${SHARD:-0/1}" -e WORKERS="${WORKERS:-5}" -e LANES="${LANES:-1}" \
         -e RUN_ARGS="${RUN_ARGS:---quarantine --second-chance 1}" -e WORK=/work \
-        -v "$WORK:/work" -v /root/stream_run.py:/app/cloud/stream_run.py:ro \
+        -e QUEUE="${QUEUE:-0}" -e LEASE="${LEASE:-1800}" \
+        -e SELF_DELETE="${SELF_DELETE:-0}" -e GN_SERVER_NAME="${GN_SERVER_NAME:-}" \
+        -v "$WORK:/work" -v /root/stream_run.py:/app/cloud/stream_run.py:ro "${mounts[@]}" \
         --entrypoint python "$IMAGE" cloud/stream_run.py
-    say "started share $SHARD; log: tail -f $WORK/stream_run.log"
+    if [ "${QUEUE:-0}" = "1" ]; then mode="queue mode"; else mode="share $SHARD"; fi
+    say "started $mode; log: tail -f $WORK/stream_run.log"
     ;;
 patch)
     # The patch pass over held back copies (faceblur/patch.py). Image :3

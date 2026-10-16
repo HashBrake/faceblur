@@ -15,6 +15,7 @@ pipeline.py stays as the one process, one video path.
 from __future__ import annotations
 
 import multiprocessing
+import multiprocessing.connection
 import os
 import shutil
 import statistics
@@ -102,8 +103,20 @@ class PoolSubmit:
 
 
 def init_pool_worker(workers: int = 1) -> None:
-    """Pool initialiser: split the cores between workers."""
+    """Pool initialiser: split the cores between workers, and end the worker
+    when the process that started it is gone."""
     import os
+
+    # The watchdog ends a stalled video by terminating the process that holds
+    # the pool, and a terminated process cannot shut its pool down. Without
+    # this its workers would sit on GPU memory until the machine restarts.
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+        def leave_with_parent(sentinel=parent.sentinel):
+            multiprocessing.connection.wait([sentinel])
+            os._exit(1)
+
+        threading.Thread(target=leave_with_parent, daemon=True).start()
 
     global _THREADS
     _THREADS = None if workers <= 1 else max(1, (os.cpu_count() or 2) // workers)
@@ -388,6 +401,28 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.error = ("Could not read this video. Check that the file is not open in "
                         "another program.")
         return record
+    # A camera stopped mid-write leaves a last packet the demuxer lists and the
+    # decoder cannot make a frame of, so every later count would be one too
+    # many. Decoding the last group of pictures once says how many frames
+    # really come out, and the run works on those. The keyframes are wanted
+    # by the write pass anyway, so the probe costs one GOP and nothing more.
+    keys = keyframes(src, times)
+    try:
+        tail = sum(1 for _ in decode_range(src, times, keys[-1], n, info, settings.hwaccel))
+    except VideoError as exc:
+        record.error = str(exc)
+        record.wall_seconds = round(time.time() - started, 2)
+        return record
+    if tail == 0 and keys[-1] == 0:
+        record.error = ("Could not read this video. Check that the file is not open in "
+                        "another program.")
+        return record
+    dropped = n - (keys[-1] + tail)
+    if dropped > 0:
+        times = times[:n - dropped]
+        n = len(times)
+        keys = [k for k in keys if k < n]
+        record.source_frames_dropped = dropped
     # Encoded segments get the rate the timestamps actually show, not the
     # nominal one from the container, so their length matches the copied
     # segments and the audio stays in step.
@@ -449,7 +484,9 @@ def run_video(src: Path, dst: Path, settings: Settings,
     record.detections = sum(len(f) for f in strong)
     record.verified_detections = sum(1 for f in strong for d in f if d.verified)
 
-    # ---- 2. track
+    # ---- 2. track. The zone and the screen hold below count as tracking too:
+    # the watchdog times stages by these names and needs no finer ones.
+    report("tracking", 0, n)
     per_frame, tracks = tracker_for(settings).run(
         strong, weak, shifts if settings.camera_comp else None, (info.height, info.width))
     record.tracks = len(tracks)
@@ -497,7 +534,6 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # again: a second chance writes the whole file a second time from the
     # source, never from the copy, so a face found late is blurred once and
     # not blurred twice.
-    keys = keyframes(src, times)
     min_copy = max(1, int(round(settings.min_copy_seconds * info.fps)))
     piece = max(1, int(round(settings.encode_seconds * info.fps))) if settings.encode_seconds else chunk
     # Copied pieces must carry the same reordering delay as the encoded ones,
@@ -522,6 +558,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 break
             segments = split_long(plan_segments(masked_flags, keys, n, min_copy, copy_clean),
                                   keys, piece)
+            if record.source_frames_dropped and segments and segments[-1].copy:
+                # A stream copy of the last stretch would hand ffmpeg the
+                # damaged packet, so the stretch that ends the copy is encoded.
+                last = segments.pop()
+                segments += split_long([Segment(last.start, last.end, False)], keys, piece)
             work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
             try:
                 outcome = _write_and_join(src, out, info, times, settings, segments, per_frame,
@@ -644,6 +685,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 record.second_chance_seeds += sum(len(v) for v in seeds.values())
                 for i, dets in seeds.items():
                     strong[i] = list(strong[i]) + list(dets)
+                report("tracking", 0, n)
                 per_frame, tracks = tracker_for(settings).run(
                     strong, weak, shifts if settings.camera_comp else None,
                     (info.height, info.width))

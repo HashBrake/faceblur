@@ -13,6 +13,8 @@ ENGINES = ("yunet", "centerface", "both")
 DEVICES = ("auto", "gpu", "cpu")
 ENCODERS = ("auto", "nvenc", "x264")
 MODES = ("blur", "pixelate", "solid")
+# The progress stage names, which are also the stages the watchdog times.
+WATCHDOG_STAGES = ("detecting", "tracking", "writing", "checking")
 
 # Video extensions the batch walker treats as input.
 VIDEO_EXT = frozenset(
@@ -490,6 +492,18 @@ class Settings:
     # setting is only here for a machine where it is not. Section 14.4.
     hand_device: str = "auto"
 
+    # --- watchdog ------------------------------------------------------------
+    # Seconds each stage may take per frame of the video before the watchdog
+    # stops the video. One stall in the tracker held a cloud run for 12 hours,
+    # and only killing the process stops pure Python, so the video runs in a
+    # child process the parent can end. 0 turns a stage's limit off.
+    watchdog_seconds_per_frame: tuple[tuple[str, float], ...] = (
+        ("detecting", 1.0), ("tracking", 0.05), ("writing", 1.0), ("checking", 1.0))
+    # No stage is stopped sooner than this, so a short clip is never cut off
+    # by the cost of starting the models. Every per-frame value 0 and this 0
+    # is the watchdog off.
+    watchdog_min_seconds: float = 600.0
+
     def wants(self, kind: str) -> bool:
         """Is this kind of thing to be masked on this run."""
         return kind in self.mask
@@ -499,6 +513,8 @@ class Settings:
         object.__setattr__(self, "det_sizes", tuple(int(s) for s in self.det_sizes))
         object.__setattr__(self, "hand_windows", tuple(int(w) for w in self.hand_windows))
         object.__setattr__(self, "screen_labels", tuple(self.screen_labels))
+        object.__setattr__(self, "watchdog_seconds_per_frame",
+                           tuple((str(k), float(v)) for k, v in self.watchdog_seconds_per_frame))
         self.validate()
 
     def validate(self) -> None:
@@ -707,6 +723,16 @@ class Settings:
             raise SettingsError(f"strength must be at least 1, got {self.strength}")
         if not 0 <= self.crf <= 51:
             raise SettingsError(f"crf must be between 0 and 51, got {self.crf}")
+        if self.watchdog_min_seconds < 0:
+            raise SettingsError(f"watchdog_min_seconds must be 0 or more, "
+                                f"got {self.watchdog_min_seconds}")
+        for stage, per_frame in self.watchdog_seconds_per_frame:
+            if stage not in WATCHDOG_STAGES:
+                raise SettingsError(f"watchdog stage must be one of {WATCHDOG_STAGES}, "
+                                    f"got {stage!r}")
+            if per_frame < 0:
+                raise SettingsError(f"watchdog seconds per frame must be 0 or more, "
+                                    f"got {per_frame} for {stage}")
 
     def with_changes(self, **changes) -> "Settings":
         return replace(self, **changes)
@@ -743,7 +769,8 @@ class Settings:
             "zone_min_hand_px",
             "zone_edge_frac", "zone_scale", "zone_memory", "zone_gate_changed",
             "zone_cover", "zone_face_needs_hand", "zone_face_scale", "zone_device",
-            "nms_detect", "nms_yunet")}
+            "nms_detect", "nms_yunet",
+            "watchdog_seconds_per_frame", "watchdog_min_seconds")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.
         d["mask"] = list(self.mask)
@@ -751,6 +778,7 @@ class Settings:
         d["det_sizes"] = list(self.det_sizes)
         d["hand_windows"] = list(self.hand_windows)
         d["text_sizes"] = list(self.text_sizes)
+        d["watchdog_seconds_per_frame"] = [list(p) for p in self.watchdog_seconds_per_frame]
         return d
 
 

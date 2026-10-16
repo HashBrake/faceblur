@@ -1,6 +1,8 @@
 """Shared fixtures. Synthetic videos are built once per test session with ffmpeg."""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,6 +11,23 @@ import pytest
 from faceblur.video import ffmpeg_exe
 
 DATA = Path(__file__).resolve().parent / "data"
+
+
+def rclone_exe() -> str | None:
+    """Path to an rclone binary, or None when there is none.
+
+    rclone is not installed on the owner's PC, and the cloud runner tests need
+    a real one against a local directory remote. So look at $RCLONE first, then
+    the newest copy downloaded under tools/, then the PATH.
+    """
+    env = os.environ.get("RCLONE")
+    if env and Path(env).is_file():
+        return env
+    tools = Path(__file__).resolve().parent.parent / "tools"
+    found = [p for name in ("rclone.exe", "rclone") for p in tools.glob(f"**/{name}") if p.is_file()]
+    if found:
+        return str(max(found, key=lambda p: p.stat().st_mtime))
+    return shutil.which("rclone")
 
 
 def run_ffmpeg(args: list[str]) -> subprocess.CompletedProcess:
