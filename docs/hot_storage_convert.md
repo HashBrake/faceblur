@@ -137,3 +137,39 @@ Files given and every `*_imu.csv` / `*_pts.csv` under `--tree` (recursive) are c
 | **total** | 2,479,291 | 114,177,728 | 14,955,398 | **0.131** | 4/4 | 5.55 (one CLI run) |
 
 The CLI run over the folder exited 0 in 5.55 s with a peak working set of 447 MB. A second process, without the storage code, regenerated each CSV from its Parquet in plain Python (`f"{v:.6f}"` per value) and its sha256 matched the source for all four files. Sizes and modification times of all nine files in the read-only recording folder were the same before and after; `--apply` was not used, so every CSV is still in place.
+
+## --codec hevc in the blur pipeline (T09)
+
+`cli.py --codec {h264,hevc}` (setting `codec`, default `h264`) picks the codec of the blurred copy. `h264` is unchanged, with exactly the same ffmpeg command line as before. `hevc` writes the copy straight in the hot-storage format, so no second `storage.convert` pass is needed.
+
+- Settings: `CODECS = ("h264", "hevc")`, validated. `to_dict()`, and so the audit record in the sidecar, now holds `codec`, `hevc_cq`, `hevc_crf` and `gop`.
+- One source of truth for the arguments: `faceblur.video.video_codec_args(..., codec="hevc")` returns `storage.encode.codec_args("hevc", ...)`, the same set the calibration was measured with (NVENC `hevc_nvenc` cq `hevc_cq`=28, or libx265 crf `hevc_crf`=22, keyframe every `gop`=60 frames, B-frames on, `-tag:v hvc1`). The import happens inside the hevc branch, so the h264 path never loads `storage`.
+- `--encoder auto` uses NVENC when `hevc_nvenc` works here (`nvenc_available("hevc_nvenc")`). The CPU fallback name `x264`, used by `--encoder x264` and by the batch retry when the GPU encoder refuses, maps to libx265 for hevc.
+- No stream copies for hevc: `want_copy` needs `codec == "h264"`, because a copied H.264 piece of the source cannot be joined to HEVC pieces. Every frame is encoded. The encode still runs in `encode_seconds` pieces joined by the concat demuxer, and that join verifies with B-frames on, so the one-segment fallback was **not** needed. Before the real run, three 150-frame NVENC HEVC pieces were joined and checked: `segments.verify` came back empty, and all 450 frames decoded in order (max pixel difference 1). libx265 pieces joined the same way.
+
+Command (RTX 3070 PC, through the GPU lock, otherwise default settings, the same settings that made the earlier H.264 copy):
+
+```
+python cli.py ego_AZER76400FE_19700101_004100_camera_left_part0001.mp4 -o <data>/t09/out --codec hevc --workers 2 --no-progress
+python -m faceblur.verify <source> <copy>
+```
+
+| | value |
+|---|---|
+| file | `ego_AZER76400FE_19700101_004100_camera_left_part0001.mp4` (1600x1300, 30.02 fps) |
+| source bytes | 59,057,133 (H.264) |
+| H.264 copy bytes | 105,690,318 |
+| HEVC copy bytes | 21,133,541 (`hevc`, NVENC) |
+| ratio HEVC / H.264 copy | 0.200 (0.358 of the source) |
+| frames (source / copy) | 984 / 984 |
+| duration (source / copy) | 32.778 s / 32.778 s |
+| `segments.verify` | empty (pass), also with the length check |
+| pipeline join | 1 attempt, 0 frames copied, status done, sidecar `settings.codec` = `hevc` |
+| `faceblur.verify`, HEVC copy | exit 1: 7 faces on untouched pixels (6 at 40 px and over, largest 220 px) over 7 frames; zone gate: 881 frames over 1.00 percent changed, worst 9.84 percent |
+| `faceblur.verify`, H.264 copy (same arguments) | exit 1: 11 faces on untouched pixels (largest 179 px) over 11 frames, 3 more set aside as the wearer's hands; zone gate: 0 frames over, worst 0.099 percent |
+| pipeline wall seconds | 184.1 (sidecar: detect 124.1, encode 47.2, wall 183.4) |
+| verify wall seconds | 226.2 (HEVC copy), 252.3 (H.264 copy) |
+
+Faces: the HEVC copy has no misses that the H.264 copy lacks. It has fewer (7 against 11), and both copies fail the face gate at default settings, so the codec adds no face misses. The two lists differ frame by frame because a lossy copy changes the "applied" share that `verify` measures on each box.
+
+Zone gate: this one fails on HEVC only. It counts zone pixels that moved between the source and the copy, and its 1 percent threshold assumes a near-lossless copy (H.264 crf 12 / cq 16). At cq 28 the compression noise alone moves up to 9.8 percent of the zone's pixels. With `--check-output` or `--quarantine`, every HEVC copy would therefore be held back for `zone`. This needs a follow-up: compare the zone against a reference that knows the codec, or skip that gate for lossy storage copies. It is not changed here.

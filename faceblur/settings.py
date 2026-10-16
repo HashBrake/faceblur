@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 ENGINES = ("yunet", "centerface", "both")
 DEVICES = ("auto", "gpu", "cpu")
 ENCODERS = ("auto", "nvenc", "x264")
+CODECS = ("h264", "hevc")
 MODES = ("blur", "pixelate", "solid")
 
 # Video extensions the batch walker treats as input.
@@ -380,6 +381,11 @@ class Settings:
     hevc_crf: int = 22
     # The brief: a keyframe at least every 60 frames, about 2 s at 30 fps.
     gop: int = 60
+    # Codec of the blurred copy. h264 is the delivered format today. hevc is
+    # the hot-storage format, written with the settings above; it is encoded
+    # whole, because a stream copy of an H.264 source cannot be joined to HEVC
+    # pieces.
+    codec: str = "h264"
     suffix: str = "_blurred"
     replace_existing: bool = False
     # A frame masked beyond this share is flagged in the audit record.
@@ -537,6 +543,8 @@ class Settings:
             raise SettingsError(f"device must be one of {DEVICES}, got {self.device!r}")
         if self.encoder not in ENCODERS:
             raise SettingsError(f"encoder must be one of {ENCODERS}, got {self.encoder!r}")
+        if self.codec not in CODECS:
+            raise SettingsError(f"codec must be one of {CODECS}, got {self.codec!r}")
         if not 0.0 < self.conf <= 1.0:
             raise SettingsError(f"conf must be above 0 and at most 1, got {self.conf}")
         if self.chunk_seconds < 0 or self.min_copy_seconds < 0:
@@ -746,7 +754,8 @@ class Settings:
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
             "tail_trend",
             "ellipse_w", "ellipse_h", "pad", "feather",
-            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
+            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "codec", "hevc_cq", "hevc_crf",
+            "gop", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "nvenc_sessions", "hwaccel",
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",

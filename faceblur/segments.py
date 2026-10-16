@@ -247,12 +247,13 @@ class SegmentEncoder:
     """Encodes one segment's frames to a video only file, same rate as the source."""
 
     def __init__(self, out: Path, info: VideoInfo, crf: int, preset: str,
-                 encoder: str, nvenc_cq: int):
+                 encoder: str, nvenc_cq: int, codec: str = "h264", hevc_cq: int = 28,
+                 hevc_crf: int = 22, gop: int = 60):
         self.out = Path(out)
         cmd = [ffmpeg_exe(), "-hide_banner", "-y", "-v", "error",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{info.width}x{info.height}",
                "-r", f"{info.fps:.6f}", "-i", "-",
-               *video_codec_args(encoder, crf, preset, nvenc_cq),
+               *video_codec_args(encoder, crf, preset, nvenc_cq, codec, hevc_cq, hevc_crf, gop),
                "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
                "-f", "mp4", str(self.out)]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,

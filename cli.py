@@ -285,6 +285,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoder", choices=["auto", "nvenc", "x264"],
                         default=defaults.encoder,
                         help="video encoder (default: %(default)s, NVENC when available)")
+    parser.add_argument("--codec", choices=["h264", "hevc"], default=defaults.codec,
+                        help="video codec of the blurred copy (default: %(default)s; hevc "
+                             "encodes the whole file with the hot-storage settings)")
     parser.add_argument("--chunk-seconds", type=float, default=defaults.chunk_seconds,
                         help="detection runs in ranges of this length, in parallel "
                              "(default: %(default)s)")
@@ -369,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             mode=args.mode,
             device=args.device,
             encoder=args.encoder,
+            codec=args.codec,
             chunk_seconds=args.chunk_seconds,
             copy_clean=args.copy_clean,
             hwaccel=args.hwaccel,

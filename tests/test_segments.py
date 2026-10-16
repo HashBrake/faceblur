@@ -192,6 +192,31 @@ def test_encoded_pieces_carry_no_b_frames():
     assert video_codec_args("nvenc", 12, "fast", 16)[-2:] == ["-bf", "0"]
 
 
+def test_hevc_uses_the_calibrated_hot_storage_arguments():
+    """One source of truth: the pipeline's HEVC arguments are storage's."""
+    from faceblur.video import video_codec_args
+    from storage.encode import codec_args
+    nvenc = video_codec_args("nvenc", 12, "fast", 16, codec="hevc")
+    assert nvenc == codec_args("hevc", "nvenc", 28, 60)
+    assert nvenc[:2] == ["-c:v", "hevc_nvenc"] and "-bf" in nvenc and "3" in nvenc
+    # The CPU fallback name "x264" means libx265 when the codec is hevc.
+    software = video_codec_args("x264", 12, "fast", 16, codec="hevc")
+    assert software == codec_args("hevc", "software", 22, 60)
+    assert software[:2] == ["-c:v", "libx265"]
+    assert any("bframes=4" in a for a in software)
+    for args in (nvenc, software):
+        assert args[args.index("-tag:v") + 1] == "hvc1"
+    # The quality and keyframe settings are passed through.
+    assert video_codec_args("nvenc", 12, "fast", 16, codec="hevc", hevc_cq=30, gop=30) ==         codec_args("hevc", "nvenc", 30, 30)
+    assert video_codec_args("x264", 12, "fast", 16, codec="hevc", hevc_crf=20, gop=30) ==         codec_args("hevc", "software", 20, 30)
+
+
+def test_h264_is_the_default_codec_and_unchanged():
+    from faceblur.video import video_codec_args
+    assert video_codec_args("x264", 12, "fast", 16) ==         ["-c:v", "libx264", "-preset", "fast", "-crf", "12", "-bf", "0"]
+    assert video_codec_args("x264", 12, "fast", 16, codec="h264") ==         video_codec_args("x264", 12, "fast", 16)
+
+
 def test_a_retry_after_a_bad_join_reports_done(video_silent, tmp_path, monkeypatch):
     """The first join fails its check, the second passes: the record says done
     and carries no error from the first attempt."""
