@@ -238,7 +238,7 @@ def test_main_help(capsys):
         main(["--help"])
     assert e.value.code == 0
     out = capsys.readouterr().out
-    assert "usage" in out and "--crop" in out
+    assert "usage" in out and "--crop" in out and "--world" in out and "--trajectory" in out
 
 
 def test_part_reader_size_check(recording, rig):
@@ -265,3 +265,94 @@ def test_real_smoke(recording_ev, tmp_path):
           f"bone CV max raw {cv_raw} constrained {o['bone_cv_max']}, jitter {o['jitter_mm']} mm, "
           f"detection {report['clip']['detection_fps']} fps, processing {report['processing_fps']} fps, "
           f"valid L {report['left']['valid_share']} R {report['right']['valid_share']}")
+
+
+IMU_YAML = CALIB_YAML.parent / "calibration_imu.yaml"
+HOLE = slice(30, 37)  # left csv rows with no pose: frames there are > 50 ms from the nearest pose
+
+
+def test_synthetic_world(recording, rect, rig, tmp_path):
+    """(c) --world with a given EuRoC trajectory: pose.parquet, joints_world.parquet, quality world section."""
+    from scipy.spatial.transform import Rotation
+
+    from hands.imu import camera_to_imu_time, load_imu_calibration
+    shutil.copy(IMU_YAML, recording / f"{STEM}_calibration_imu.yaml")
+    calib = load_imu_calibration(IMU_YAML)
+    t_cam = np.loadtxt(recording / f"{STEM}_camera_left_part0001_pts.csv", dtype=np.int64, skiprows=1)
+    keep = np.ones(len(t_cam), bool)
+    keep[HOLE] = False
+    t_imu = camera_to_imu_time(t_cam, calib)[keep]
+    a = np.linspace(0, 1.0, len(t_cam))[keep]
+    pos = np.column_stack([np.cos(a), np.sin(a), 1.6 + 0.01 * a])
+    quat = Rotation.from_euler("zyx", np.column_stack([a + np.pi / 2, 0.1 * a, -1.2 + 0.0 * a])).as_quat()
+    traj = tmp_path / "given_trajectory.txt"
+    traj.write_text("".join(f"{t * 1000}.000000 " + " ".join(f"{v:.12f}" for v in (*p, *q)) + "\n"
+                            for t, p, q in zip(t_imu, pos, quat)), encoding="utf-8")
+
+    out = tmp_path / "out"
+    report = run_pipeline(recording, out, start_s=START_S, duration_s=DURATION_S, world=True,
+                          trajectory_path=traj, detector_factory=factory(rect, rig, []), log=lambda s: None)
+    T = report["clip"]["n_frames"]
+    assert (out / "trajectory.txt").is_file() and report["clip"]["world"] is True
+
+    pose = pq.read_table(out / "pose.parquet")
+    assert pose.column_names == ["frame", "timestamp_us", "pose_valid", "tx", "ty", "tz", "qx", "qy", "qz", "qw"]
+    assert pose.num_rows == T
+    p = pose.to_pydict()
+    pv = np.array(p["pose_valid"])
+    assert 0 < (~pv).sum() <= HOLE.stop - HOLE.start and pv.sum() >= T - 7
+
+    jw = pq.read_table(out / "joints_world.parquet")
+    jc = pq.read_table(out / "joints.parquet")
+    assert jw.column_names == jc.column_names + ["pose_valid"] and jw.num_rows == 2 * T
+    dw, dc = jw.to_pydict(), jc.to_pydict()
+    assert dw["valid"] == dc["valid"] and dw["frame"] == dc["frame"] and dw["timestamp_us"] == dc["timestamp_us"]
+    assert dw["pose_valid"] == list(pv) * 2
+    Xc = np.array([dc[c] for c in JOINT_COLUMNS], np.float64).T.reshape(2, T, 21, 3)
+    Xw = np.array([dw[c] for c in JOINT_COLUMNS], np.float64).T.reshape(2, T, 21, 3)
+    t_wc = np.column_stack([p[c] for c in ("tx", "ty", "tz")])
+    q_wc = np.column_stack([p[c] for c in ("qx", "qy", "qz", "qw")])
+    n_checked = 0
+    for k in range(T):
+        if not pv[k]:
+            assert np.isnan(Xw[:, k]).all()
+            continue
+        R = Rotation.from_quat(q_wc[k]).as_matrix()
+        for h in range(2):
+            if np.isfinite(Xc[h, k]).all():
+                assert np.abs(Xw[h, k] - (Xc[h, k] @ R.T + t_wc[k])).max() <= 1e-9
+                n_checked += 1
+    assert n_checked >= T
+
+    q = json.loads((out / "quality.json").read_text(encoding="utf-8"))
+    w = q["world"]
+    assert np.isclose(w["pose_coverage"], pv.mean()) and w["frames_with_pose"] == int(pv.sum())
+    assert w["head_speed_mps_median"] > 0 and w["head_speed_mps_p95"] >= w["head_speed_mps_median"]
+    assert w["trajectory_length_m"] > 0
+    assert w["gravity_angle_deg"] is None and w["lost_events"] is None and w["maps_in_atlas"] is None
+    assert w["tool"] == "ORB-SLAM3 4452a3c (stereo-inertial, Docker)" and w["trajectory"] == "trajectory.txt"
+    for h, hand in enumerate(("left", "right")):
+        share = np.mean(np.array(dc["valid"][h * T:(h + 1) * T]) & pv)
+        assert np.isclose(q[hand]["world_valid_share"], share)
+
+    cap = cv2.VideoCapture(str(out / "review.mp4"))
+    n, last = 0, None
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        n, last = n + 1, frame
+    cap.release()
+    assert n == T
+    inset = last[650 - 8 - 220:650 - 8, 800 - 8 - 220:800 - 8].astype(int)  # bottom-right of the left view
+    b, g, r = inset[..., 0], inset[..., 1], inset[..., 2]
+    assert ((r > 150) & (g < 90) & (b < 90)).sum() >= 10  # the current-position dot / heading line
+    assert ((b > 150) & (g > 120) & (r < 90)).sum() >= 10  # the trace so far
+
+
+def test_world_without_docker_names_image(recording, tmp_path, monkeypatch):
+    shutil.copy(IMU_YAML, recording / f"{STEM}_calibration_imu.yaml")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match=r"faceblur-orbslam3:4452a3c.*STATE\.md"):
+        run_pipeline(recording, tmp_path / "out", start_s=START_S, duration_s=DURATION_S, world=True,
+                     detector_factory=factory(None, None, []), log=lambda s: None)

@@ -164,6 +164,42 @@ def quality_report(frames, hands, raw_hands, rect_size, fps_processing, meta) ->
     return _clean(report)
 
 
+WORLD_TOOL = "ORB-SLAM3 4452a3c (stereo-inertial, Docker)"
+ODOMETRY_KEYS = ("gravity_angle_deg", "lost_events", "maps_in_atlas")
+
+
+def add_world_section(report: dict, t_wc, pose_valid, hands: dict, odometry: dict | None, fps: float,
+                      trajectory_name: str = "trajectory.txt") -> dict:
+    """Adds ``report["world"]`` and per-hand ``world_valid_share`` (hand valid AND pose valid).
+
+    Head speeds use the camera positions over consecutive frames that both have a pose.
+    ``trajectory_length_m``, ``gravity_angle_deg``, ``lost_events`` and ``maps_in_atlas`` come from
+    ``odometry`` (odometry.json); without it the length is the camera path and the others are None.
+    """
+    t_wc = np.asarray(t_wc, np.float64)
+    pv = np.asarray(pose_valid, bool)
+    T = len(pv)
+    pair = pv[:-1] & pv[1:]
+    step = np.linalg.norm(np.diff(t_wc, axis=0), axis=1)[pair] if T > 1 else np.empty(0)
+    speed = step * fps
+    odometry = odometry or {}
+    report["world"] = {
+        "pose_coverage": pv.mean() if T else None,
+        "frames_with_pose": int(pv.sum()),
+        "trajectory_length_m": odometry.get("trajectory_length_m", float(step.sum())),
+        "head_speed_mps_median": float(np.median(speed)) if speed.size else None,
+        "head_speed_mps_p95": float(np.percentile(speed, 95)) if speed.size else None,
+        **{k: odometry.get(k) for k in ODOMETRY_KEYS},
+        "tool": WORLD_TOOL,
+        "trajectory": trajectory_name,
+    }
+    for hand in HANDS:
+        if hand in hands and hand in report:
+            hv = np.asarray(hands[hand]["valid"], bool)
+            report[hand]["world_valid_share"] = (hv & pv).mean() if T else None
+    return _clean(report)
+
+
 def write_quality_json(path, report: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(_clean(report), f, indent=2)
