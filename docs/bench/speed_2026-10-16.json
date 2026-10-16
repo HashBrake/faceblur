@@ -1,7 +1,7 @@
 {
  "date": "2026-10-16",
  "baseline_commit": "3eb0100",
- "branch_commit": "5d28803f222eb6eed28d269202f8cbfd018a622a",
+ "branch_commit": "09f59a17f4a0034d21165ba5c8434dab9f5d4da1",
  "workers": 4,
  "command": "cli.py FOOTAGE -o OUT --workers 4 --quarantine --second-chance 1 --report OUT\\report.json --no-progress",
  "verify_code": "baseline 3eb0100",
@@ -152,6 +152,11 @@
      "second_chance_rounds": 1,
      "frames": 2033,
      "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 10,
+     "second_chance_seeds_kept": 3,
      "record_residual_faces": 2,
      "record_residual_by_size": {
       "40+ px": 2,
@@ -184,6 +189,11 @@
      "second_chance_rounds": 1,
      "frames": 984,
      "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 11,
+     "second_chance_seeds_kept": 6,
      "record_residual_faces": 1,
      "record_residual_by_size": {
       "40+ px": 1,
@@ -229,6 +239,11 @@
      "second_chance_rounds": 1,
      "frames": 938,
      "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 36,
+     "second_chance_seeds_kept": 3,
      "record_residual_faces": 11,
      "record_residual_by_size": {
       "40+ px": 8,
@@ -274,6 +289,11 @@
      "second_chance_rounds": 1,
      "frames": 3971,
      "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 81,
+     "second_chance_seeds_kept": 53,
      "record_residual_faces": 9,
      "record_residual_by_size": {
       "40+ px": 3,
@@ -356,6 +376,10 @@
     "max_aspect": 2.5,
     "stride": 1,
     "device": "auto",
+    "adaptive_stride": true,
+    "adaptive_stride_max": 2,
+    "adaptive_stride_shift": 4.0,
+    "adaptive_stride_quiet": 3,
     "min_track": 2,
     "max_gap": 5,
     "tail": 2,
@@ -383,6 +407,7 @@
     "copy_clean": true,
     "min_copy_seconds": 2.0,
     "encode_seconds": 5.0,
+    "encode_gop_seconds": 1.0,
     "nvenc_sessions": 6,
     "hwaccel": "none",
     "text_sizes": [
@@ -399,12 +424,15 @@
     "text_gap": 6,
     "text_tail": 3,
     "text_link_iou": 0.3,
-    "check_output": false,
+    "check_output": true,
     "check_stride": 1,
-    "quarantine": false,
+    "check_overlap": true,
+    "quarantine": true,
     "quarantine_min_px": 24,
-    "second_chance": 0,
+    "second_chance": 1,
     "second_chance_min_px": 16,
+    "second_chance_scope": "changed",
+    "second_chance_margin_seconds": 0.5,
     "hand_rule": true,
     "hand_windows": [
      384,
@@ -445,22 +473,40 @@
     "nms_detect": 0.35,
     "nms_yunet": 0.3
    },
-   "nvidia_smi_before": null,
-   "total_wall_seconds": null,
-   "runs": 0,
+   "nvidia_smi_before": "2778 MiB, 8192 MiB, 2 %",
+   "total_wall_seconds": 1084.44,
+   "runs": 1,
    "files": {
     "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
-     "wall_seconds": null,
-     "detect_seconds": null,
-     "encode_seconds": null,
-     "check_seconds": null,
-     "second_chance_seconds": null,
-     "second_chance_rounds": null,
-     "frames": null,
-     "quarantined": null,
-     "record_residual_faces": null,
-     "record_residual_by_size": null,
-     "verify": null,
+     "wall_seconds": 242.81,
+     "detect_seconds": 126.08,
+     "encode_seconds": 98.43,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 28.02,
+     "second_chance_rounds": 1,
+     "frames": 2033,
+     "quarantined": true,
+     "overlap_check_seconds": 204.36,
+     "second_chance_reencoded_frames": 413,
+     "frames_skipped_adaptive": 10,
+     "second_chance_seeds": 11,
+     "second_chance_seeds_kept": 4,
+     "record_residual_faces": 4,
+     "record_residual_by_size": {
+      "40+ px": 3,
+      "24-40 px": 0,
+      "under 24 px": 1
+     },
+     "verify": {
+      "residual_faces": 4,
+      "residual_by_size": {
+       "40+ px": 3,
+       "24-40 px": 0,
+       "under 24 px": 1
+      },
+      "residual_max_px": 228,
+      "frames_checked": 2033
+     },
      "recall": null,
      "recall_by_size": null,
      "exposed_40": null,
@@ -469,17 +515,35 @@
      "masked_mean": null
     },
     "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
-     "wall_seconds": null,
-     "detect_seconds": null,
-     "encode_seconds": null,
-     "check_seconds": null,
-     "second_chance_seconds": null,
-     "second_chance_rounds": null,
-     "frames": null,
-     "quarantined": null,
-     "record_residual_faces": null,
-     "record_residual_by_size": null,
-     "verify": null,
+     "wall_seconds": 126.99,
+     "detect_seconds": 62.42,
+     "encode_seconds": 52.22,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 21.37,
+     "second_chance_rounds": 1,
+     "frames": 984,
+     "quarantined": false,
+     "overlap_check_seconds": 105.39,
+     "second_chance_reencoded_frames": 420,
+     "frames_skipped_adaptive": 26,
+     "second_chance_seeds": 7,
+     "second_chance_seeds_kept": 5,
+     "record_residual_faces": 0,
+     "record_residual_by_size": {
+      "40+ px": 0,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 0,
+      "residual_by_size": {
+       "40+ px": 0,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 0,
+      "frames_checked": 984
+     },
      "recall": 1.0,
      "recall_by_size": {
       "large 64+": [
@@ -501,17 +565,35 @@
      "masked_mean": 0.005559731934731933
     },
     "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
-     "wall_seconds": null,
-     "detect_seconds": null,
-     "encode_seconds": null,
-     "check_seconds": null,
-     "second_chance_seconds": null,
-     "second_chance_rounds": null,
-     "frames": null,
-     "quarantined": null,
-     "record_residual_faces": null,
-     "record_residual_by_size": null,
-     "verify": null,
+     "wall_seconds": 207.23,
+     "detect_seconds": 91.21,
+     "encode_seconds": 106.98,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 53.93,
+     "second_chance_rounds": 1,
+     "frames": 938,
+     "quarantined": true,
+     "overlap_check_seconds": 231.29,
+     "second_chance_reencoded_frames": 938,
+     "frames_skipped_adaptive": 0,
+     "second_chance_seeds": 41,
+     "second_chance_seeds_kept": 3,
+     "record_residual_faces": 7,
+     "record_residual_by_size": {
+      "40+ px": 5,
+      "24-40 px": 2,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 7,
+      "residual_by_size": {
+       "40+ px": 5,
+       "24-40 px": 2,
+       "under 24 px": 0
+      },
+      "residual_max_px": 164,
+      "frames_checked": 938
+     },
      "recall": 0.9974747474747475,
      "recall_by_size": {
       "large 64+": [
@@ -533,17 +615,35 @@
      "masked_mean": 0.02350438318330606
     },
     "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
-     "wall_seconds": null,
-     "detect_seconds": null,
-     "encode_seconds": null,
-     "check_seconds": null,
-     "second_chance_seconds": null,
-     "second_chance_rounds": null,
-     "frames": null,
-     "quarantined": null,
-     "record_residual_faces": null,
-     "record_residual_by_size": null,
-     "verify": null,
+     "wall_seconds": 498.56,
+     "detect_seconds": 247.53,
+     "encode_seconds": 219.55,
+     "check_seconds": 0.01,
+     "second_chance_seconds": 90.56,
+     "second_chance_rounds": 1,
+     "frames": 3971,
+     "quarantined": true,
+     "overlap_check_seconds": 582.98,
+     "second_chance_reencoded_frames": 2460,
+     "frames_skipped_adaptive": 0,
+     "second_chance_seeds": 69,
+     "second_chance_seeds_kept": 50,
+     "record_residual_faces": 11,
+     "record_residual_by_size": {
+      "40+ px": 4,
+      "24-40 px": 3,
+      "under 24 px": 4
+     },
+     "verify": {
+      "residual_faces": 11,
+      "residual_by_size": {
+       "40+ px": 4,
+       "24-40 px": 3,
+       "under 24 px": 4
+      },
+      "residual_max_px": 140,
+      "frames_checked": 3971
+     },
      "recall": 0.994475138121547,
      "recall_by_size": {
       "large 64+": [
@@ -569,45 +669,45 @@
  },
  "gates": {
   "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
-   "wall_reduction": null,
-   "wall_ok": null,
+   "wall_reduction": 0.413,
+   "wall_ok": true,
    "faces40_baseline": 2,
-   "faces40_branch": null,
-   "faces40_ok": null,
+   "faces40_branch": 3,
+   "faces40_ok": false,
    "recall_baseline": null,
    "recall_branch": null,
    "recall_ok": null
   },
   "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
-   "wall_reduction": null,
-   "wall_ok": null,
+   "wall_reduction": 0.4151,
+   "wall_ok": true,
    "faces40_baseline": 1,
-   "faces40_branch": null,
-   "faces40_ok": null,
+   "faces40_branch": 0,
+   "faces40_ok": true,
    "recall_baseline": 1.0,
    "recall_branch": 1.0,
    "recall_ok": true
   },
   "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
-   "wall_reduction": null,
-   "wall_ok": null,
+   "wall_reduction": 0.3994,
+   "wall_ok": true,
    "faces40_baseline": 8,
-   "faces40_branch": null,
-   "faces40_ok": null,
+   "faces40_branch": 5,
+   "faces40_ok": true,
    "recall_baseline": 0.9974747474747475,
    "recall_branch": 0.9974747474747475,
    "recall_ok": true
   },
   "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
-   "wall_reduction": null,
-   "wall_ok": null,
+   "wall_reduction": 0.3814,
+   "wall_ok": true,
    "faces40_baseline": 3,
-   "faces40_branch": null,
-   "faces40_ok": null,
+   "faces40_branch": 4,
+   "faces40_ok": false,
    "recall_baseline": 0.994475138121547,
    "recall_branch": 0.994475138121547,
    "recall_ok": true
   }
  },
- "all_pass": null
+ "all_pass": false
 }
