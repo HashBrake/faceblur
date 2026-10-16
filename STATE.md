@@ -1,14 +1,16 @@
 # STATE, handover notes
 
-Last updated 2026-10-16 03:25. **All eight blur slices are done** (8 RTX 5090
-VMs, 2026-10-14 18:20 to 2026-10-16 01:45) and all eight VMs are deleted,
-the last three through the API. Left on the cloud: `faceblur-hands-pilot`,
-re-running the 2 cut-off videos of `AZER76400FF_19700101_000137` (the
-other 7 cut-off videos are done). The left one hung again in the stitch
-step after 1.7 h; the step was made incremental (see "The production run"),
-the left job killed at 03:02, and it re-runs with the new code once the
-right one finishes. Then: check every video
-has a record, delivery, the blurred link, cleanup. In parallel, the partner's
+Last updated 2026-10-16 07:50. **The blur run is complete.** All eight
+slices (8 RTX 5090 VMs, deleted) and the 9 cut-off videos on
+`faceblur-hands-pilot` are done; the last one (`FF_000137` left) finished
+2026-10-16 00:33 UTC after the stitch step was made incremental. The
+delivery dry run (in the image, see "Next, in order") finds 321 blurred
+copies, 30 empty stubs, **0 not delivered**, 799 other files, 297 audio files
+left out, no copy with audio. 289 of the 321 copies are held back by the
+check: the checker still sees a face on 112,102 of 12.87 M frames (0.87 %;
+54,474 face sightings 40 px or larger), and 237 are also flagged for the
+handled zone. `--apply` (public bucket) waits for the owner's go-ahead on that.
+Then the blurred link, cleanup. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). "The production run"
