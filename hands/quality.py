@@ -23,6 +23,7 @@ from hands.smooth import jitter_mm
 
 TARGET_REPROJ_PX_MEDIAN = 3.0
 TARGET_BONE_CV_MAX = 0.05
+FINGERTIPS = (4, 8, 12, 16, 20)
 HANDS = ("left", "right")
 
 
@@ -69,6 +70,9 @@ def _hand_report(h, raw) -> dict:
     raw_valid = np.isfinite(raw_joints[:, 0]).all(axis=1)
 
     rp = _frame_reproj(h)
+    row_dis = raw.get("row_dis")
+    tips = np.asarray(row_dis, np.float64)[:, FINGERTIPS] if row_dis is not None else np.empty(0)
+    tips = tips[np.isfinite(tips)]
     rm = _row_mean(raw["reproj_px"])
     rp_raw = rm[raw_valid & np.isfinite(rm)]
     cv = bone_cv(joints)
@@ -96,6 +100,7 @@ def _hand_report(h, raw) -> dict:
         "jitter_raw_mm": jit_raw,
         "mean_conf": mean_conf,
         "implausible_joint_share": _num(raw.get("implausible_joint_share")),
+        "fingertip_row_p90_px": float(np.percentile(tips, 90)) if tips.size else None,
         "frames_valid": int(valid.sum()),
         "frames_total": int(T),
         "_reproj_out_frames": rp,

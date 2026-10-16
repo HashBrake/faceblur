@@ -102,6 +102,8 @@ def test_quality_report_values(tmp_path):
     assert o["implausible_joint_share"] is None
     assert abs(o["jitter_mm"] - (rep["left"]["jitter_mm"] + rep["right"]["jitter_mm"]) / 2) < 1e-12
 
+    assert rep["left"]["fingertip_row_p90_px"] is None  # no row_dis given
+
     path = tmp_path / "quality.json"
     write_quality_json(path, rep)
     assert json.loads(path.read_text(encoding="utf-8"))["overall"]["pass"]["reproj"] is True
@@ -125,3 +127,16 @@ def test_quality_report_fail_flags_and_nan():
     assert r["jitter_mm"] is None and r["mean_conf"] is None
     assert r["valid_share"] == 0.0
     json.dumps(rep, allow_nan=False)
+
+
+def test_fingertip_row_p90():
+    frames, hands, raw = _data()
+    rng = np.random.default_rng(3)
+    row_dis = rng.uniform(0, 40, (T, 21))
+    row_dis[:10] = np.nan  # hand absent
+    row_dis[:, 0] = 1000.0  # non-fingertip joints are ignored
+    raw["left"]["row_dis"] = row_dis
+    rep = quality_report(frames, hands, raw, (1600, 1300), 10.0, META)
+    tips = row_dis[10:][:, [4, 8, 12, 16, 20]].ravel()
+    assert abs(rep["left"]["fingertip_row_p90_px"] - np.percentile(tips, 90)) < 1e-12
+    assert rep["right"]["fingertip_row_p90_px"] is None

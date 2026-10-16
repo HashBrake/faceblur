@@ -78,3 +78,59 @@ class HandDetector:
 
     def __exit__(self, *exc):
         self.close()
+
+
+CROP_MARGIN = 2.0       # crop side = bbox long side x margin
+CROP_MIN_SIDE = 256     # px
+DEDUP_JOINTS = 11       # two detections are one hand when >= 11 joints ...
+DEDUP_PX = 10.0         # ... are within 10 px
+
+
+def crop_window(keypoints, image_size, margin=CROP_MARGIN, min_side=CROP_MIN_SIDE):
+    """Square (x0, y0, side) around ``keypoints``, integer px, shifted to lie inside the image."""
+    w, h = image_size
+    kp = np.asarray(keypoints, np.float64)
+    lo, hi = kp.min(axis=0), kp.max(axis=0)
+    side = int(min(max(np.ceil((hi - lo).max() * margin), min_side), w, h))
+    cx, cy = (lo + hi) / 2.0
+    x0 = int(min(max(round(cx - side / 2.0), 0), w - side))
+    y0 = int(min(max(round(cy - side / 2.0), 0), h - side))
+    return x0, y0, side
+
+
+def dedupe_hands(hands: list[Hand2D]) -> list[Hand2D]:
+    """Keep the higher-score detection of every pair with >= DEDUP_JOINTS joints within DEDUP_PX."""
+    kept: list[Hand2D] = []
+    for hd in sorted(hands, key=lambda x: -x.score):
+        if all((np.linalg.norm(hd.keypoints - k.keypoints, axis=1) <= DEDUP_PX).sum() < DEDUP_JOINTS
+               for k in kept):
+            kept.append(hd)
+    return kept
+
+
+class CropDetector:
+    """Runs ``detector`` on a square crop around each previous-frame hand of this view.
+
+    Keypoints are mapped back to full-image pixels and overlapping detections de-duplicated.
+    The full image is also searched when the previous frame had fewer than ``max_hands`` hands
+    in this view, so a hand entering the view is still found. The inner detector sees crops at
+    different positions, so it should run in static-image mode.
+    """
+
+    def __init__(self, detector, image_size, max_hands=2):
+        self.detector, self.image_size, self.max_hands = detector, tuple(image_size), max_hands
+
+    def detect(self, image_bgr: np.ndarray, prev_hands: list[Hand2D]) -> list[Hand2D]:
+        out = []
+        for prev in prev_hands:
+            x0, y0, side = crop_window(prev.keypoints, self.image_size)
+            for hd in self.detector.detect(image_bgr[y0:y0 + side, x0:x0 + side]):
+                hd.keypoints = hd.keypoints + [x0, y0]
+                out.append(hd)
+        if len(prev_hands) < self.max_hands:
+            out.extend(self.detector.detect(image_bgr))
+        return dedupe_hands(out)[:self.max_hands]
+
+    def close(self):
+        if hasattr(self.detector, "close"):
+            self.detector.close()

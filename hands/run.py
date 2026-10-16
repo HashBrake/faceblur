@@ -43,6 +43,11 @@ def _default_detector():
     return HandDetector()
 
 
+def _default_crop_detector():
+    from hands.detect import HandDetector
+    return HandDetector(static_image_mode=True)  # crops move every frame: no MediaPipe tracking
+
+
 def _reproj_px(rect, rig, joints, uv_l, uv_r) -> np.ndarray:
     """(T,21) mean of the two views' ORIGINAL-pixel reprojection errors; NaN without observation."""
     T = len(joints)
@@ -51,7 +56,7 @@ def _reproj_px(rect, rig, joints, uv_l, uv_r) -> np.ndarray:
 
 
 def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, mano=False, mano_dir=None,
-                 detector_factory=None, log=print) -> dict:
+                 detector_factory=None, crop=False, log=print) -> dict:
     t_run = time.perf_counter()
     rec, out = Path(recording_dir), Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -72,8 +77,14 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
     log(f"{rec.name} part {part}: {T} stereo frames from left frame {pairs[0].frame_left}")
 
     # Pass 1: detection, matching, triangulation.
-    factory = detector_factory or _default_detector
-    det_l, det_r = factory(), factory()
+    if crop:
+        from hands.detect import CropDetector
+        factory = detector_factory or _default_crop_detector
+        det_l, det_r = CropDetector(factory(), image_size), CropDetector(factory(), image_size)
+    else:
+        factory = detector_factory or _default_detector
+        det_l, det_r = factory(), factory()
+    hl, hr = [], []
     tracker = HandTracker(rect)
     raw = {h: {"joints": np.full((T, 21, 3), np.nan),
                "uv_l": np.full((T, 21, 2), np.nan), "uv_r": np.full((T, 21, 2), np.nan),
@@ -84,8 +95,12 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
     reader = PartReader(left_mp4, right_mp4, image_size, cts)
     for t, (_, img_l, img_r) in enumerate(reader.frames(pairs)):
         t0 = time.perf_counter()
-        hl = det_l.detect(rect.rectify(img_l, "left"))
-        hr = det_r.detect(rect.rectify(img_r, "right"))
+        if crop:
+            hl = det_l.detect(rect.rectify(img_l, "left"), hl)
+            hr = det_r.detect(rect.rectify(img_r, "right"), hr)
+        else:
+            hl = det_l.detect(rect.rectify(img_l, "left"))
+            hr = det_r.detect(rect.rectify(img_r, "right"))
         det_seconds += time.perf_counter() - t0
         for hand, (i, j) in tracker.update(hl, hr).items():
             joints, _, _ = triangulate_hand(rect, hl[i], hr[j])
@@ -127,6 +142,7 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
                        "reproj_px": _reproj_px(rect, rig, joints_out, r["uv_l"], r["uv_r"])}
         raw_hands[hand] = {"joints": r["joints"],
                            "reproj_px": _reproj_px(rect, rig, r["joints"], r["uv_l"], r["uv_r"]),
+                           "row_dis": r["row_dis"],
                            "implausible_joint_share": (r["n_gated"] / r["n_triangulated"]
                                                        if r["n_triangulated"] else None)}
     frames = {"frame": np.array([p.frame_left for p in pairs], np.int64),
@@ -149,7 +165,8 @@ def run_pipeline(recording_dir, out_dir, part=1, start_s=0.0, duration_s=None, m
 
     meta = {"recording": rec.name, "part": part, "start_s": start_s, "duration_s": duration_s,
             "calibration": calib_hits[0].name, "n_frames": T, "fps_video": FPS, "detection_fps": detection_fps,
-            "frames_left": [pairs[0].frame_left, pairs[-1].frame_left], "mano": bool(mano)}
+            "frames_left": [pairs[0].frame_left, pairs[-1].frame_left], "mano": bool(mano),
+            "crop": bool(crop)}
 
     if mano:
         from hands.mano import fit_sequence, load_mano
@@ -202,10 +219,12 @@ def main(argv=None) -> int:
     p.add_argument("--start", type=float, default=0.0, help="seconds from the part's first left timestamp")
     p.add_argument("--duration", type=float, default=None, help="seconds (default: to the end of the part)")
     p.add_argument("--mano", action="store_true", help="also fit MANO")
+    p.add_argument("--crop", action="store_true",
+                   help="detect on a square crop around each previous-frame hand (default: full frame)")
     p.add_argument("--mano-dir", default=None, help="MANO model folder (default: env MANO_DIR)")
     a = p.parse_args(argv)
     run_pipeline(a.recording_dir, a.out, part=a.part, start_s=a.start, duration_s=a.duration,
-                 mano=a.mano, mano_dir=a.mano_dir)
+                 mano=a.mano, mano_dir=a.mano_dir, crop=a.crop)
     return 0
 
 

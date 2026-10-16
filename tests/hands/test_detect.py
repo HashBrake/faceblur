@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 from hands.calib import build_rectification, load_calibration
-from hands.detect import BONES, MEDIAPIPE_JOINTS, Hand2D, HandDetector, hands_from_result
+from hands.detect import (BONES, MEDIAPIPE_JOINTS, CropDetector, Hand2D, HandDetector, crop_window,
+                          hands_from_result)
 
 
 def test_blank_image_returns_empty():
@@ -59,6 +60,91 @@ def test_skeleton_constants():
         assert 0 <= p <= 20 and p != c
     assert sorted(c for p, c in BONES if p == 0) == [1, 5, 9, 13, 17]
     assert all(p == c - 1 for p, c in BONES if p != 0)
+
+
+W, H = 1600, 1300
+
+
+def _coord_image():
+    """Float image whose pixel (y, x) holds (x, y): a crop's top-left pixel gives its offset."""
+    ys, xs = np.mgrid[0:H, 0:W].astype(np.float64)
+    return np.stack([xs, ys, np.zeros_like(xs)], axis=2)
+
+
+def _hand_at(cx, cy, size, score=0.9, seed=0):
+    rng = np.random.default_rng(seed)
+    kp = np.array([cx, cy]) + rng.uniform(-size / 2, size / 2, (21, 2)) + 0.123456789
+    return Hand2D(kp, np.full(21, score), "left", score, np.zeros((21, 3)))
+
+
+class SyntheticInner:
+    """Sees the full-image hands ``truth`` that lie wholly inside the image it is given."""
+
+    def __init__(self, truth):
+        self.truth, self.shapes = truth, []
+
+    def detect(self, image):
+        self.shapes.append(image.shape[:2])
+        x0, y0 = image[0, 0, 0], image[0, 0, 1]
+        h, w = image.shape[:2]
+        out = []
+        for t in self.truth:
+            kp = t.keypoints - [x0, y0]
+            if np.all((kp >= 0) & (kp < [w, h])):
+                out.append(Hand2D(kp, t.conf.copy(), t.label, t.score, t.world))
+        return out
+
+
+def test_crop_maps_back_exactly_middle_and_border():
+    middle, border = _hand_at(800, 650, 120, seed=1), _hand_at(30, 1270, 50, seed=2)
+    inner = SyntheticInner([middle, border])
+    det = CropDetector(inner, (W, H))
+    prev = [_hand_at(805, 645, 120, seed=3), _hand_at(25, 1272, 50, seed=4)]
+    out = det.detect(_coord_image(), prev)
+    assert len(inner.shapes) == 2 and all(s[0] == s[1] and s[0] >= 256 for s in inner.shapes)
+    assert inner.shapes[0][0] < W  # a real crop, not the full frame
+    x0, y0, side = crop_window(prev[1].keypoints, (W, H))
+    assert x0 == 0 and y0 == H - side  # border crop clamped (shifted) into the image
+    assert len(out) == 2
+    for t in (middle, border):
+        best = min(out, key=lambda o: np.abs(o.keypoints - t.keypoints).max())
+        assert np.abs(best.keypoints - t.keypoints).max() <= 1e-9
+
+
+def test_crop_dedupes_same_hand_keeps_higher_score():
+    a = _hand_at(800, 650, 100, score=0.6, seed=1)
+    b = Hand2D(a.keypoints + 3.0, a.conf, "right", 0.8, a.world)  # same hand, 3 px off, higher score
+
+    class TwoCrops:
+        def __init__(self):
+            self.calls = 0
+
+        def detect(self, image):
+            x0, y0 = image[0, 0, 0], image[0, 0, 1]
+            t = (a, b)[self.calls]
+            self.calls += 1
+            return [Hand2D(t.keypoints - [x0, y0], t.conf, t.label, t.score, t.world)]
+
+    det = CropDetector(TwoCrops(), (W, H))
+    out = det.detect(_coord_image(), [_hand_at(790, 640, 100, seed=5), _hand_at(810, 660, 100, seed=6)])
+    assert len(out) == 1 and out[0].score == 0.8 and out[0].label == "right"
+    assert np.abs(out[0].keypoints - b.keypoints).max() <= 1e-9
+
+
+def test_crop_without_previous_hands_uses_full_frame():
+    t = _hand_at(400, 300, 100)
+    inner = SyntheticInner([t])
+    out = CropDetector(inner, (W, H)).detect(_coord_image(), [])
+    assert inner.shapes == [(H, W)]
+    assert len(out) == 1 and np.abs(out[0].keypoints - t.keypoints).max() <= 1e-9
+
+
+def test_crop_with_one_previous_hand_also_searches_full_frame():
+    tracked, new = _hand_at(400, 300, 100, seed=1), _hand_at(1200, 900, 100, seed=2)
+    inner = SyntheticInner([tracked, new])
+    out = CropDetector(inner, (W, H)).detect(_coord_image(), [_hand_at(405, 305, 100, seed=3)])
+    assert inner.shapes[-1] == (H, W)
+    assert len(out) == 2  # the tracked hand, seen in its crop and the full frame, counted once
 
 
 @pytest.mark.real_footage

@@ -997,9 +997,11 @@ before changing anything a pass measured.
 
 ```
 py -3.12 -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements-hands.txt
-.venv\Scripts\python.exe -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120" --part 1 --start 600 --duration 120 [--mano]
+.venv\Scripts\python.exe -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120" --part 1 --start 600 --duration 120 [--mano] [--crop]
 .venv\Scripts\python.exe -m pytest tests/hands -q -m "not real_footage"
 ```
+
+`--crop` runs MediaPipe (static-image mode) on a square crop around each previous-frame hand instead of the full frame; it is off by default because it measured worse (see the results table).
 
 On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --`. MANO files (`MANO_LEFT.pkl`, `MANO_RIGHT.pkl`) are read from `cloud/mano/` of the main repo (override with `--mano-dir` or `MANO_DIR`). They are never copied, and nothing derived from them goes into git.
 
@@ -1014,7 +1016,7 @@ On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --
   - `reproj_px`: the raw stereo residual, in original-image px.
   - `j00_x`..`j20_z`: joints in metres, in the left camera frame, MediaPipe joint order.
   - `c00`..`c20`: per-joint confidence.
-- `quality.json`: per-hand and overall validity, raw and output reprojection, bone CV (raw and output), bone lengths, jitter, mean confidence, clip metadata and timings, and pass/fail against the targets.
+- `quality.json`: per-hand and overall validity, raw and output reprojection, fingertip row disagreement p90 (`fingertip_row_p90_px`, raw left/right detections), bone CV (raw and output), bone lengths, jitter, mean confidence, clip metadata and timings, and pass/fail against the targets.
 - `review.mp4`: 1600x650, rectified left and right views side by side, with the output skeleton projected (left hand green, right hand orange).
 - `mano.parquet` (with `--mano`): per frame and hand, `valid`, the 48 MANO pose values and the translation.
 - `mano_shape.json` (with `--mano`): 10 betas per hand for the recording, and the fit `rmse_mm` per hand.
@@ -1042,8 +1044,11 @@ On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --
 | MANO fit (both hands, 3600 frames)¹ | 653 s, about 91 ms per hand-frame | Slower than the ~35 ms estimate |
 | MANO rmse (left / right)¹ | 8.94 / 6.83 mm | |
 | MANO valid share (left / right)¹ | 0.896 / 0.965 | Same frames as the joints |
+| Crop-based detection (`--crop`) vs full frame² | raw reproj pooled 2.96 vs 2.85 px (left 4.05 vs 3.74, right 2.47 vs 2.31); fingertip row p90 left 32.1 vs 30.4, right 20.6 vs 20.3 px; both hands valid 0.795 vs 0.874; detection 7.2 vs 11.5 fps, processing 5.7 vs 7.8 fps | Worse on every measure: kept as an option, default off |
 
 ¹ The MANO numbers are from the T11 MANO run, before the depth gate. All other numbers are from the final run (`hands_out/EV_003108_p1_600_120_final`).
+
+² T17, measured back to back on the same clip: `hands_out/EV_003108_p1_600_120_crop` against a full-frame re-run (`hands_out/EV_003108_p1_600_120_nocrop_t17`, identical quality numbers to the final run). MediaPipe already crops its landmark ROI at native resolution, so cropping gains nothing, and static-image palm detection on crops loses frames and costs speed.
 
 `--mano` does not change `joints.parquet`: in the T11 runs, the maximum absolute difference between the runs with and without `--mano` is 0.0.
 

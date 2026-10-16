@@ -168,6 +168,8 @@ def test_synthetic_end_to_end(synthetic_run):
     assert q["right"]["implausible_joint_share"] == 0
     assert o["implausible_joint_share"] is not None
     assert q["left"]["bone_cv_raw_max"] < 0.5
+    assert q["clip"]["crop"] is False
+    assert 0 <= q["right"]["fingertip_row_p90_px"] < 3.0  # 0.3 px noise per view
 
     # Parquet reproj_px is the raw stereo residual: pooled over rows where it is finite (the raw-finite
     # frames quality.py pools), its median equals quality.json's overall.reproj_px_median.
@@ -215,11 +217,28 @@ def test_synthetic_mano(recording, rect, rig, tmp_path, mano_dir):
         assert j["rmse_mm"][hand] < 20.0, j["rmse_mm"]
 
 
+def test_crop_path_wired(recording, tmp_path):
+    """crop=True wraps the factory's detectors: with no hands every call gets the full rectified frame."""
+    seen = []
+
+    class Empty:
+        def detect(self, image):
+            seen.append(image.shape)
+            return []
+
+    report = run_pipeline(recording, tmp_path / "out", start_s=START_S, duration_s=DURATION_S, crop=True,
+                          detector_factory=Empty, log=lambda s: None)
+    T = report["clip"]["n_frames"]
+    assert report["clip"]["crop"] is True
+    assert seen == [(1300, 1600, 3)] * (2 * T)
+
+
 def test_main_help(capsys):
     with pytest.raises(SystemExit) as e:
         main(["--help"])
     assert e.value.code == 0
-    assert "usage" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "usage" in out and "--crop" in out
 
 
 def test_part_reader_size_check(recording, rig):
