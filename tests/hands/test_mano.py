@@ -7,7 +7,8 @@ import pickle
 import numpy as np
 import pytest
 
-from hands.mano import MP_FROM_MANO, TIP_VERTICES, fit_pose, fit_sequence, forward_joints, load_mano
+from hands.mano import (MP_FROM_MANO, TIP_VERTICES, fit_pose, fit_sequence, forward_joints, forward_joints_jac,
+                        load_mano)
 
 # Inverse map: MANO-ordered (21,) index -> MediaPipe position.
 MANO_FROM_MP = np.argsort(MP_FROM_MANO)
@@ -113,6 +114,24 @@ def test_fit_pose_recovers_known_pose(mano_dir):
         assert rmse < 0.005
     print(f"fit_pose mean joint errors (mm): {np.round(np.array(errs) * 1000, 3)}")
     assert max(errs) < 0.005
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+def test_analytic_jacobian_matches_finite_differences(mano_dir, side):
+    m = _model(mano_dir, side)
+    rng = np.random.default_rng(4)
+    betas = rng.normal(0, 0.5, 10)
+    pose = _random_pose(m, rng)
+    pose[6:9] = 0.0  # one joint at the rest pose (zero-angle branch of the rotation derivative)
+    x = np.concatenate([pose, [0.05, -0.03, 0.5]])
+    joints, jac = forward_joints_jac(m, betas, x[:48], x[48:])
+    np.testing.assert_allclose(joints, forward_joints(m, betas, x[:48], x[48:]), atol=1e-12)
+    h = 1e-6
+    fd = np.stack([(forward_joints(m, betas, (x + h * e)[:48], (x + h * e)[48:])
+                    - forward_joints(m, betas, (x - h * e)[:48], (x - h * e)[48:])) / (2 * h)
+                   for e in np.eye(51)], axis=-1)
+    assert jac.shape == (21, 3, 51)
+    assert np.abs(jac - fd).max() < 1e-6 * np.abs(fd).max()
 
 
 def test_fit_pose_ignores_nan_joints(mano_dir):

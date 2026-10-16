@@ -10,7 +10,9 @@ forward pass is a few small matrix products (no mesh).
 
 Fit residuals: joint error in metres weighted by sqrt(conf) (NaN / conf 0
 joints contribute 0), plus a pose prior 1e-3 * (pose[3:] - hands_mean) per
-element; the shape fit adds 0.1 * betas.
+element; the shape fit adds 0.1 * betas. The pose fit uses the analytic
+Jacobian of the kinematic chain and tip vertices (forward_joints_jac); the
+shape fit (10 betas, few calls) keeps finite differences.
 """
 from __future__ import annotations
 
@@ -54,6 +56,11 @@ class ManoModel:
     def __post_init__(self):
         # Precomputed pieces used by forward_joints.
         self._parents = self.kintree_table[0].astype(np.int64)
+        depth = np.zeros(16, np.int64)
+        for k in range(1, 16):
+            depth[k] = depth[self._parents[k]] + 1
+        # Non-root joints grouped by tree depth, so the chain runs one level at a time.
+        self._levels = [np.flatnonzero(depth == d) for d in range(1, depth.max() + 1)]
         self._jtemp = self.J_regressor @ self.v_template  # (16, 3)
         self._jshape = np.einsum("jv,vcb->jcb", self.J_regressor, self.shapedirs)  # (16, 3, 10)
         self._tip_t = self.v_template[TIP_VERTICES]  # (5, 3)
@@ -135,16 +142,76 @@ def forward_joints(model: ManoModel, betas, pose, trans) -> np.ndarray:
     Rg = np.empty((16, 3, 3))
     tg = np.empty((16, 3))
     Rg[0], tg[0] = R[0], J[0]
-    for k in range(1, 16):
+    for k in model._levels:
         p = par[k]
         Rg[k] = Rg[p] @ R[k]
-        tg[k] = Rg[p] @ (J[k] - J[p]) + tg[p]
+        tg[k] = np.einsum("kij,kj->ki", Rg[p], J[k] - J[p]) + tg[p]
     # Fingertip vertices: LBS of only those 5 vertices.
     v = model._tip_t + model._tip_s @ betas + model._tip_p @ (R[1:] - np.eye(3)).ravel()  # (5, 3)
     A_R = np.einsum("vk,kij->vij", model._tip_w, Rg)
     A_t = model._tip_w @ (tg - np.einsum("kij,kj->ki", Rg, J))
     tips = np.einsum("vij,vj->vi", A_R, v) + A_t
     return np.concatenate([tg, tips])[MP_FROM_MANO] + np.asarray(trans, dtype=np.float64)
+
+
+def _skew(v: np.ndarray) -> np.ndarray:
+    """(..., 3) -> (..., 3, 3) cross-product matrices."""
+    x, y, z = v[..., 0], v[..., 1], v[..., 2]
+    o = np.zeros_like(x)
+    return np.stack([o, -z, y, z, o, -x, -y, x, o], axis=-1).reshape(v.shape[:-1] + (3, 3))
+
+
+def _rodrigues_jac(r: np.ndarray):
+    """(N, 3) axis-angle -> R (N, 3, 3) and dR (N, 3, 3, 3) with dR[n, i] = dR[n] / dr[n, i].
+
+    Gallego & Yezzi: dR/dr_i = (r_i [r]x + [r x (I - R) e_i]x) / |r|^2 R; [e_i]x at r = 0.
+    """
+    R = rodrigues(r)
+    th2 = np.sum(r * r, axis=1)
+    small = th2 < 1e-16
+    cols = np.swapaxes(np.eye(3) - R, 1, 2)  # [n, i] = column i of (I - R)
+    M = r[:, :, None, None] * _skew(r)[:, None] + _skew(np.cross(r[:, None, :], cols))
+    M = M / np.where(small, 1.0, th2)[:, None, None, None]
+    M[small] = _skew(np.eye(3))
+    return R, M @ R[:, None]
+
+
+def forward_joints_jac(model: ManoModel, betas, pose, trans):
+    """forward_joints and its Jacobian: (21, 3) joints, (21, 3, 51) d joints / d [pose (48), trans (3)]."""
+    betas = np.asarray(betas, dtype=np.float64)
+    R, dR = _rodrigues_jac(np.asarray(pose, dtype=np.float64).reshape(16, 3))
+    J = model._jtemp + model._jshape @ betas
+    par = model._parents
+    Rg = np.empty((16, 3, 3))
+    tg = np.empty((16, 3))
+    dRg = np.zeros((16, 48, 3, 3))  # d Rg[k] / d pose
+    dtg = np.zeros((16, 48, 3))
+    Rg[0], tg[0] = R[0], J[0]
+    dRg[0, 0:3] = dR[0]
+    for k in model._levels:
+        p = par[k]
+        bone = J[k] - J[p]
+        Rg[k] = Rg[p] @ R[k]
+        tg[k] = np.einsum("kij,kj->ki", Rg[p], bone) + tg[p]
+        dRg[k] = dRg[p] @ R[k][:, None]
+        dRg[k[:, None], 3 * k[:, None] + np.arange(3)] += Rg[p][:, None] @ dR[k]
+        dtg[k] = np.einsum("kpij,kj->kpi", dRg[p], bone) + dtg[p]
+    v = model._tip_t + model._tip_s @ betas + model._tip_p @ (R[1:] - np.eye(3)).ravel()  # (5, 3)
+    dv = np.zeros((5, 3, 48))
+    dv[:, :, 3:] = np.einsum("vckm,kim->vcki", model._tip_p.reshape(5, 3, 15, 9),
+                             dR[1:].reshape(15, 3, 9)).reshape(5, 3, 45)
+    w = model._tip_w
+    A_R = np.einsum("vk,kij->vij", w, Rg)
+    A_t = w @ (tg - np.einsum("kij,kj->ki", Rg, J))
+    tips = np.einsum("vij,vj->vi", A_R, v) + A_t
+    dA_R = np.einsum("vk,kpij->vpij", w, dRg)
+    dA_t = np.einsum("vk,kpi->vpi", w, dtg - np.einsum("kpij,kj->kpi", dRg, J))
+    dtips = np.einsum("vpij,vj->vpi", dA_R, v) + np.einsum("vij,vjp->vpi", A_R, dv) + dA_t
+    jac = np.zeros((21, 3, 51))
+    jac[:, :, :48] = np.swapaxes(np.concatenate([dtg, dtips]), 1, 2)[MP_FROM_MANO]
+    jac[:, :, 48:] = np.eye(3)
+    joints = np.concatenate([tg, tips])[MP_FROM_MANO] + np.asarray(trans, dtype=np.float64)
+    return joints, jac
 
 
 def _mask(joints_obs, conf):
@@ -178,13 +245,21 @@ def _pose_residual(x, model, betas, obs, w):
     return np.concatenate([((pred - obs) * w).ravel(), POSE_PRIOR * (x[3:48] - model.hands_mean)])
 
 
+_PRIOR_JAC = np.hstack([np.zeros((45, 3)), POSE_PRIOR * np.eye(45), np.zeros((45, 3))])
+
+
+def _pose_jac(x, model, betas, obs, w):
+    _, jac = forward_joints_jac(model, betas, x[:48], x[48:])
+    return np.vstack([(jac * w[:, :, None]).reshape(63, 51), _PRIOR_JAC])
+
+
 def fit_pose(model, betas, joints_obs, conf, init=None):
     """One frame -> (pose (48,), trans (3,), rmse_m over the used joints)."""
     betas = np.asarray(betas, dtype=np.float64)
     obs, w = _mask(np.asarray(joints_obs, dtype=np.float64), np.asarray(conf, dtype=np.float64))
     pose0, trans0 = _neutral_start(model, betas, obs, w) if init is None else init
     x0 = np.concatenate([pose0, trans0])
-    x = least_squares(_pose_residual, x0, args=(model, betas, obs, w), **_LSQ).x
+    x = least_squares(_pose_residual, x0, jac=_pose_jac, args=(model, betas, obs, w), **_LSQ).x
     pose, trans = x[:48], x[48:]
     ok = w[:, 0] > 0
     err = np.linalg.norm(forward_joints(model, betas, pose, trans)[ok] - obs[ok], axis=1)

@@ -1041,12 +1041,21 @@ On the shared PC, prefix runs with `py -3.12 "D:/Claude Projects/gpu_lock.py" --
 | p99 joint-to-wrist distance | 0.142 m (max 0.153) | Plausible hand size, no exploded skeletons |
 | Detection fps (two views) | 14.4 (19.7 on the MANO run) | Shared PC: the two runs differ only in load |
 | Processing fps, without MANO | 8.0 (12.7 on the MANO run) | |
-| MANO fit (both hands, 3600 frames)¹ | 653 s, about 91 ms per hand-frame | Slower than the ~35 ms estimate |
-| MANO rmse (left / right)¹ | 8.94 / 6.83 mm | |
+| MANO fit (both hands, 3600 frames)¹ | 278 s, about 41 ms per hand-frame (`_mano2` run); 24 ms in the old-vs-new benchmark | Analytic Jacobian (T18). Old numeric-Jacobian code on the same input: 120 ms (busy PC); T11: 653 s, 91 ms |
+| MANO rmse (left / right)¹ | 8.94 / 6.83 mm | Identical to the numeric-Jacobian code on the same input |
 | MANO valid share (left / right)¹ | 0.896 / 0.965 | Same frames as the joints |
 | Crop-based detection (`--crop`) vs full frame² | raw reproj pooled 2.96 vs 2.85 px (left 4.05 vs 3.74, right 2.47 vs 2.31); fingertip row p90 left 32.1 vs 30.4, right 20.6 vs 20.3 px; both hands valid 0.795 vs 0.874; detection 7.2 vs 11.5 fps, processing 5.7 vs 7.8 fps | Worse on every measure: kept as an option, default off |
 
-¹ The MANO numbers are from the T11 MANO run, before the depth gate. All other numbers are from the final run (`hands_out/EV_003108_p1_600_120_final`).
+¹ The MANO numbers are from the T18 run `hands_out/EV_003108_p1_600_120_mano2` (after the depth gate; its joints and quality numbers match the final run). All other numbers are from the final run (`hands_out/EV_003108_p1_600_120_final`).
+
+T18 MANO speed-up: the pose fit now uses the analytic Jacobian of the kinematic chain and the 5 tip vertices instead of finite differences (51 extra forward passes per iteration), and the chain runs one tree level at a time. Old against new code on identical input (the `_final` joints, interpolated frames at conf 0.5), same busy PC:
+
+| Hand | Old | New | rmse old / new | Max joint difference |
+|---|---|---|---|---|
+| Left (3224 frames) | 501 s, 155 ms per frame | 91 s, 28 ms per frame | 8.939 / 8.939 mm | 6.0 mm (mean 0.004, p99 0.14 mm) |
+| Right (3475 frames) | 303 s, 87 ms per frame | 72 s, 21 ms per frame | 6.826 / 6.826 mm | 7.4 mm (mean 0.006, p99 0.16 mm) |
+
+A few frames converge to a slightly different local optimum, so the maximum differs by a few mm, but the mean is under 0.01 mm. The `_mano2` pipeline run took longer (41 ms per hand-frame) because the shared PC was busier (detection 12.4 fps against 19.7 on the T11 run). The shape fit (10 betas, 3 calls) still uses finite differences.
 
 ² T17, measured back to back on the same clip: `hands_out/EV_003108_p1_600_120_crop` against a full-frame re-run (`hands_out/EV_003108_p1_600_120_nocrop_t17`, identical quality numbers to the final run). MediaPipe already crops its landmark ROI at native resolution, so cropping gains nothing, and static-image palm detection on crops loses frames and costs speed.
 
