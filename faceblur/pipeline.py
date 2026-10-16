@@ -137,7 +137,14 @@ class AuditRecord:
     # shipped. See faceblur.verify.held_for.
     held_back_for: list = field(default_factory=list)
     quarantined: bool = False
+    # With `check_overlap` the pieces are checked while the copy is still
+    # being written, so the check's wall is shared with `encode_seconds`.
+    # `check_seconds` is then only the check work left after the join (the
+    # summary, and a whole-copy check if one still had to run), and
+    # `overlap_check_seconds` is the sum of the piece checks' own durations,
+    # which is how much check work the write hid. Without overlap it is 0.
     check_seconds: float = 0.0
+    overlap_check_seconds: float = 0.0
     # The second chance, package F1. Every count above is the last round's,
     # so these say what the first pass had and what the extra rounds did.
     # Zero everywhere means no round ran, which is the default.

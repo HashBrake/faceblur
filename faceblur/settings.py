@@ -444,6 +444,13 @@ class Settings:
     # default and worth turning on for anything that leaves the machine.
     check_output: bool = False
     check_stride: int = 1
+    # Check each encoded piece as soon as it is written, on the same pool,
+    # while the next pieces encode, rather than the whole copy after the join.
+    # The encode is CPU work and the check is GPU work, and run one after the
+    # other the GPU idled through the whole encode, 39 to 173 s a file
+    # (docs/bench/profile_2026-10-16.md). Same pixels, same answer: the join
+    # is a concat of the pieces without re-encoding. Off is the old order.
+    check_overlap: bool = True
     # With this on, an output that still shows a face of quarantine_min_px or
     # more is moved into a quarantine folder beside it instead of shipping.
     # Implies check_output.
@@ -760,7 +767,7 @@ class Settings:
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
-            "check_output", "check_stride", "quarantine", "quarantine_min_px",
+            "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "second_chance_scope", "second_chance_margin_seconds",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",

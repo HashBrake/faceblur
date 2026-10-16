@@ -65,6 +65,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -284,10 +285,21 @@ def detection_from_row(row: dict) -> Detection:
 
 
 def residual_job(job: dict) -> dict:
-    """Detect on the copy's frames start to end and say what was never masked."""
+    """Detect on the copy's frames start to end and say what was never masked.
+
+    Rows always carry source frame numbers. `out` may be the whole copy or one
+    piece of it, written before the join: `out_start` is the piece's own index
+    of source frame `start` (the same frame when `out` is the whole copy),
+    because the join is a concat of the pieces without re-encoding and the
+    check reads the same pixels either way. A `copied` job is a stretch stream
+    copied from the source, which decodes to the source's pixels bit for bit,
+    so the source frame is both sides and the copy is not decoded at all.
+    `seconds` is the job's own time, for the record's `overlap_check_seconds`.
+    """
     from .batch import _bank, _hand_rule, _screens, _zone   # the worker's cached models
 
-    src, out = Path(job["src"]), Path(job["out"])
+    t0 = time.time()
+    src = Path(job["src"])
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     stride = max(1, job.get("stride", 1))
@@ -308,9 +320,14 @@ def residual_job(job: dict) -> dict:
     # Every other count here is either one per checked frame or one per row.
     flat_frames: dict[int, dict[str, int]] = {}
     source_frames = decode_range(src, job["times"], start, end, job["info"], settings.hwaccel)
-    copy_frames = decode_range(out, job["out_times"], start, end, job["out_info"],
-                               settings.hwaccel)
-    for offset, (before, after) in enumerate(zip(source_frames, copy_frames)):
+    if job.get("copied"):
+        pairs = ((frame, frame) for frame in source_frames)
+    else:
+        out_start = job.get("out_start", start)
+        copy_frames = decode_range(Path(job["out"]), job["out_times"], out_start,
+                                   out_start + (end - start), job["out_info"], settings.hwaccel)
+        pairs = zip(source_frames, copy_frames)
+    for offset, (before, after) in enumerate(pairs):
         i = start + offset
         if i % stride:
             continue
@@ -411,7 +428,8 @@ def residual_job(job: dict) -> dict:
             "flat": sum(flat.values()), "flat_by_kind": flat, "flat_frames": flat_frames,
             "hands": hands, "in_zone": in_zone, "found": found, "zone": zone_rows,
             "hand_models": {} if rule is None else rule.model_hashes,
-            "hand_compute": {} if rule is None else rule.compute}
+            "hand_compute": {} if rule is None else rule.compute,
+            "seconds": round(time.time() - t0, 3)}
 
 
 def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
@@ -669,16 +687,22 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
 def check(src: Path, out: Path, settings: Optional[Settings] = None, stride: int = 1,
           submit=None, workers: int = 1, chunk: int = 300,
           hands: Optional[dict] = None, ranges: Optional[list] = None,
-          results: Optional[list] = None) -> dict:
+          results: Optional[list] = None, done: Optional[list] = None) -> dict:
     """Run the whole check. `submit` maps jobs the way batch.run_video does.
     `hands` and `ranges` as in `plan_jobs`. `results`, when given, receives
-    the per job results, which `merge_checks` needs later."""
+    the per job results, which `merge_checks` needs later. `done` is per job
+    results already in hand for every frame the check would read, the pieces
+    batch.run_video checked while it wrote them: nothing is decoded or
+    detected again, they are only summed."""
     from .batch import serial_submit
 
     settings = settings or Settings()
     submit = submit or serial_submit
-    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands, ranges)
-    got = list(submit(residual_job, jobs, workers))
+    if done is not None:
+        got = list(done)
+    else:
+        jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands, ranges)
+        got = list(submit(residual_job, jobs, workers))
     if results is not None:
         results.extend(got)
     return summarise(got, settings)

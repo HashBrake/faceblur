@@ -22,7 +22,7 @@ from dataclasses import replace
 import tempfile
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -36,7 +36,8 @@ from .redact import build_alpha, masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
-from .verify import check, held_for, merge_checks, second_chance_seeds, summarise
+from .verify import (check, held_for, merge_checks, residual_job, second_chance_seeds,
+                     summarise)
 from .video import VideoError, VideoInfo, part_path, probe, unchecked_path
 
 Submit = Callable[[Callable, list, int], list]
@@ -44,6 +45,16 @@ Submit = Callable[[Callable, list, int], list]
 
 def serial_submit(func: Callable, jobs: list, limit: int = 1) -> list:
     return [func(job) for job in jobs]
+
+
+def serial_stream(func: Callable, jobs, limit: int = 1):
+    """`serial_submit` one result at a time, so that `jobs` may be a generator
+    that yields its next job from what the caller made of the last result.
+    None from `jobs` means "nothing to run until a result is back", and here
+    every result is already back."""
+    for job in jobs:
+        if job is not None:
+            yield func(job)
 
 
 class WorkerLost(RuntimeError):
@@ -90,16 +101,37 @@ class PoolSubmit:
             watched.extend(p for p in self._workers() if p not in watched)
 
     def __call__(self, func, jobs, limit):
+        return list(self.stream(func, jobs, limit))
+
+    def stream(self, func, jobs, limit):
+        """Results one at a time, oldest job first, at most `limit` in flight.
+
+        `jobs` may be a generator that decides its next job from the results
+        the caller has seen so far (see `_overlapped`); None from it means
+        "wait for the oldest job before asking me again". A caller that stops
+        early (a cancelled run) still waits for the jobs in flight, so that
+        none of them is left writing into a folder that is being removed."""
         limit = max(1, limit)
         watched = self._workers()
-        pending, results = [], []
-        for job in jobs:
-            pending.append(self.pool.apply_async(func, (job,)))
-            if len(pending) >= limit:
-                results.append(self._wait(pending.pop(0), watched))
-        while pending:
-            results.append(self._wait(pending.pop(0), watched))
-        return results
+        pending = []
+        try:
+            for job in jobs:
+                if job is None:
+                    if pending:
+                        yield self._wait(pending.pop(0), watched)
+                    continue
+                pending.append(self.pool.apply_async(func, (job,)))
+                if len(pending) >= limit:
+                    yield self._wait(pending.pop(0), watched)
+            while pending:
+                yield self._wait(pending.pop(0), watched)
+        except GeneratorExit:
+            for result in pending:
+                try:
+                    self._wait(result, watched)
+                except Exception:
+                    pass
+            raise
 
 
 def init_pool_worker(workers: int = 1) -> None:
@@ -317,6 +349,32 @@ def copy_job(job: dict) -> dict:
     return {"segment": seg, "masked": [0.0] * seg.frames, "out": job["out"]}
 
 
+def write_or_check_job(job: dict) -> dict:
+    """One pool takes both kinds when the check overlaps the write, and a
+    submit maps one function. A check that cannot read its piece says so
+    instead of failing the write: the whole-copy check then runs after the
+    join and fails the run the way it always did."""
+    if job.get("kind") != "check":
+        return encode_job(job)
+    try:
+        return residual_job(job)
+    except VideoError as exc:
+        return {"found": None, "error": str(exc)}
+
+
+def _stream_of(submit):
+    """The one-result-at-a-time form of a submit this module knows, or None.
+
+    The overlapped write feeds jobs from the results as they come back, which
+    a submit that maps the whole list before returning cannot do. Any other
+    submit keeps the old order."""
+    if submit is serial_submit:
+        return serial_stream
+    if isinstance(submit, PoolSubmit):
+        return submit.stream
+    return None
+
+
 # ------------------------------------------------------------- parent side
 
 def unconfirmed_runs(weak, per_frame, conf: float, min_run: int = 3,
@@ -527,6 +585,19 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # the check left a whole, ungated copy that looked delivered. Report 24.4.
     gated = settings.check_output or settings.quarantine
     out = unchecked_path(dst) if gated else dst
+    # The hands the detection pass found go with the check when that pass
+    # looked at every frame, so the check does not find them again.
+    known = hands_found if settings.zone and settings.zone_stride == 1 else None
+    # The check of each written piece runs while the next pieces encode. The
+    # results wait in `overlapped` for `check_pass`, which then only sums.
+    overlap = gated and settings.check_overlap and _stream_of(submit) is not None
+    overlapped: Optional[list] = None
+
+    def piece_checks() -> Optional[dict]:
+        if not overlap:
+            return None
+        return {"chunk": chunk, "stride": settings.check_stride, "hands": known,
+                "results": [], "complete": True}
 
     def write_pass() -> bool:
         """Write `out` from `src` with the masks in `per_frame`. Sets the
@@ -540,10 +611,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
             segments = split_long(plan_segments(masked_flags, keys, n, min_copy, copy_clean),
                                   keys, piece)
             work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
+            checks = piece_checks()
             try:
                 outcome = _write_and_join(src, out, info, times, settings, segments, per_frame,
                                           submit, workers, Path(work), report, cancelled,
-                                          zones)
+                                          zones, checks=checks)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             if outcome is None:
@@ -555,6 +627,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             record.error = problem
             if not problem:
                 record.frames_copied = copied
+                set_overlapped(checks)
                 break
             out.unlink(missing_ok=True)
         if record.error:
@@ -569,6 +642,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # scoped second chance can keep the numbers of the frames it copies.
     written: dict = {}
     copy_delay = None                   # reorder_delay(out), when first asked
+
+    def set_overlapped(checks: Optional[dict]) -> None:
+        nonlocal overlapped
+        overlapped = checks["results"] if checks is not None and checks["complete"] else None
     # The scope "changed" keeps the check's per job results, so that a
     # round can re-check only what it re-encoded and merge the rest.
     scoped = bool(settings.second_chance) and settings.second_chance_scope == "changed"
@@ -652,10 +729,14 @@ def run_video(src: Path, dst: Path, settings: Settings,
         # verifies, and only then takes its place.
         again = Path(str(out) + ".again")
         work = tempfile.mkdtemp(prefix="faceblur_", dir=str(dst.parent))
+        # Copied pieces come from the first copy here, and the first check's
+        # verdict on them stands (`merge_checks`), so only encoded ones are
+        # checked.
+        checks = piece_checks()
         try:
             outcome = _write_and_join(src, again, info, times, settings, segments, per_frame,
                                       submit, workers, Path(work), report, cancelled, zones,
-                                      copy_src=out, copy_times=out_times)
+                                      copy_src=out, copy_times=out_times, checks=checks)
             if outcome is None:
                 record.status = STATUS_STOPPED
                 return None
@@ -663,6 +744,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             if problem:
                 return False
             os.replace(again, out)
+            set_overlapped(checks)
         finally:
             shutil.rmtree(work, ignore_errors=True)
             again.unlink(missing_ok=True)
@@ -704,20 +786,24 @@ def run_video(src: Path, dst: Path, settings: Settings,
         `ranges` limits the check to those frames, for the scope "changed";
         the report is then the earlier check with those frames replaced.
         """
-        nonlocal check_results
+        nonlocal check_results, overlapped
         t2 = time.time()
         report("checking", 0, n)
+        # With `check_overlap` every frame this check would read was read
+        # piece by piece during the write, from the same encoded pixels, and
+        # `check` only sums those results.
+        pieces, overlapped = overlapped, None
+        if pieces is not None:
+            record.overlap_check_seconds = round(
+                record.overlap_check_seconds + sum(r["seconds"] for r in pieces), 2)
         try:
-            # The hands the detection pass found go with it when that pass
-            # looked at every frame, so the check does not find them again.
-            known = hands_found if settings.zone and settings.zone_stride == 1 else None
             if not scoped:
                 got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
-                            hands=known)
+                            hands=known, done=pieces)
             else:
                 fresh: list = []
                 got = check(src, out, settings, settings.check_stride, submit, workers, chunk,
-                            hands=known, ranges=ranges, results=fresh)
+                            hands=known, ranges=ranges, results=fresh, done=pieces)
                 if ranges is not None:
                     check_results = merge_checks(check_results, fresh, ranges)
                     got = summarise(check_results, settings)
@@ -914,8 +1000,16 @@ def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
 
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
-                    work: Path, report, cancelled, zones=None, copy_src=None, copy_times=None):
+                    work: Path, report, cancelled, zones=None, copy_src=None, copy_times=None,
+                    checks: Optional[dict] = None):
     """Returns (masked, by kind, prevented, problem text, frames copied), or None.
+
+    `checks`, when given, has each piece checked as soon as it is written, on
+    the same pool, while the next pieces encode: `chunk`, `stride` and
+    `hands` say how, `residual_job` results go into its `results`, and its
+    `complete` turns False if any piece could not be checked. Pieces copied
+    from the source are checked from the source alone; pieces copied from
+    `copy_src` are not checked at all, their verdict is the earlier check's.
 
     `masked` is the union share of each frame and `masked by kind` splits it.
     `prevented` is what the handled zone took back out of the mask. Copied
@@ -952,10 +1046,24 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
     report("writing", 0, total)
     # NVENC allows a handful of concurrent sessions on a consumer GPU.
     encode_limit = min(workers, settings.nvenc_sessions) if settings.encoder != "x264" else workers
+    if checks is not None:
+        results, feed = _overlapped(submit, encode_jobs, encode_limit, workers, checks, src,
+                                    info, times, settings,
+                                    copy_jobs if copy_src is src else [], len(per_frame))
+    else:
+        results, feed = submit(encode_job, encode_jobs, encode_limit), None
     try:
-        for result in submit(encode_job, encode_jobs, encode_limit):
+        for result in results:
             if cancelled():
                 return None
+            if "found" in result:
+                if result["found"] is None:
+                    checks["complete"] = False
+                else:
+                    checks["results"].append(result)
+                continue
+            if feed is not None:
+                feed(result)
             seg = result["segment"]
             masked[seg.start:seg.end] = result["masked"]
             for name, values in (result.get("masked_by_kind") or {}).items():
@@ -972,6 +1080,9 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             report("writing", done, total)
     except VideoError as exc:
         return masked, by_kind, prevented, str(exc), 0
+    finally:
+        if feed is not None:
+            results.close()
 
     part = part_path(dst)
     error = concat(parts, src, part, work / "list.txt")
@@ -985,3 +1096,60 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
         return masked, by_kind, prevented, f"The joined file did not verify: {problem}", 0
     os.replace(part, dst)
     return masked, by_kind, prevented, "", sum(s.frames for s in segments if s.copy)
+
+
+def _overlapped(submit, encode_jobs, encode_limit, workers, checks, src, info, times, settings,
+                source_copies, n):
+    """The encode jobs and their pieces' check jobs as one stream of results.
+
+    Returns (results, feed): the caller hands every encode result to `feed`,
+    which queues that piece's checks to go out next. Checks go out before the
+    next encode, so the pool has check work while pieces are still being
+    written; an encode goes out only while fewer than `encode_limit` are in
+    flight, so `nvenc_sessions` holds. Checks of pieces copied from the
+    source wait on nothing and go first.
+    """
+    queue: deque = deque()
+    todo = deque(encode_jobs)
+    in_flight = 0
+
+    def check_jobs(seg: Segment, piece: Optional[Path]) -> list[dict]:
+        base = {"kind": "check", "src": str(src), "settings": settings,
+                "stride": checks["stride"], "info": info, "times": times}
+        if piece is None:
+            base["copied"] = True
+        else:
+            base.update(out=str(piece), out_info=probe(piece), out_times=frame_times(piece))
+        step = max(1, checks["chunk"])
+        jobs = []
+        for k in range(seg.start, min(seg.end, n), step):
+            job = dict(base, start=k, end=min(k + step, seg.end, n), out_start=k - seg.start)
+            if checks["hands"] is not None:
+                job["hands"] = {i: checks["hands"][i] for i in range(job["start"], job["end"])
+                                if i in checks["hands"]}
+            jobs.append(job)
+        return jobs
+
+    for job in source_copies:
+        queue.extend(check_jobs(job["segment"], None))
+
+    def jobs():
+        nonlocal in_flight
+        while queue or todo or in_flight:
+            if queue:
+                yield queue.popleft()
+            elif todo and in_flight < encode_limit:
+                in_flight += 1
+                yield todo.popleft()
+            else:
+                yield None              # wait for an encode to come back
+
+    def feed(result: dict) -> None:
+        nonlocal in_flight
+        in_flight -= 1
+        try:
+            queue.extend(check_jobs(result["segment"], Path(result["out"])))
+        except VideoError:
+            checks["complete"] = False
+
+    return _stream_of(submit)(write_or_check_job, jobs(), workers), feed
