@@ -682,9 +682,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.masked_in_zone_prevented = (round(float(np.mean(prevented)), 5)
                                            if prevented else 0.0)
 
-    def changed_plan(previous) -> Optional[list]:
-        """The second write's segments for the scope "changed", or None when
-        the round has to write the whole file the way the scope "all" does.
+    def changed_plan(previous):
+        """The second write's segments for the scope "changed", or a string
+        naming why the round has to write the whole file the way the scope
+        "all" does (it goes in `second_chance_scope_fallback`).
 
         Encode segments are every keyframe interval of the first copy that
         holds a frame whose masks changed, give or take the margin; copy
@@ -699,7 +700,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 a, b = max(0, i - margin), min(n, i + margin + 1)
                 changed[a:b] = [True] * (b - a)
         if all(changed):
-            return None
+            return "all_changed"
         if not any(changed):
             return [[Segment(0, n, True)], None]
         try:
@@ -713,11 +714,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
             if copy_delay is None:
                 copy_delay = reorder_delay(out)
             if copy_delay != 0:
-                return None
+                return "reorder_delay"
             out_times = frame_times(out)
             out_keys = keyframes(out, out_times)
         except VideoError:
-            return None
+            return "probe_failed"
         # plan_segments snaps each changed stretch out to the keyframes
         # around it, merges what touches and folds clean stretches shorter
         # than min_copy into their neighbours, which is the same rule the
@@ -725,7 +726,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         segments = split_long(plan_segments(changed, out_keys, n, min_copy, True),
                               out_keys, piece)
         if all(not s.copy for s in segments):
-            return None
+            return "no_copy_segment"
         return [segments, out_times]
 
     def scoped_write(segments, out_times):
@@ -918,7 +919,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 record.frames_with_mask = sum(1 for f in per_frame if f)
                 plan = changed_plan(previous) if scoped else None
                 ranges = None
-                if plan is not None:
+                if isinstance(plan, str):
+                    record.second_chance_scope_fallback = (
+                        record.second_chance_scope_fallback or plan)
+                elif plan is not None:
                     if all(s.copy for s in plan[0]):
                         # No mask changed, so the copy and the check stand
                         # as they are, and the next round would find the
@@ -929,6 +933,9 @@ def run_video(src: Path, dst: Path, settings: Settings,
                         record.second_chance_seconds = round(time.time() - t3, 2)
                         record.wall_seconds = round(time.time() - started, 2)
                         return record
+                    if ranges is False:
+                        record.second_chance_scope_fallback = (
+                            record.second_chance_scope_fallback or "join_failed")
                 if not ranges:
                     # The scope "all", or a scoped join that did not verify:
                     # the whole file, from the source, the way it always was.

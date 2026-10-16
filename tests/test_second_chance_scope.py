@@ -168,6 +168,63 @@ def test_a_round_without_seeds_writes_nothing_more(tmp_path, video_with_face, mo
     assert len(calls) == 1
 
 
+# ------------------------------------------------------------ why a round wrote it all
+
+def test_a_scoped_round_that_wrote_ranges_names_no_fallback(tmp_path, face_then_wall,
+                                                             monkeypatch):
+    record, _, _ = _run(face_then_wall, tmp_path / "changed.mp4", monkeypatch)
+    assert record.status == STATUS_DONE, record.error
+    assert record.second_chance_ranges
+    assert record.second_chance_scope_fallback is None
+
+
+def test_the_scope_all_names_no_fallback(tmp_path, face_then_wall, monkeypatch):
+    record, _, _ = _run(face_then_wall, tmp_path / "all.mp4", monkeypatch,
+                        second_chance_scope="all")
+    assert record.status == STATUS_DONE, record.error
+    assert record.second_chance_rounds == 1
+    assert record.second_chance_scope_fallback is None
+
+
+def test_a_margin_over_the_whole_file_falls_back_as_all_changed(tmp_path, face_then_wall,
+                                                                 monkeypatch):
+    record, writes, _ = _run(face_then_wall, tmp_path / "wide.mp4", monkeypatch,
+                             second_chance_margin_seconds=60.0)
+    assert record.status == STATUS_DONE, record.error
+    assert record.second_chance_rounds == 1
+    assert record.second_chance_scope_fallback == "all_changed"
+    assert record.second_chance_ranges == []
+    assert record.second_chance_reencoded_frames == record.frames - record.frames_copied
+    # The second write is a whole one, from the source.
+    assert len(writes) == 2 and writes[1]["copy_src"] is None
+
+
+def test_a_scoped_join_that_did_not_verify_falls_back_as_join_failed(tmp_path,
+                                                                     face_then_wall,
+                                                                     monkeypatch):
+    _MissesOnce.calls = 0
+    monkeypatch.setattr(batch, "tracker_for", lambda settings: _MissesOnce())
+    real = _WRITE_AND_JOIN
+    writes = []
+
+    def failing_scoped(src_, dst_, *args, **kwargs):
+        got = real(src_, dst_, *args, **kwargs)
+        writes.append(kwargs.get("copy_src"))
+        if kwargs.get("copy_src") is not None and got is not None:
+            masked, by_kind, prevented, _, rest = got
+            return masked, by_kind, prevented, "stubbed: the join did not verify", rest
+        return got
+
+    monkeypatch.setattr(batch, "_write_and_join", failing_scoped)
+    record = run_video(face_then_wall, tmp_path / "join.mp4", Settings(**SCOPED),
+                       serial_submit)
+    assert record.status == STATUS_DONE, record.error
+    assert record.second_chance_scope_fallback == "join_failed"
+    assert record.second_chance_ranges == []
+    # The first write, the scoped one that failed, then the whole file.
+    assert len(writes) == 3 and writes[1] is not None and writes[2] is None
+
+
 # ------------------------------------------------------------ the merge
 
 def _job(start, end, frames, stride=1):

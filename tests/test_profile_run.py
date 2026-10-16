@@ -83,3 +83,9 @@ def test_timers_file_generators_under_the_phase_that_made_them():
 def test_the_profiled_run_is_the_production_configuration():
     s = prof.production_settings()
     assert s.check_output and s.quarantine and s.second_chance == 1 and s.check_stride == 1
+
+
+def test_the_check_zone_crop_is_timed_not_the_old_alpha_for():
+    # The check crops the zone with verify.zone_crop since T03.
+    assert ("faceblur.verify", "zone_crop") in prof.PARTS
+    assert ("faceblur.zone", "alpha_for") not in prof.PARTS

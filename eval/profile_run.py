@@ -88,7 +88,7 @@ PARTS = [
     ("faceblur.verify", "applied"),
     ("faceblur.verify", "frame_noise"),
     ("faceblur.verify", "zone_changed"),
-    ("faceblur.zone", "alpha_for"),
+    ("faceblur.verify", "zone_crop"),
     ("faceblur.video", "probe"),
     ("faceblur.segments", "frame_times"),
     ("faceblur.segments", "keyframes"),

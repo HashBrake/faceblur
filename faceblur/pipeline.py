@@ -167,6 +167,10 @@ class AuditRecord:
     # The [start, end) frame ranges those were, over all rounds. Empty when
     # a round wrote the whole file from the source (scope "all").
     second_chance_ranges: list = field(default_factory=list)
+    # Why a round under the scope "changed" wrote the whole file anyway, the
+    # first round's reason: "all_changed", "reorder_delay", "probe_failed",
+    # "no_copy_segment" or "join_failed". None otherwise.
+    second_chance_scope_fallback: Optional[str] = None
     second_chance_seconds: float = 0.0
     # What the source carried besides pictures, package M1. The tag names
     # only: a value can hold a location or a device serial, and this record
