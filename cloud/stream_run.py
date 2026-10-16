@@ -28,20 +28,36 @@ A video counts as finished once its record is in the bucket, delivered or in
 quarantine; the copy is uploaded before the record, so a record never stands
 beside a missing copy. Run it again after anything stops it and only the
 unfinished videos are taken.
+
+QUEUE=1 lets any number of machines work from one bucket with no fixed
+split. A machine takes the largest unfinished video nobody holds and leaves
+a claim at OUT/_claims/<video>.json naming itself and the time; it rewrites
+the claim every LEASE/3 seconds while it works and deletes it when the video
+is finished. A claim older than LEASE seconds (default 1800) belongs to a
+machine that died, and the video is taken again. A machine with nothing left
+to claim leaves at once instead of waiting for other machines' claims to
+run out; a video whose machine died after the others left is taken by the
+next start of this script. SHARD is ignored in queue mode. CLAIM_SETTLE
+(seconds, default 2) is how long a claim is left before it is read back; it
+exists for the tests and needs no setting in production.
 """
 from __future__ import annotations
 
 import json
 import os
 import queue
+import secrets
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 HERE = Path(__file__).resolve().parent
@@ -55,6 +71,11 @@ SUFFIX = Settings().suffix
 
 def on(value: str) -> bool:
     return value not in ("", "0")
+
+
+def new_owner() -> str:
+    """Names this process in its claims, so two runs on one host differ."""
+    return f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
 
 
 @dataclass(frozen=True)
@@ -78,11 +99,13 @@ class Config:
     rclone: str = "rclone"
     pipeline_cmd: list = field(default_factory=lambda: [sys.executable, str(HERE.parent / "cli.py")])
     cuda_check: bool = True
-    # Queue mode. Only stored here; the queue runner reads them.
+    # Queue mode.
     queue: bool = False
     lease: int = 1800
     self_delete: bool = False
     gn_server_name: str = ""
+    claim_settle: float = 2.0
+    owner: str = ""                           # set by main() in queue mode
 
     @property
     def inp(self) -> str:
@@ -94,6 +117,9 @@ class Config:
 
     @property
     def tag(self) -> str:
+        # Every machine of a queue run writes its own logs beside the others'.
+        if self.queue and self.owner:
+            return f"q-{self.owner}_"
         return f"shard{self.shard_k}of{self.shard_n}_" if self.shard_n > 1 else ""
 
     @property
@@ -125,6 +151,7 @@ def config_from_env(env: Mapping[str, str] = os.environ) -> Config:
         lease=int(env.get("LEASE", "1800")),
         self_delete=on(env.get("SELF_DELETE", "0")),
         gn_server_name=env.get("GN_SERVER_NAME", ""),
+        claim_settle=float(env.get("CLAIM_SETTLE", "2.0")),
         **extra)
 
 
@@ -165,6 +192,14 @@ def listing(cfg: Config, remote: str) -> dict[str, int]:
     return {e["Path"]: e["Size"] for e in json.loads(r.stdout or "[]")}
 
 
+def videos(cfg: Config) -> dict[str, int]:
+    # The recorder's empty stubs (24 bytes) hold no frames and are delivered
+    # as they are; leaving them out also keeps the share split the same on a
+    # machine that lists the bucket while they are still arriving.
+    return {p: s for p, s in listing(cfg, cfg.inp).items()
+            if PurePosixPath(p).suffix.lower() in VIDEO_EXT and s >= 1024}
+
+
 def record_names(rel: str) -> tuple[str, str]:
     """Where a video's record lands in the output, delivered and held back."""
     p = PurePosixPath(rel)
@@ -186,6 +221,138 @@ def share(sizes: dict[str, int], k_ours: int, n: int) -> set[str]:
         if k == k_ours:
             taken.add(rel)
     return taken
+
+
+# QUEUE=1: claims instead of shares. rclone cannot create a file only if it
+# is absent on S3, so a claim is written, left to settle, and read back; the
+# last writer is the owner. Two machines both win only if one stalls longer
+# than the settle time between its check and its write, and then one video
+# is blurred twice into the same copy, which costs time but loses nothing.
+def claim_path(cfg: Config, rel: str) -> str:
+    return f"{cfg.out}/_claims/{rel}.json"
+
+
+def read_claim(cfg: Config, rel: str) -> dict | None:
+    r = rclone(cfg, "cat", claim_path(cfg, rel), check=False)
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except ValueError:                        # half written: as good as none
+        return None
+
+
+def write_claim(cfg: Config, rel: str, owner: str) -> None:
+    # A failed write is not raised: the read-back finds the claim is not
+    # ours, and a renewal is tried again in LEASE/3 seconds.
+    fd, tmp = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"owner": owner, "time": time.time(), "lease": cfg.lease}, f)
+    try:
+        rclone(cfg, "copyto", tmp, claim_path(cfg, rel), check=False)
+    finally:
+        os.unlink(tmp)
+
+
+def claim(cfg: Config, rel: str, owner: str) -> bool:
+    held = read_claim(cfg, rel)
+    if held and held.get("owner") != owner and time.time() - held["time"] < held["lease"]:
+        return False
+    write_claim(cfg, rel, owner)
+    time.sleep(cfg.claim_settle)
+    held = read_claim(cfg, rel)
+    return bool(held) and held.get("owner") == owner
+
+
+def claim_times(cfg: Config) -> dict[str, float]:
+    """When each claim was last written, from one listing, so a live claim
+    is skipped without reading it."""
+    r = rclone(cfg, "lsjson", f"{cfg.out}/_claims", "--recursive", "--files-only", check=False)
+    if r.returncode != 0:
+        return {}
+    return {e["Path"]: datetime.fromisoformat(e["ModTime"]).timestamp()
+            for e in json.loads(r.stdout or "[]")}
+
+
+def next_claim(cfg: Config, owner: str, ours: set[str]) -> tuple[str, int, float] | None:
+    """The largest unfinished video this machine could claim, claimed, with
+    its size and the monotonic time just before its claim was written, or
+    None when there is none. Everything is listed afresh because the other
+    machines change it all the time. `ours` are the videos this process
+    holds already: claim() would hand one of them out a second time."""
+    inputs = videos(cfg)
+    outputs = listing(cfg, cfg.out)
+    now = time.time()
+    held = claim_times(cfg)
+    for rel in sorted(inputs, key=lambda r: (-inputs[r], r)):
+        if rel in ours or any(r in outputs for r in record_names(rel)):
+            continue
+        if now - held.get(f"{rel}.json", 0) < cfg.lease:
+            continue
+        written = time.monotonic()
+        if claim(cfg, rel, owner):
+            return rel, inputs[rel], written
+    return None
+
+
+class Jobs(queue.Queue):
+    """SHARD mode's job source: the videos are fixed at the start and
+    nothing needs doing when one is finished."""
+
+    def done(self, rel: str) -> None:
+        pass
+
+
+class ClaimQueue:
+    """Queue mode's job source, with the surface card() uses from Jobs.
+
+    Each video handed out is claimed first and its claim renewed in the
+    background until done(), so other machines leave it alone while it is
+    fetched and run. done() deletes the claim: the record in OUT is what
+    says finished, so a claim left behind by a crash does no harm."""
+
+    def __init__(self, cfg: Config, sizes: dict):
+        self.cfg, self.sizes = cfg, sizes
+        self.held: dict[str, tuple[threading.Event, threading.Thread]] = {}
+        self.lock = threading.Lock()
+        # Every claim of one process names the same owner, so two cards
+        # claiming at once would both read their claim back as theirs.
+        # They take turns.
+        self.claiming = threading.Lock()
+
+    def get_nowait(self) -> str:
+        with self.claiming:
+            with self.lock:
+                ours = set(self.held)
+            got = next_claim(self.cfg, self.cfg.owner, ours)
+            if got is None:
+                raise queue.Empty
+            rel, size, due = got
+            stop = threading.Event()
+
+            def renew():
+                # On a fixed beat from the claim's own write, so neither the
+                # settle nor the time a write takes stretches the gap between
+                # two writes past LEASE/3.
+                nonlocal due
+                while True:
+                    due += self.cfg.lease / 3
+                    if stop.wait(max(0.0, due - time.monotonic())):
+                        return
+                    write_claim(self.cfg, rel, self.cfg.owner)
+            t = threading.Thread(target=renew, daemon=True)
+            with self.lock:
+                self.sizes[rel] = size
+                self.held[rel] = (stop, t)
+            t.start()
+        return rel
+
+    def done(self, rel: str) -> None:
+        with self.lock:
+            stop, t = self.held.pop(rel)
+        stop.set()
+        t.join()                              # a renewal in flight would bring the claim back
+        rclone(self.cfg, "deletefile", claim_path(self.cfg, rel), check=False)
 
 
 def gpu_count(cfg: Config) -> int:
@@ -260,7 +427,7 @@ def lane_dir(k: int, lane: int) -> str:
     return f"gpu{k}" if lane == 0 else f"gpu{k}_{lane}"
 
 
-def card(cfg: Config, k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, sizes: dict,
+def card(cfg: Config, k: int, lane: int, jobs: Jobs | ClaimQueue, tally: dict, sizes: dict,
          disk: Disk) -> None:
     base = cfg.work / lane_dir(k, lane)
     name = f"card {k}" + (f" lane {lane}" if cfg.lanes > 1 else "")
@@ -330,29 +497,37 @@ def card(cfg: Config, k: int, lane: int, jobs: "queue.Queue[str]", tally: dict, 
             src.unlink(missing_ok=True)
             shutil.rmtree(base / "out", ignore_errors=True)
             disk.give(reserved)
+            jobs.done(rel)
 
 
 def main(argv=None) -> int:
     cfg = config_from_env()
+    if cfg.queue:
+        cfg = replace(cfg, owner=new_owner())
     vs_remote()
     cfg.work.mkdir(parents=True, exist_ok=True)
-    # The recorder's empty stubs (24 bytes) hold no frames and are delivered
-    # as they are; leaving them out also keeps the share split the same on a
-    # machine that lists the bucket while they are still arriving.
-    inputs = {p: s for p, s in listing(cfg, cfg.inp).items()
-              if PurePosixPath(p).suffix.lower() in VIDEO_EXT and s >= 1024}
+    inputs = videos(cfg)
     outputs = listing(cfg, cfg.out)
-    ours = share(inputs, cfg.shard_k, cfg.shard_n)
+    # In queue mode the count is only what was unfinished at the start;
+    # the other machines take from it too.
+    ours = set(inputs) if cfg.queue else share(inputs, cfg.shard_k, cfg.shard_n)
     todo = [p for p in inputs if p in ours
             and not any(r in outputs for r in record_names(p))]
     gb = sum(inputs[p] for p in todo) / 1e9
     n = gpu_count(cfg)
-    say(cfg, f"{len(inputs)} videos in {cfg.inp}, {len(inputs) - len(todo)} finished, "
+    if cfg.queue:
+        mode = f"queue mode as {cfg.owner}, lease {cfg.lease}s"
+    else:
+        mode = f"shard {cfg.shard_k}/{cfg.shard_n}"
+    say(cfg, f"{mode}: {len(inputs)} videos in {cfg.inp}, {len(inputs) - len(todo)} finished, "
         f"{len(todo)} to do ({gb:.0f} GB) on {n} cards, {cfg.lanes} lanes of {cfg.workers} workers each, "
         f"{' '.join(cfg.run_args)}")
-    jobs: "queue.Queue[str]" = queue.Queue()
-    for p in sorted(todo, key=lambda p: inputs[p], reverse=True):
-        jobs.put(p)
+    if cfg.queue:
+        jobs: Jobs | ClaimQueue = ClaimQueue(cfg, inputs)
+    else:
+        jobs = Jobs()
+        for p in sorted(todo, key=lambda p: inputs[p], reverse=True):
+            jobs.put(p)
     tally: dict = {}
     cards = [k for k in range(n) if card_works(cfg, k)]
     for k in sorted(set(range(n)) - set(cards)):

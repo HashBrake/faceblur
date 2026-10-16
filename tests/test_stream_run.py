@@ -1,5 +1,5 @@
-"""cloud/stream_run.py: its configuration, its shard split, and a whole SHARD
-run against a local directory used as the rclone remote.
+"""cloud/stream_run.py: its configuration, its shard split, its claims, and whole
+SHARD and QUEUE runs against a local directory used as the rclone remote.
 
 Nothing here reaches the bucket: S3_ENDPOINT is kept out of every
 environment, REMOTE points at a temporary directory, and a fake pipeline
@@ -7,13 +7,16 @@ stands in for cli.py, so no GPU and no real video are needed.
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
 import os
+import queue
 import random
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -27,8 +30,8 @@ SOURCE = ROOT / "cloud" / "stream_run.py"
 # from the shell that runs the tests.
 NAMES = ("BUCKET", "REMOTE", "IN_PREFIX", "OUT_PREFIX", "WORK", "WORKERS", "LANES",
          "RUN_ARGS", "GPUS", "SHARD", "RCLONE", "PIPELINE_CMD", "CUDA_CHECK", "QUEUE",
-         "LEASE", "SELF_DELETE", "GN_SERVER_NAME", "S3_ENDPOINT", "S3_ACCESS_KEY",
-         "S3_SECRET_KEY")
+         "LEASE", "SELF_DELETE", "GN_SERVER_NAME", "CLAIM_SETTLE", "S3_ENDPOINT",
+         "S3_ACCESS_KEY", "S3_SECRET_KEY")
 
 
 @pytest.fixture
@@ -178,3 +181,146 @@ def test_shard_run_on_a_local_remote(sr, tmp_path):
     assert calls.read_text(encoding="utf-8") == before
     done = json.loads((out / "_logs" / "shard0of2_DONE.json").read_text())
     assert done["todo"] == 0 and done["tally"] == {}
+
+
+def need_rclone() -> str:
+    exe = rclone_exe()
+    if exe is None:
+        pytest.skip("no rclone binary: set RCLONE or put one under tools/")
+    return exe
+
+
+def claim_file(bucket: Path, rel: str) -> Path:
+    return bucket / "out" / "_claims" / f"{rel}.json"
+
+
+def test_a_live_claim_is_never_taken_and_a_stale_one_is(sr, tmp_path):
+    exe = need_rclone()
+    bucket = tmp_path / "bucket"
+    cfg = sr.config_from_env({"REMOTE": bucket.as_posix(), "RCLONE": exe, "LEASE": "30",
+                              "CLAIM_SETTLE": "0.2"})
+    marker = claim_file(bucket, "a.mp4")
+    assert sr.claim(cfg, "a.mp4", "me") is True
+    held = json.loads(marker.read_text())
+    assert held["owner"] == "me" and held["lease"] == 30
+    assert sr.claim(cfg, "a.mp4", "other") is False
+    assert json.loads(marker.read_text())["owner"] == "me"
+    held["time"] -= 60
+    marker.write_text(json.dumps(held))
+    assert sr.claim(cfg, "a.mp4", "other") is True
+    assert json.loads(marker.read_text())["owner"] == "other"
+
+
+def test_a_held_claim_is_renewed_and_deleted_when_done(sr, tmp_path):
+    exe = need_rclone()
+    bucket = tmp_path / "bucket"
+    (bucket / "in").mkdir(parents=True)
+    (bucket / "in" / "v.mp4").write_bytes(b"x" * 2000)
+    cfg = sr.config_from_env({"REMOTE": bucket.as_posix(), "RCLONE": exe, "LEASE": "3",
+                              "CLAIM_SETTLE": "0.2", "QUEUE": "1"})
+    cfg = dataclasses.replace(cfg, owner="me")
+    sizes: dict = {}
+    jobs = sr.ClaimQueue(cfg, sizes)
+    assert jobs.get_nowait() == "v.mp4"
+    assert sizes == {"v.mp4": 2000}
+    time.sleep(2.5)
+    marker = claim_file(bucket, "v.mp4")
+    assert time.time() - json.loads(marker.read_text())["time"] < 1.5
+    jobs.done("v.mp4")
+    assert not marker.exists()
+    # Held by nobody but still unfinished: the next call takes it again, and
+    # with it held there is nothing more to claim.
+    assert jobs.get_nowait() == "v.mp4"
+    with pytest.raises(queue.Empty):
+        jobs.get_nowait()
+    jobs.done("v.mp4")
+
+
+def queue_env(exe: str, bucket: Path, fake: Path, work: Path, calls: Path, **extra) -> dict:
+    base = {k: v for k, v in os.environ.items()
+            if k not in NAMES and k not in ("FAKE_SLEEP", "FAKE_SLEEP_S")
+            and not k.startswith("RCLONE_CONFIG")}
+    return dict(base, REMOTE=bucket.as_posix(), RCLONE=exe,
+                PIPELINE_CMD=shlex.join([Path(sys.executable).as_posix(), fake.as_posix()]),
+                CUDA_CHECK="0", GPUS="1", WORK=str(work), QUEUE="1", FAKE_LOG=str(calls),
+                WORKERS="1", RUN_ARGS="", **extra)
+
+
+def make_bucket(tmp_path: Path, sizes: dict) -> tuple[Path, Path]:
+    bucket = tmp_path / "bucket"
+    rng = random.Random(7)
+    for rel, size in sizes.items():
+        f = bucket / "in" / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(rng.randbytes(size))
+    fake = tmp_path / "fake_cli.py"
+    fake.write_text(FAKE_CLI, encoding="utf-8")
+    return bucket, fake
+
+
+def test_three_queue_workers_take_every_video_once(sr, tmp_path):
+    exe = need_rclone()
+    sizes = {"cam1/a.mp4": 9000, "cam1/b.mp4": 8000, "c.mp4": 7000, "cam2/d.mp4": 6000,
+             "cam2/e.mp4": 5000, "f.mp4": 4000, "cam1/g.mp4": 3000, "h.mp4": 2000,
+             "cam3/i.mp4": 1500}
+    bucket, fake = make_bucket(tmp_path, sizes)
+    calls = tmp_path / "calls.log"
+    procs = [subprocess.Popen([sys.executable, str(SOURCE)], cwd=ROOT,
+                              env=queue_env(exe, bucket, fake, tmp_path / f"work{i}", calls, LEASE="30"),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for i in range(3)]
+    outs = [p.communicate(timeout=180)[0] for p in procs]
+    for p, text in zip(procs, outs):
+        assert p.returncode == 0, text
+
+    names = [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()]
+    assert len(names) == 9, names
+    assert sorted(names) == sorted(Path(rel).name for rel in sizes)
+    out = bucket / "out"
+    for rel in sizes:
+        delivered, held = sr.record_names(rel)
+        assert (out / delivered).is_file(), rel
+        assert not (out / held).exists()
+        assert (out / delivered[:-len(".json")]).read_bytes() == b"copy"
+    assert len(list(out.rglob("*_blurred.mp4.json"))) == len(sizes)
+    assert len(list(out.rglob("*_blurred.mp4"))) == len(sizes)
+    dones = [json.loads(f.read_text()) for f in (out / "_logs").glob("q-*_DONE.json")]
+    assert len(dones) == 3
+    assert sum(d["tally"].get("delivered", 0) for d in dones) == 9
+    assert all(set(d["tally"]) <= {"delivered"} for d in dones)
+    assert [f for f in (out / "_claims").rglob("*") if f.is_file()] == []
+
+
+def test_a_dead_workers_video_is_taken_once_its_lease_runs_out(sr, tmp_path):
+    exe = need_rclone()
+    bucket, fake = make_bucket(tmp_path, {"big.mp4": 5000, "small.mp4": 2000})
+    marker = claim_file(bucket, "big.mp4")
+    a = subprocess.Popen([sys.executable, str(SOURCE)], cwd=ROOT,
+                         env=queue_env(exe, bucket, fake, tmp_path / "work_a", tmp_path / "calls_a.log",
+                                       LEASE="3", FAKE_SLEEP="big", FAKE_SLEEP_S="120"),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 60
+        while not marker.exists():
+            assert a.poll() is None, "worker A ended before it claimed big.mp4"
+            assert time.time() < deadline, "worker A never claimed big.mp4"
+            time.sleep(0.2)
+    finally:
+        a.kill()
+        a.wait()
+    # Windows leaves A's fake pipeline sleeping; it writes only into A's own
+    # work dir and log, never into the bucket.
+    time.sleep(3 + 1)
+
+    calls_b = tmp_path / "calls_b.log"
+    b = subprocess.run([sys.executable, str(SOURCE)], cwd=ROOT,
+                       env=queue_env(exe, bucket, fake, tmp_path / "work_b", calls_b, LEASE="3"),
+                       capture_output=True, text=True, timeout=120)
+    assert b.returncode == 0, b.stdout + b.stderr
+    out = bucket / "out"
+    for rel in ("big.mp4", "small.mp4"):
+        assert (out / sr.record_names(rel)[0]).is_file(), b.stdout
+    assert "big.mp4" in calls_b.read_text(encoding="utf-8").split()
+    (done,) = (out / "_logs").glob("q-*_DONE.json")
+    assert json.loads(done.read_text())["tally"].get("delivered", 0) >= 1
+    assert not marker.exists()
