@@ -16,7 +16,9 @@ import random
 import shlex
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -31,7 +33,8 @@ SOURCE = ROOT / "cloud" / "stream_run.py"
 NAMES = ("BUCKET", "REMOTE", "IN_PREFIX", "OUT_PREFIX", "WORK", "WORKERS", "LANES",
          "RUN_ARGS", "GPUS", "SHARD", "RCLONE", "PIPELINE_CMD", "CUDA_CHECK", "QUEUE",
          "LEASE", "SELF_DELETE", "GN_SERVER_NAME", "CLAIM_SETTLE", "S3_ENDPOINT",
-         "S3_ACCESS_KEY", "S3_SECRET_KEY")
+         "S3_ACCESS_KEY", "S3_SECRET_KEY", "GN_TOKEN_URL", "GN_API_URL", "GN_CLIENT_ID",
+         "GN_CLIENT_SECRET", "GN_PROJECT_ID", "GN_PORTAL_USER_ID", "GN_NAME_PREFIX")
 
 
 @pytest.fixture
@@ -345,3 +348,121 @@ def test_a_failing_video_is_tried_once_per_worker(sr, tmp_path):
     assert [f for f in (out / "_claims").rglob("*") if f.is_file()] == []
     (done,) = (out / "_logs").glob("q-*_DONE.json")
     assert json.loads(done.read_text())["tally"] == {"failed": 1, "delivered": 1}
+
+
+class FakeApi:
+    """A GreenNode API on 127.0.0.1 that lists one server, faceblur-test, and
+    records every request. On a DELETE it notes whether a DONE marker was
+    already in `done_dir`, which is what the hook's ordering promises."""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.delete_status = 200
+        self.done_dir: Path | None = None
+
+
+@pytest.fixture
+def api():
+    state = FakeApi()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def answer(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            path = self.path.split("?")[0]
+            req = {"method": self.command, "path": path, "body": raw}
+            status, reply = 200, {}
+            if self.command == "POST" and path == "/token":
+                reply = {"access_token": "tok"}
+            elif self.command == "GET" and path == "/proj/servers":
+                reply = {"listData": [{"name": "faceblur-test", "uuid": "s1"}]}
+            elif self.command == "DELETE":
+                req["done"] = bool(state.done_dir and list(state.done_dir.glob("*DONE.json")))
+                status = state.delete_status
+            state.requests.append(req)
+            data = json.dumps(reply).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        do_GET = do_POST = do_DELETE = answer
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    state.env = {"SELF_DELETE": "1", "GN_SERVER_NAME": "faceblur-test",
+                 "GN_TOKEN_URL": f"http://127.0.0.1:{port}/token",
+                 "GN_API_URL": f"http://127.0.0.1:{port}",
+                 "GN_CLIENT_ID": "id", "GN_CLIENT_SECRET": "secret", "GN_PROJECT_ID": "proj"}
+    yield state
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def self_delete_run(tmp_path: Path, env_extra: dict) -> tuple[subprocess.CompletedProcess, Path]:
+    exe = need_rclone()
+    bucket, fake = make_bucket(tmp_path, {"a.mp4": 3000, "b.mp4": 2000})
+    work = tmp_path / "work"
+    r = subprocess.run([sys.executable, str(SOURCE)], cwd=ROOT,
+                       env=queue_env(exe, bucket, fake, work, tmp_path / "calls.log",
+                                     LEASE="30", **env_extra),
+                       capture_output=True, text=True, timeout=120)
+    return r, work / "stream_run.log"
+
+
+def test_self_delete_deletes_this_machine_after_the_done_marker(tmp_path, api):
+    api.done_dir = tmp_path / "bucket" / "out" / "_logs"
+    r, log = self_delete_run(tmp_path, api.env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    dels = [q for q in api.requests if q["method"] == "DELETE"]
+    assert len(dels) == 1, api.requests
+    assert dels[0]["path"] == "/proj/servers/s1"
+    assert json.loads(dels[0]["body"]) == {"deleteAllVolume": True}
+    assert dels[0]["done"] is True
+    text = log.read_text(encoding="utf-8")
+    assert "self-delete: deleting this machine, faceblur-test" in text
+    assert "self-delete: the API accepted" in text
+
+
+def test_no_self_delete_sends_no_request(tmp_path, api):
+    env = {k: v for k, v in api.env.items() if k != "SELF_DELETE"}
+    r, log = self_delete_run(tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert api.requests == []
+    assert "self-delete" not in log.read_text(encoding="utf-8")
+
+
+def test_self_delete_refuses_a_name_outside_the_scope(tmp_path, api):
+    r, log = self_delete_run(tmp_path, dict(api.env, GN_SERVER_NAME="playerone-x"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert api.requests == []
+    assert "refusing" in log.read_text(encoding="utf-8")
+
+
+def test_self_delete_without_credentials_sends_no_request(tmp_path, api):
+    env = {k: v for k, v in api.env.items() if k != "GN_CLIENT_ID"}
+    r, log = self_delete_run(tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert api.requests == []
+    assert "GN_CLIENT_ID/GN_CLIENT_SECRET/GN_PROJECT_ID missing" in log.read_text(encoding="utf-8")
+
+
+def test_self_delete_logs_an_api_error_and_does_not_raise(sr, tmp_path, api):
+    api.delete_status = 500
+    cfg = sr.config_from_env({"REMOTE": tmp_path.as_posix(), "WORK": str(tmp_path),
+                              "SELF_DELETE": "1", "GN_SERVER_NAME": "faceblur-test"})
+    sr.self_delete(cfg, api.env)
+    assert [q["method"] for q in api.requests][-1] == "DELETE"
+    text = cfg.log.read_text(encoding="utf-8")
+    assert "HTTP 500" in text and "the machine stays" in text
+
+
+def test_self_delete_without_a_server_name_sends_no_request(sr, tmp_path, api):
+    cfg = sr.config_from_env({"REMOTE": tmp_path.as_posix(), "WORK": str(tmp_path)})
+    sr.self_delete(cfg, api.env)
+    assert api.requests == []
+    assert "GN_SERVER_NAME is not set" in cfg.log.read_text(encoding="utf-8")

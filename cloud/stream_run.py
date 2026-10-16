@@ -40,9 +40,20 @@ run out; a video whose machine died after the others left is taken by the
 next start of this script. SHARD is ignored in queue mode. CLAIM_SETTLE
 (seconds, default 2) is how long a claim is left before it is read back; it
 exists for the tests and needs no setting in production.
+
+SELF_DELETE=1 deletes this machine, with its volumes, through the vServer
+API once the run is over and its DONE marker and log are in the bucket, even
+when some videos failed: the failures are in the log, and the machine holds
+nothing the bucket does not. GN_SERVER_NAME names the machine (it must fall
+within GN_NAME_PREFIX, default faceblur-), and GN_CLIENT_ID,
+GN_CLIENT_SECRET and GN_PROJECT_ID must be in the container's environment.
+vm_bootstrap.sh no longer copies the API keys onto a VM, so whether they go
+into /root/faceblur.env is the owner's choice; without them the machine
+stays and says why.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import queue
@@ -508,6 +519,40 @@ def card(cfg: Config, k: int, lane: int, jobs: Jobs | ClaimQueue, tally: dict, s
             jobs.done(rel)
 
 
+def self_delete(cfg: Config, env: Mapping[str, str] = os.environ) -> None:
+    """Delete this machine through the vServer API. Nothing here is raised:
+    the run is over and its results are in the bucket whatever happens, so a
+    failure only means the machine stays, and the log says why."""
+    name = cfg.gn_server_name
+    if not name:
+        say(cfg, "self-delete: GN_SERVER_NAME is not set, the machine stays")
+        return
+    e = dict(env)
+    # Checked here because the token request would be the first thing
+    # delete_server sends, and it should not go out with no keys.
+    if not all(e.get(k) for k in ("GN_CLIENT_ID", "GN_CLIENT_SECRET", "GN_PROJECT_ID")):
+        say(cfg, "self-delete: GN_CLIENT_ID/GN_CLIENT_SECRET/GN_PROJECT_ID missing, the machine stays")
+        return
+    try:
+        # Loaded by path and only here: the script runs from cloud/, which is
+        # not a package, and a run without SELF_DELETE never touches it.
+        spec = importlib.util.spec_from_file_location("gn_api", HERE / "gn_api.py")
+        gn_api = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gn_api)
+    except Exception as exc:
+        say(cfg, f"self-delete: cannot load gn_api.py ({exc!r}), the machine stays")
+        return
+    say(cfg, f"self-delete: deleting this machine, {name}, through the vServer API")
+    try:
+        sid = gn_api.delete_server(name, e)
+    except (ValueError, LookupError, gn_api.ApiError) as exc:
+        say(cfg, f"self-delete: {exc}; the machine stays")
+    except Exception as exc:
+        say(cfg, f"self-delete: failed with {exc!r}; the machine stays")
+    else:
+        say(cfg, f"self-delete: the API accepted the delete of {name} ({sid})")
+
+
 def main(argv=None) -> int:
     cfg = config_from_env()
     if cfg.queue:
@@ -567,6 +612,10 @@ def main(argv=None) -> int:
     rclone(cfg, "copyto", str(marker), f"{cfg.out}/_logs/{cfg.tag}DONE.json", check=False)
     rclone(cfg, "copyto", str(cfg.log), f"{cfg.out}/_logs/{cfg.tag}stream_run.log", check=False)
     say(cfg, f"finished: {tally}")
+    # Last of all, so the DONE marker and the log are in the bucket before
+    # the machine that wrote them goes.
+    if cfg.self_delete:
+        self_delete(cfg)
     return 0 if tally.get("failed", 0) == 0 else 1
 
 
