@@ -244,3 +244,164 @@ def test_the_new_record_fields_are_reported_and_none_on_older_records():
     assert [branch[k] for k in new] == [2.5, 30, 100, 7, 1]
     baseline = bench.file_entry({"wall_seconds": 10}, None, None)
     assert all(baseline[k] is None for k in new)
+
+
+# ---------------------------------------------------------------- portability
+
+def parse_paths(argv):
+    """The `Paths` main() would build from `argv`, through main's own parser."""
+    seen = {}
+    real = bench.build_paths
+
+    def grab(args):
+        seen["paths"] = real(args)
+        return seen["paths"]
+
+    bench.build_paths, saved = grab, bench.build_paths
+    try:
+        bench.main(["--only", "", *argv])
+    finally:
+        bench.build_paths = saved
+    return seen["paths"]
+
+
+def test_the_defaults_are_this_pcs_paths(tmp_path):
+    lock = tmp_path / "gpu_lock.py"
+    lock.write_text("", encoding="utf-8")
+    p = parse_paths(["--lock", str(lock)])
+    assert p.footage == bench.FOOTAGE and p.out_root == bench.OUT
+    assert p.baseline_dir == bench.BASELINE_DIR and p.label_cache == bench.MAIN_CACHE
+    assert p.work_cache == bench.WORK_CACHE and p.lock == lock
+    assert p.python == sys.executable and p.label == "local"
+
+
+def cloud_paths(tmp_path, **kw):
+    fields = dict(footage=tmp_path / "footage", out_root=tmp_path / "out",
+                  baseline_dir=tmp_path / "base", label_cache=tmp_path / "labels",
+                  work_cache=tmp_path / "cache", lock=None, python="/venv/bin/python",
+                  label="5090")
+    fields.update(kw)
+    return bench.Paths(**fields)
+
+
+def test_every_path_flag_reaches_the_paths(tmp_path):
+    p = parse_paths(["--footage", str(tmp_path / "f"), "--out-root", str(tmp_path / "o"),
+                     "--baseline-dir", str(tmp_path / "b"), "--label-cache", str(tmp_path / "l"),
+                     "--work-cache", str(tmp_path / "w"), "--no-lock",
+                     "--python", "/venv/bin/python", "--label", "5090"])
+    assert p == bench.Paths(footage=tmp_path / "f", out_root=tmp_path / "o",
+                            baseline_dir=tmp_path / "b", label_cache=tmp_path / "l",
+                            work_cache=tmp_path / "w", lock=None, python="/venv/bin/python",
+                            label="5090")
+
+
+def test_a_missing_lock_script_means_no_lock_and_says_so(tmp_path, capsys):
+    p = parse_paths(["--lock", str(tmp_path / "nope.py")])
+    assert p.lock is None
+    out = capsys.readouterr().out
+    assert out.count("without the GPU lock") == 1 and "nope.py" in out
+
+
+def test_no_lock_leaves_the_command_unwrapped(tmp_path):
+    assert bench.locked(["x", "y"], None) == ["x", "y"]
+    p = cloud_paths(tmp_path)
+    cmd = bench.timed_command(bench.cli_command(p.out_root, 5, p.footage, p.python),
+                              tmp_path / "run.json", p)
+    assert cmd[0] == "/venv/bin/python" and cmd[2] == "--timed"
+    assert "py" not in cmd and "gpu_lock.py" not in " ".join(cmd)
+    cli = cmd[cmd.index("cli.py") - 1:]
+    assert cli[0] == "/venv/bin/python" and cli[2] == str(p.footage)
+    assert cli[cli.index("--workers") + 1] == "5"
+    v = bench.locked(bench.verify_command(Path("s.mp4"), Path("c.mp4"), Path("r.json"), 5,
+                                          p.python), p.lock)
+    assert v[:3] == ["/venv/bin/python", "-m", "faceblur.verify"]
+
+
+def test_a_given_lock_wraps_the_children(tmp_path):
+    lock = tmp_path / "lock.py"
+    p = cloud_paths(tmp_path, lock=lock)
+    cmd = bench.timed_command(["c"], tmp_path / "run.json", p)
+    assert str(lock) in cmd and cmd[cmd.index(str(lock)) + 1] == "--"
+    assert cmd[-1] == "c"
+
+
+def test_the_recall_child_gets_the_paths_through_its_environment(tmp_path):
+    p = cloud_paths(tmp_path)
+    cmd, env = bench.recall_command("branch", "a", p)
+    assert cmd == ["/venv/bin/python", "-m", "eval.bench_speed", "--recall-one", "branch", "a"]
+    assert env["FACEBLUR_EVAL_CACHE"] == str(p.work_cache)
+    assert env["BENCH_FOOTAGE"] == str(p.footage)
+    assert env["BENCH_OUT_ROOT"] == str(p.out_root)
+
+
+def test_the_step_functions_use_the_paths(tmp_path, monkeypatch):
+    p = cloud_paths(tmp_path)
+    p.footage.mkdir()
+    (p.footage / "a.mp4").write_bytes(b"")
+    p.baseline_dir.mkdir()
+    (p.baseline_dir / "cli.py").write_text("", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(bench.subprocess, "call",
+                        lambda cmd, **kw: calls.append((cmd, kw)) or 0)
+    bench.step_run("baseline", 5, p)
+    cmd, kw = calls[-1]
+    assert kw["cwd"] == p.baseline_dir and cmd[0] == "/venv/bin/python"
+    assert str(p.footage) in cmd and str(p.out_root / "baseline") in cmd
+    assert (p.out_root / "baseline" / "runs.json").is_file()
+    write_sidecar(p.out_root / "branch", "a")
+    calls.clear()
+    bench.step_verify(5, p)
+    cmd, kw = calls[-1]
+    assert kw["cwd"] == p.baseline_dir
+    assert str(p.footage / "a.mp4") in cmd and cmd[0] == "/venv/bin/python"
+    # The export is skipped when the baseline is there, git or not.
+    monkeypatch.setattr(bench.shutil, "which", lambda name: None)
+    bench.step_export(p)
+
+
+def test_the_export_says_so_when_it_needs_git_and_git_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="no git"):
+        bench.step_export(cloud_paths(tmp_path))
+
+
+def test_the_labels_are_copied_from_the_label_cache(tmp_path):
+    p = cloud_paths(tmp_path)
+    p.footage.mkdir()
+    (p.footage / "a.mp4").write_bytes(b"")
+    p.label_cache.mkdir()
+    for kind in ("consensus", "oracle", "hands"):
+        (p.label_cache / f"a.{kind}.json").write_text("{}", encoding="utf-8")
+    bench.copy_labels(p)
+    assert sorted(f.name for f in p.work_cache.iterdir()) == [
+        "a.consensus.json", "a.hands.json", "a.oracle.json"]
+    # The same folder for both: nothing to copy, nothing breaks.
+    same = cloud_paths(tmp_path, work_cache=p.label_cache)
+    bench.copy_labels(same)
+    assert len(list(p.label_cache.iterdir())) == 3
+
+
+def test_the_label_names_the_report_and_local_keeps_the_old_name(tmp_path):
+    assert bench.report_path("2026-10-16", "local", tmp_path) == tmp_path / "speed_2026-10-16.json"
+    assert bench.report_path("2026-10-16", "5090", tmp_path) == \
+        tmp_path / "speed_2026-10-16_5090.json"
+    assert bench.report_path("2026-10-16") == bench.BENCH_DIR / "speed_2026-10-16.json"
+
+
+def test_the_machine_object_without_nvidia_smi(monkeypatch):
+    def no_binary(*a, **kw):
+        raise FileNotFoundError("nvidia-smi")
+    monkeypatch.setattr(bench.subprocess, "run", no_binary)
+    m = bench.machine_info("5090", 5)
+    assert set(m) == {"label", "hostname", "platform", "python", "gpu", "onnxruntime",
+                      "workers"}
+    assert m["label"] == "5090" and m["workers"] == 5 and m["gpu"] is None
+    assert m["python"] == ".".join(map(str, sys.version_info[:3]))
+    assert m["onnxruntime"] is None or set(m["onnxruntime"]) == {"version", "provider"}
+    json.dumps(m)
+
+
+def test_the_report_carries_the_machine(tmp_path):
+    builds = {b: None for b in bench.BUILDS}
+    report = bench.assemble("2026-10-16", None, 5, STEMS, builds, {"label": "5090"})
+    assert report["machine"] == {"label": "5090"} and report["branch_commit"] is None

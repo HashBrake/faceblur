@@ -22,6 +22,26 @@ Every GPU-heavy or timed child goes through `gpu_lock.py`, so the sessions
 take turns and a timing is never taken with somebody else's job on the card.
 Outputs go to `bench_out/` and caches to this worktree's `eval/cache`; git
 ignores both, and `tools/`.
+
+Every machine-specific path is a flag whose default is this PC's: `--footage`,
+`--out-root`, `--baseline-dir`, `--label-cache` (where the consensus, oracle
+and hands labels are copied from), `--work-cache`, `--lock`, `--python` (the
+interpreter of every child), `--no-lock` (automatic when the lock script is
+missing) and `--commit` (the branch commit for the report, read from git when
+git is there). A `--label` other than `local` writes the report to
+`docs/bench/speed_<date>_<label>.json`, so a run elsewhere never overwrites
+this PC's.
+
+Running on the cloud VM, in the production image (no git, no `py`, no lock),
+with the checkout at `/home/stackops/w`, the footage in `w/footage`, the
+baseline tar unpacked into `w/tools/baseline` and the label JSON in
+`w/labels`:
+
+    docker run --rm --gpus all -v /home/stackops/w:/w -w /w -e PYTHONPATH=/w \\
+        --entrypoint python faceblur-cuda:3 eval/bench_speed.py \\
+        --footage /w/footage --out-root /w/bench_out --baseline-dir /w/tools/baseline \\
+        --label-cache /w/labels --work-cache /w/eval/cache --no-lock \\
+        --label 5090 --workers 5 --commit <branch hash>
 """
 from __future__ import annotations
 
@@ -30,11 +50,14 @@ import datetime
 import io
 import json
 import os
+import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -84,42 +107,88 @@ def branch_settings():
 SIDE_SETTINGS = {"baseline": baseline_settings, "branch": branch_settings}
 
 
+# ---------------------------------------------------------------- paths
+
+@dataclass(frozen=True)
+class Paths:
+    """Where this machine keeps things. The defaults are this PC's."""
+    footage: Path = FOOTAGE
+    out_root: Path = OUT
+    baseline_dir: Path = BASELINE_DIR
+    label_cache: Path = MAIN_CACHE
+    work_cache: Path = WORK_CACHE
+    lock: Path | None = GPU_LOCK      # None: children run without the lock
+    python: str = sys.executable
+    label: str = "local"
+
+
+def build_paths(args: argparse.Namespace) -> Paths:
+    """The `Paths` of the parsed flags; no lock when the lock script is missing."""
+    lock = None if args.no_lock else Path(args.lock)
+    if lock is not None and not lock.is_file():
+        print(f"lock: {lock} missing, children run without the GPU lock")
+        lock = None
+    return Paths(footage=Path(args.footage), out_root=Path(args.out_root),
+                 baseline_dir=Path(args.baseline_dir), label_cache=Path(args.label_cache),
+                 work_cache=Path(args.work_cache), lock=lock, python=args.python,
+                 label=args.label)
+
+
 # ---------------------------------------------------------------- commands
 
-def locked(cmd: list[str]) -> list[str]:
-    """Run `cmd` under the PC's single GPU lock."""
-    return ["py", "-3.12", str(GPU_LOCK), "--", *cmd]
+def locked(cmd: list[str], lock: Path | None = GPU_LOCK) -> list[str]:
+    """Run `cmd` under the machine's single GPU lock, or as it is without one."""
+    if lock is None:
+        return list(cmd)
+    launcher = ["py", "-3.12"] if os.name == "nt" else [sys.executable]
+    return [*launcher, str(lock), "--", *cmd]
 
 
-def build_dir(build: str) -> Path:
-    return BASELINE_DIR if build == "baseline" else REPO
+def build_dir(build: str, paths: Paths = Paths()) -> Path:
+    return paths.baseline_dir if build == "baseline" else REPO
 
 
 def build_out(build: str, out_root: Path = OUT) -> Path:
     return out_root / build
 
 
-def cli_command(out: Path, workers: int, footage: Path = FOOTAGE) -> list[str]:
+def cli_command(out: Path, workers: int, footage: Path = FOOTAGE,
+                python: str = sys.executable) -> list[str]:
     """The production command whose wall time is the gate. Run with cwd at the build."""
-    return [sys.executable, "cli.py", str(footage), "-o", str(out),
+    return [python, "cli.py", str(footage), "-o", str(out),
             "--workers", str(workers), "--quarantine", "--second-chance", "1",
             "--report", str(out / "report.json"), "--no-progress"]
 
 
-def timed_command(cmd: list[str], run_json: Path) -> list[str]:
+def timed_command(cmd: list[str], run_json: Path, paths: Paths = Paths()) -> list[str]:
     """`cmd` wrapped so the clock starts once the lock is held, not before.
 
     The wall of a run that waited 20 minutes for another session's job is not
     the wall of the build.
     """
-    return locked([sys.executable, str(Path(__file__).resolve()),
-                   "--timed", str(run_json), "--", *cmd])
+    return locked([paths.python, str(Path(__file__).resolve()),
+                   "--timed", str(run_json), "--", *cmd], paths.lock)
 
 
-def verify_command(source: Path, copy: Path, report: Path, workers: int) -> list[str]:
+def verify_command(source: Path, copy: Path, report: Path, workers: int,
+                   python: str = sys.executable) -> list[str]:
     """The reference check, run with cwd at the baseline export."""
-    return [sys.executable, "-m", "faceblur.verify", str(source), str(copy),
+    return [python, "-m", "faceblur.verify", str(source), str(copy),
             "--workers", str(workers), "--json", str(report)]
+
+
+def recall_command(side: str, stem: str, paths: Paths = Paths()) -> tuple[list[str], dict]:
+    """The `--recall-one` child and its environment.
+
+    The positional protocol stays `--recall-one SIDE STEM`; the footage, the
+    output root and the cache reach the child through the environment.
+    """
+    env = dict(os.environ, FACEBLUR_EVAL_CACHE=str(paths.work_cache),
+               BENCH_FOOTAGE=str(paths.footage), BENCH_OUT_ROOT=str(paths.out_root))
+    # As a module from the worktree root, so `eval/` itself is not on the path
+    # and its files cannot shadow a top-level import.
+    return locked([paths.python, "-m", "eval.bench_speed", "--recall-one", side, stem],
+                  paths.lock), env
 
 
 def nvidia_smi() -> str | None:
@@ -129,6 +198,50 @@ def nvidia_smi() -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout.strip() or None if r.returncode == 0 else None
+
+
+def gpu_name() -> str | None:
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version",
+                            "--format=csv,noheader"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() or None if r.returncode == 0 else None
+
+
+def onnxruntime_info() -> dict | None:
+    """The onnxruntime version and the provider `--device auto` would use first.
+
+    Asks onnxruntime which providers it has; no model is loaded.
+    """
+    try:
+        sys.path.insert(0, str(REPO))
+        import onnxruntime as ort
+        from faceblur.detect import providers_for
+        return {"version": ort.__version__, "provider": providers_for("auto")[0]}
+    except Exception:
+        return None
+
+
+def machine_info(label: str, workers: int) -> dict:
+    """What the report was measured on."""
+    return {"label": label, "hostname": socket.gethostname(),
+            "platform": platform.platform(), "python": platform.python_version(),
+            "gpu": gpu_name(), "onnxruntime": onnxruntime_info(), "workers": workers}
+
+
+def report_path(date: str, label: str = "local", bench_dir: Path = BENCH_DIR) -> Path:
+    """This PC's report keeps its name; another machine's carries its label."""
+    return bench_dir / (f"speed_{date}.json" if label == "local"
+                        else f"speed_{date}_{label}.json")
+
+
+def git_head() -> str | None:
+    """HEAD of the worktree, or None where there is no git (the cloud image)."""
+    try:
+        return git("rev-parse", "HEAD")
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def git(*args: str) -> str:
@@ -178,42 +291,46 @@ def load_json(path: Path) -> dict | None:
 
 # ---------------------------------------------------------------- steps
 
-def step_export() -> None:
+def step_export(paths: Paths = Paths()) -> None:
     """Extract the baseline commit, models included, unless it is already there."""
-    if (BASELINE_DIR / "cli.py").is_file():
-        print(f"export: {BASELINE_DIR} present")
+    baseline_dir = paths.baseline_dir
+    if (baseline_dir / "cli.py").is_file():
+        print(f"export: {baseline_dir} present")
         return
+    if shutil.which("git") is None:
+        raise SystemExit(f"export: {baseline_dir / 'cli.py'} is missing and there is no git "
+                         f"to export {BASELINE_COMMIT}; unpack the baseline there first")
     data = subprocess.run(["git", "archive", "--format=tar", BASELINE_COMMIT], cwd=REPO,
                           capture_output=True, check=True).stdout
-    BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+    baseline_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-        tar.extractall(BASELINE_DIR, filter="data")
-    (BASELINE_DIR / "COMMIT").write_text(git("rev-parse", BASELINE_COMMIT) + "\n",
+        tar.extractall(baseline_dir, filter="data")
+    (baseline_dir / "COMMIT").write_text(git("rev-parse", BASELINE_COMMIT) + "\n",
                                          encoding="utf-8")
-    print(f"export: {BASELINE_COMMIT} -> {BASELINE_DIR}")
+    print(f"export: {BASELINE_COMMIT} -> {baseline_dir}")
 
 
-def step_run(build: str, workers: int) -> None:
+def step_run(build: str, workers: int, paths: Paths = Paths()) -> None:
     """The production command for one build, until every file has a record.
 
     A re-run of the same command skips what is done, so a run killed halfway
     picks up where it stopped; its walls are kept in `runs.json`, one entry
     per attempt.
     """
-    out = build_out(build)
-    names = stems()
+    out = build_out(build, paths.out_root)
+    names = stems(paths.footage)
     todo = missing(out, names)
     if not todo:
         print(f"{build}: all {len(names)} records present")
         return
-    if build == "baseline" and not (BASELINE_DIR / "cli.py").is_file():
+    if build == "baseline" and not (paths.baseline_dir / "cli.py").is_file():
         raise SystemExit("baseline: run --only export first")
     out.mkdir(parents=True, exist_ok=True)
     run_json = out / "run.part.json"
     run_json.unlink(missing_ok=True)
     print(f"{build}: running {len(todo)} of {len(names)} files", flush=True)
-    code = subprocess.call(timed_command(cli_command(out, workers), run_json),
-                           cwd=build_dir(build))
+    code = subprocess.call(timed_command(cli_command(out, workers, paths.footage, paths.python),
+                                         run_json, paths), cwd=build_dir(build, paths))
     run = load_json(run_json) or {"exit_code": code}
     run["files_todo"] = todo
     runs_path = out / "runs.json"
@@ -226,11 +343,11 @@ def step_run(build: str, workers: int) -> None:
           f"{len(left)} files without a record", flush=True)
 
 
-def step_verify(workers: int) -> None:
+def step_verify(workers: int, paths: Paths = Paths()) -> None:
     """The baseline's verify on every copy of both builds; a missing build is skipped."""
     for build in BUILDS:
-        out = build_out(build)
-        for stem in stems():
+        out = build_out(build, paths.out_root)
+        for stem in stems(paths.footage):
             copy = copy_path(out, stem)
             if copy is None:
                 print(f"verify: {build} {stem}: no copy yet")
@@ -241,42 +358,48 @@ def step_verify(workers: int) -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
             print(f"verify: {build} {stem}", flush=True)
             # Exit 1 is the gate holding the copy back, which is expected here.
-            subprocess.call(locked(verify_command(FOOTAGE / f"{stem}.mp4", copy, dst, workers)),
-                            cwd=BASELINE_DIR)
+            subprocess.call(locked(verify_command(paths.footage / f"{stem}.mp4", copy, dst,
+                                                  workers, paths.python), paths.lock),
+                            cwd=paths.baseline_dir)
             if not dst.is_file():
                 print(f"verify: {build} {stem}: no report written", flush=True)
 
 
-def step_recall() -> None:
+def copy_labels(paths: Paths = Paths()) -> None:
+    """The small label files into the work cache, unless they are already there."""
+    work = paths.work_cache
+    work.mkdir(parents=True, exist_ok=True)
+    if Path(paths.label_cache).resolve() == Path(work).resolve():
+        return
+    for stem in stems(paths.footage):
+        for kind in ("consensus", "oracle", "hands"):
+            src, dst = paths.label_cache / f"{stem}.{kind}.json", work / f"{stem}.{kind}.json"
+            if src.is_file() and not dst.exists():
+                shutil.copyfile(src, dst)
+
+
+def step_recall(paths: Paths = Paths()) -> None:
     """The eval harness per side, from raw caches built in this worktree.
 
     The small label files are copied from the main checkout's cache; its raw
     caches are not, because they carry the fingerprint of `conf` 0.6 and
     would not be read.
     """
-    WORK_CACHE.mkdir(parents=True, exist_ok=True)
-    for stem in stems():
-        for kind in ("consensus", "oracle", "hands"):
-            src, dst = MAIN_CACHE / f"{stem}.{kind}.json", WORK_CACHE / f"{stem}.{kind}.json"
-            if src.is_file() and not dst.exists():
-                shutil.copyfile(src, dst)
-    env = dict(os.environ, FACEBLUR_EVAL_CACHE=str(WORK_CACHE))
+    copy_labels(paths)
     for side in BUILDS:
-        for stem in stems():
-            dst = OUT / "recall" / side / f"{stem}.json"
+        for stem in stems(paths.footage):
+            dst = paths.out_root / "recall" / side / f"{stem}.json"
             if recall_current(dst, SIDE_SETTINGS[side]().to_dict()):
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            if not (WORK_CACHE / f"{stem}.consensus.json").is_file():
+            if not (paths.work_cache / f"{stem}.consensus.json").is_file():
                 dst.write_text(json.dumps({"recall": None, "note": "no consensus labels",
                                            "settings": SIDE_SETTINGS[side]().to_dict()},
                                           indent=1), encoding="utf-8")
                 continue
             print(f"recall: {side} {stem}", flush=True)
-            # As a module from the worktree root, so `eval/` itself is not on
-            # the path and its files cannot shadow a top-level import.
-            subprocess.call(locked([sys.executable, "-m", "eval.bench_speed",
-                                    "--recall-one", side, stem]), cwd=REPO, env=env)
+            cmd, env = recall_command(side, stem, paths)
+            subprocess.call(cmd, cwd=REPO, env=env)
             if not dst.is_file():
                 print(f"recall: {side} {stem}: failed", flush=True)
 
@@ -307,7 +430,7 @@ def recall_one(side: str, stem: str) -> int:
     # eval/zone.py keeps its own CACHE_DIR; point it where the override points.
     zone.CACHE_DIR = common.CACHE_DIR
     settings = SIDE_SETTINGS[side]()
-    video = FOOTAGE / f"{stem}.mp4"
+    video = Path(os.environ.get("BENCH_FOOTAGE", FOOTAGE)) / f"{stem}.mp4"
     if zone.load_hands(video, settings) is None:
         print(f"  building the hands cache for {stem}", flush=True)
         zone.build_hands_cache(video, settings)
@@ -315,7 +438,7 @@ def recall_one(side: str, stem: str) -> int:
     r = evaluate(settings, cache, consensus, oracle, video)
     if r["zone_note"]:
         raise SystemExit(f"recall {side} {stem}: scored without the zone: {r['zone_note']}")
-    dst = OUT / "recall" / side / f"{stem}.json"
+    dst = Path(os.environ.get("BENCH_OUT_ROOT", OUT)) / "recall" / side / f"{stem}.json"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(r, indent=1), encoding="utf-8")
     print(f"  recall {r['recall']}", flush=True)
@@ -416,8 +539,8 @@ def build_entry(names: list[str], records: dict, verifies: dict, recalls: dict,
     }
 
 
-def assemble(date: str, branch_commit: str, workers: int, names: list[str],
-             builds: dict) -> dict:
+def assemble(date: str, branch_commit: str | None, workers: int, names: list[str],
+             builds: dict, machine: dict | None = None) -> dict:
     """The whole report. `builds` maps a build to its `build_entry`, or None."""
     gates = {s: gate(((builds.get("baseline") or {}).get("files") or {}).get(s),
                      ((builds.get("branch") or {}).get("files") or {}).get(s))
@@ -432,6 +555,7 @@ def assemble(date: str, branch_commit: str, workers: int, names: list[str],
         "builds": {b: builds.get(b) for b in BUILDS},
         "gates": gates,
         "all_pass": all_pass(gates),
+        "machine": machine,
     }
 
 
@@ -446,12 +570,14 @@ def collect(build: str, names: list[str], out_root: Path = OUT) -> dict | None:
     return build_entry(names, records, verifies, recalls, runs)
 
 
-def step_report(date: str, workers: int) -> Path:
-    names = stems()
-    builds = {b: collect(b, names) for b in BUILDS}
-    report = assemble(date, git("rev-parse", "HEAD"), workers, names, builds)
+def step_report(date: str, workers: int, paths: Paths = Paths(),
+                commit: str | None = None) -> Path:
+    names = stems(paths.footage)
+    builds = {b: collect(b, names, paths.out_root) for b in BUILDS}
+    report = assemble(date, commit or git_head(), workers, names, builds,
+                      machine_info(paths.label, workers))
     BENCH_DIR.mkdir(parents=True, exist_ok=True)
-    dst = BENCH_DIR / f"speed_{date}.json"
+    dst = report_path(date, paths.label)
     dst.write_text(json.dumps(report, indent=1), encoding="utf-8")
     print(f"report: {dst}  all_pass {report['all_pass']}")
     for s, g in report["gates"].items():
@@ -476,24 +602,39 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"comma separated steps out of {', '.join(STEPS)}")
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--footage", default=str(FOOTAGE), help="folder of the sample .mp4 files")
+    ap.add_argument("--out-root", default=str(OUT), help="where the copies and results go")
+    ap.add_argument("--baseline-dir", default=str(BASELINE_DIR),
+                    help=f"the {BASELINE_COMMIT} export; exported with git when cli.py is missing")
+    ap.add_argument("--label-cache", default=str(MAIN_CACHE),
+                    help="where the consensus, oracle and hands labels are copied from")
+    ap.add_argument("--work-cache", default=str(WORK_CACHE),
+                    help="the eval cache the recall children build and read")
+    ap.add_argument("--lock", default=str(GPU_LOCK), help="the GPU lock script")
+    ap.add_argument("--no-lock", action="store_true", help="run the children without the lock")
+    ap.add_argument("--python", default=sys.executable, help="the interpreter of every child")
+    ap.add_argument("--label", default="local",
+                    help="names the machine; other than local, the report is speed_<date>_<label>")
+    ap.add_argument("--commit", default=None, help="the branch commit; default git HEAD")
     args = ap.parse_args(argv)
     steps = [s.strip() for s in args.only.split(",") if s.strip()]
     unknown = [s for s in steps if s not in STEPS]
     if unknown:
         ap.error(f"unknown step {', '.join(unknown)}")
+    paths = build_paths(args)
     for step in STEPS:
         if step not in steps:
             continue
         if step == "export":
-            step_export()
+            step_export(paths)
         elif step in BUILDS:
-            step_run(step, args.workers)
+            step_run(step, args.workers, paths)
         elif step == "verify":
-            step_verify(args.workers)
+            step_verify(args.workers, paths)
         elif step == "recall":
-            step_recall()
+            step_recall(paths)
         elif step == "report":
-            step_report(args.date, args.workers)
+            step_report(args.date, args.workers, paths, args.commit)
     return 0
 
 
