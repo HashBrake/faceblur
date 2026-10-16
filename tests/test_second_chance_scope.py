@@ -178,6 +178,19 @@ def test_a_scoped_round_that_wrote_ranges_names_no_fallback(tmp_path, face_then_
     assert record.second_chance_scope_fallback is None
 
 
+def test_the_record_counts_the_frames_the_re_track_changed(tmp_path, face_then_wall,
+                                                           monkeypatch):
+    record, writes, _ = _run(face_then_wall, tmp_path / "changed.mp4", monkeypatch)
+    assert record.status == STATUS_DONE, record.error
+    assert 0 < record.second_chance_changed_frames <= record.second_chance_reencoded_frames
+    # The scope "all" does not compare masks, so it counts nothing.
+    whole, _, _ = _run(face_then_wall, tmp_path / "all.mp4", monkeypatch,
+                       second_chance_scope="all")
+    assert whole.status == STATUS_DONE, whole.error
+    assert whole.second_chance_rounds == 1
+    assert whole.second_chance_changed_frames == 0
+
+
 def test_the_scope_all_names_no_fallback(tmp_path, face_then_wall, monkeypatch):
     record, _, _ = _run(face_then_wall, tmp_path / "all.mp4", monkeypatch,
                         second_chance_scope="all")

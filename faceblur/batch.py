@@ -697,6 +697,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         changed = [False] * n
         for i in range(n):
             if _mask_key(previous[i]) != _mask_key(per_frame[i]):
+                record.second_chance_changed_frames += 1
                 a, b = max(0, i - margin), min(n, i + margin + 1)
                 changed[a:b] = [True] * (b - a)
         if all(changed):

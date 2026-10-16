@@ -171,6 +171,8 @@ class AuditRecord:
     # first round's reason: "all_changed", "reorder_delay", "probe_failed",
     # "no_copy_segment" or "join_failed". None otherwise.
     second_chance_scope_fallback: Optional[str] = None
+    # Frames whose masks differed between the round's write and its re-track, before the margin, summed over rounds.
+    second_chance_changed_frames: int = 0
     second_chance_seconds: float = 0.0
     # What the source carried besides pictures, package M1. The tag names
     # only: a value can hold a location or a device serial, and this record
