@@ -11,7 +11,10 @@ right one finishes. Then: check every video
 has a record, delivery, the blurred link, cleanup. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
-("Build sessions from the build plan"). "The production run"
+("Build sessions from the build plan"). The robustness build on branch
+`build/robustness` adds cut-off handling, a per-stage watchdog, queue mode and
+an off-by-default self-delete hook; see "Queue mode, the watchdog and
+self-delete". "The production run"
 below is the live work and is read first.
 `BUILD_PLAN_PROCESSING_AND_STORAGE.md` (2026-10-16) is the plan for after this run:
 better processing at lower compute, and HEVC/Parquet hot storage.
@@ -178,6 +181,72 @@ flavor, created 14:20; delete it with its volume when the pilot is done.
 To remove when the run is delivered: the eight VMs with their volumes, subnet
 `faceblur-1b`, security group `faceblur-ssh` (unused), SSH key
 `faceblur_greennode` in the console.
+
+### Queue mode, the watchdog and self-delete (2026-10-16)
+
+Built on branch `build/robustness` (commits `7ee961f` to `55cd756`), not yet
+merged into main or deployed in the image.
+
+**Cut-off sources.** A camera stopped mid-write leaves a last packet the
+demuxer lists and the decoder cannot make a frame of. Before, `run_video`
+failed with "decoded N frames, expected N+1", and the 13 such files of the
+first run needed `cloud/repair_tail.py`. Now `run_video` decodes the last GOP
+once, drops the undecodable tail, always encodes (never stream-copies) the
+final segment when frames were dropped, and the record says
+`source_frames_dropped`. `cli.py VIDEO -o OUT --quarantine` finishes and the
+copy has exactly the decodable frames. Test: `tests/test_truncated.py`.
+
+**The watchdog.** Every video run by `cli.py` now runs in a child process
+(`faceblur/watchdog.py`, `supervise`), because the 12 h stall was pure Python
+in the tracker and only ending the process stops that. The stages are the
+progress names `detecting`, `tracking` (new), `writing` and `checking`; a
+stage's limit is `max(watchdog_min_seconds, seconds_per_frame × frames)`,
+with a 600 s floor and 1.0, 0.05, 1.0 and 1.0 s per frame by default, so the
+2.5 h video would have been stopped after 3.75 h instead of 12 h. The floor
+also times the start-up before the first stage, named `starting`. A stopped
+video is cleaned up (`.part`, `.unchecked`, `faceblur_*`), retried once, then
+recorded failed with `stopped_in_stage` and an error naming the stage, and
+the batch goes on. The settings are `watchdog_seconds_per_frame` and
+`watchdog_min_seconds`; `--watchdog-scale F` multiplies every limit, and `0`
+turns the watchdog off and runs in-process as before. Pool workers end
+themselves when their parent is gone. The cost is one interpreter start per
+video. Tests: `tests/test_watchdog.py`.
+
+**Queue mode.** `cloud/stream_run.py` takes `QUEUE=1` instead of `SHARD=k/n`
+(SHARD stays the default, unchanged). Any number of machines each take the
+largest unfinished video nobody holds. The claim, `out/_claims/<video>.json`
+with `owner`, `time` and `lease`, is written, left `CLAIM_SETTLE` (2 s) and
+read back, because rclone has no atomic create on S3; a double claim needs a
+stall longer than the settle and costs a duplicate blur, never a lost video.
+It is renewed every `LEASE/3` (LEASE defaults to 1800 s) and deleted when the
+video is finished; a claim older than its lease belongs to a dead machine and
+the video is taken again. A machine with nothing left to claim leaves at
+once, and a video whose machine died after the others left is taken by the
+next start. A video that fails is not retried by the same process (another
+machine may try it once). Logs and the DONE marker go to
+`out/_logs/q-<owner>_*`. `cloud/vm_run.sh run` with `QUEUE=1` needs no SHARD
+and passes `LEASE`, `SELF_DELETE` and `GN_SERVER_NAME` through. The
+configuration is read in `main()` now, and `REMOTE`, `RCLONE`, `PIPELINE_CMD`
+and `CUDA_CHECK` exist so the tests can run it against a local directory with
+a fake pipeline. Tests: `tests/test_stream_run.py` (three concurrent workers,
+a killed worker, a failing video); they need rclone, found through `RCLONE`,
+`tools/**/rclone(.exe)` (gitignored, from downloads.rclone.org) or PATH, and
+skip without it.
+
+**Self-delete hook**, off by default. `SELF_DELETE=1` with
+`GN_SERVER_NAME=<this VM's name>` makes `stream_run.py` call `delete_server`
+from `cloud/gn_api.py` once the DONE marker and logs are uploaded, even when
+some videos failed. `gn_api.py` is a library too now (`token`, `servers`,
+`delete_server`, `ApiError`) and refuses any name outside `GN_NAME_PREFIX`
+(default `faceblur-`) before any request. Every failure of the hook is only
+logged, the log is uploaded again, and the machine stays. It needs
+`GN_CLIENT_ID`, `GN_CLIENT_SECRET` and `GN_PROJECT_ID` in the container's
+environment and `/root/gn_api.py` copied to the VM (`vm_run.sh run` mounts it
+when present); `vm_bootstrap.sh` deliberately strips the `GN_*` keys and
+copies only `stream_run.py`, so turning the hook on is the owner's choice and
+takes those two manual steps. Tests: `tests/test_gn_api.py` (a fake HTTP
+server), the self-delete cases in `tests/test_stream_run.py`, and
+`tests/test_vm_run.py` (`bash -n`).
 
 ### Build sessions from the build plan (2026-10-16)
 
