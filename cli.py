@@ -7,7 +7,10 @@
              [--min-track N] [--max-gap N] [--tail N] [--pad F]
              [--mode blur|pixelate|solid] [--workers N] [--tta 0|1|2]
              [--no-third] [--no-camera] [--check-output] [--check-stride N]
+             [--no-check-overlap] [--adaptive-stride | --no-adaptive-stride]
+             [--adaptive-stride-max N] [--encode-gop SECONDS]
              [--quarantine] [--quarantine-px N] [--second-chance N]
+             [--second-chance-scope changed|all] [--second-chance-margin SECONDS]
              [--no-hand-rule] [--watchdog-scale F]
              [--report PATH] [--no-progress] [--recursive]
 
@@ -286,6 +289,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stride", type=int, default=defaults.stride,
                         help="detect faces on every Nth frame (default: %(default)s). "
                              "1 is safest, higher is faster")
+    parser.add_argument("--adaptive-stride", action=argparse.BooleanOptionalAction,
+                        default=defaults.adaptive_stride,
+                        help="skip a frame's face detection after a quiet stretch with "
+                             "nothing seen and a still camera (default: %(default)s)")
+    parser.add_argument("--adaptive-stride-max", type=int,
+                        default=defaults.adaptive_stride_max,
+                        help="the adaptive stride skips at most this many frames minus "
+                             "one after each detected frame (default: %(default)s)")
     parser.add_argument("--no-verify", dest="verify", action="store_false",
                         help="skip the second detector's confirmation of each face")
     parser.add_argument("--tta", type=int, choices=[0, 1, 2], default=defaults.confirm_tta,
@@ -327,6 +338,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: %(default)s)")
     parser.add_argument("--no-copy", dest="copy_clean", action="store_false",
                         help="re-encode every frame instead of copying face free stretches")
+    parser.add_argument("--encode-gop", type=float, metavar="SECONDS",
+                        default=defaults.encode_gop_seconds,
+                        help="keyframe interval of the copy, which bounds what a second "
+                             "chance writes again (default: %(default)s)")
     parser.add_argument("--hwaccel", choices=["none", "cuda"], default=defaults.hwaccel,
                         help="hardware decode (default: %(default)s)")
     parser.add_argument("--check-output", dest="check_output", action="store_true",
@@ -335,6 +350,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "Costs a second detection pass")
     parser.add_argument("--check-stride", type=int, default=defaults.check_stride,
                         help="check every Nth frame of the copy (default: %(default)s)")
+    parser.add_argument("--no-check-overlap", dest="check_overlap", action="store_false",
+                        help="check the whole copy after it is joined instead of each "
+                             "piece while the next ones encode")
     parser.add_argument("--quarantine", action="store_true",
                         help="move a copy that still shows a face into a quarantine "
                              "folder instead of shipping it. Implies --check-output")
@@ -345,6 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="write the copy again with the faces the check found "
                              "put back in as detections, this many times "
                              "(default: %(default)s). Implies --check-output")
+    parser.add_argument("--second-chance-scope", choices=["changed", "all"],
+                        default=defaults.second_chance_scope,
+                        help="what a second chance writes again: only the stretches its "
+                             "masks changed, or the whole file (default: %(default)s)")
+    parser.add_argument("--second-chance-margin", type=float, metavar="SECONDS",
+                        default=defaults.second_chance_margin_seconds,
+                        help="seconds written again either side of a changed stretch "
+                             "(default: %(default)s)")
     parser.add_argument("--mask", default=",".join(defaults.mask),
                         help="what to hide, comma separated (default: %(default)s). "
                              + "; ".join(f"{k.name}: {k.summary}" for k in available_kinds())
@@ -407,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
             conf_weak=min(Settings.conf_weak, args.conf),
             det_sizes=parse_det_sizes(args.det_sizes),
             stride=args.stride,
+            adaptive_stride=args.adaptive_stride,
+            adaptive_stride_max=args.adaptive_stride_max,
             verify=args.verify,
             confirm_tta=args.tta,
             third_opinion=args.third_opinion,
@@ -421,13 +449,17 @@ def main(argv: list[str] | None = None) -> int:
             encoder=args.encoder,
             chunk_seconds=args.chunk_seconds,
             copy_clean=args.copy_clean,
+            encode_gop_seconds=args.encode_gop,
             hwaccel=args.hwaccel,
             zone=args.zone,
             check_output=args.check_output or args.quarantine or bool(args.second_chance),
             check_stride=args.check_stride,
+            check_overlap=args.check_overlap,
             quarantine=args.quarantine,
             quarantine_min_px=args.quarantine_px,
             second_chance=args.second_chance,
+            second_chance_scope=args.second_chance_scope,
+            second_chance_margin_seconds=args.second_chance_margin,
             hand_rule=args.hand_rule,
             watchdog_seconds_per_frame=tuple(
                 (stage, seconds * scale)

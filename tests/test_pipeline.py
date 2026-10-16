@@ -81,25 +81,19 @@ def test_cancel_stops_quickly_and_leaves_no_file(video_long, tmp_path):
     """Phase 1 verify: cancel stops within 2 seconds and leaves no output file."""
     dst = tmp_path / "out.mp4"
     cancel = threading.Event()
-    started = threading.Event()
-
-    def trip():
-        started.wait(10)
-        time.sleep(0.4)
-        cancel.set()
-
-    waker = threading.Thread(target=trip, daemon=True)
-    waker.start()
+    tripped = []
 
     def on_progress(stage, done, total):
-        started.set()
+        # Trip from a detect frame, not a clock, so the cancel always lands mid-pass.
+        if stage == "detecting" and done >= 10 and not cancel.is_set():
+            tripped.append(time.time())
+            cancel.set()
 
-    t0 = time.time()
     record = process_video(video_long, dst, FAST, on_progress=on_progress, cancel=cancel)
-    elapsed = time.time() - t0
+    elapsed = time.time() - tripped[0]
 
     assert record.status == STATUS_STOPPED
-    assert elapsed - 0.4 < 2.0, f"took {elapsed:.1f}s to stop"
+    assert elapsed < 2.0, f"took {elapsed:.1f}s to stop"
     assert not dst.exists()
     assert not sidecar_path(dst).exists()
 

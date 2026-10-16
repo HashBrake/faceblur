@@ -1,0 +1,725 @@
+{
+ "date": "2026-10-16",
+ "baseline_commit": "3eb0100",
+ "branch_commit": "40986aebfdfb83f7d971c62dc9c9fe28ae192703",
+ "workers": 5,
+ "command": "cli.py FOOTAGE -o OUT --workers 5 --quarantine --second-chance 1 --report OUT/report.json --no-progress",
+ "verify_code": "baseline 3eb0100",
+ "builds": {
+  "baseline": {
+   "settings": {
+    "mask": [
+     "face"
+    ],
+    "engine": "yunet",
+    "conf": 0.5,
+    "conf_weak": 0.4,
+    "det_sizes": [
+     1280,
+     1920
+    ],
+    "verify": true,
+    "verify_conf": 0.3,
+    "verify_iou": 0.3,
+    "confirm_on_crops": true,
+    "crop_size": 224,
+    "crop_scale": 4.0,
+    "confirm_tta": 2,
+    "verify_conf_view": 0.4,
+    "third_opinion": true,
+    "third_conf": 0.1,
+    "verify_conf_low": 0.25,
+    "conf_agree": 0.35,
+    "verify_conf_agree": 0.35,
+    "agree_max_px": 48,
+    "conf_weak_long": 0.3,
+    "established_after": 5,
+    "continue_after": 3,
+    "weak_run": 30,
+    "track_sure_conf": 0.5,
+    "tail_long": 4,
+    "stitch_gap": 45,
+    "stitch_slack": 8.0,
+    "gap_grow": 0.04,
+    "blur_shift": 8.0,
+    "verify_conf_sure": 0.3,
+    "mirror_agree": 0.2,
+    "max_face_frac": 0.15,
+    "grow_face_frac": 0.35,
+    "min_aspect": 0.4,
+    "max_aspect": 2.5,
+    "stride": 1,
+    "device": "auto",
+    "min_track": 2,
+    "max_gap": 5,
+    "tail": 2,
+    "tail_before": 6,
+    "tail_grow": 0.03,
+    "track_iou": 0.3,
+    "camera_comp": true,
+    "link_dist": 0.75,
+    "fast_shift": 10.0,
+    "max_gap_fast": 10,
+    "tail_before_max": 12,
+    "tail_trend": false,
+    "ellipse_w": 1.1,
+    "ellipse_h": 1.15,
+    "pad": 0.1,
+    "feather": 6.0,
+    "mode": "blur",
+    "strength": 6,
+    "crf": 12,
+    "preset": "fast",
+    "encoder": "auto",
+    "nvenc_cq": 16,
+    "mask_budget": 0.05,
+    "chunk_seconds": 15.0,
+    "copy_clean": true,
+    "min_copy_seconds": 2.0,
+    "encode_seconds": 5.0,
+    "nvenc_sessions": 6,
+    "hwaccel": "none",
+    "text_sizes": [
+     1920,
+     2560
+    ],
+    "text_thresh": 0.3,
+    "text_box_thresh": 0.6,
+    "text_unclip": 1.6,
+    "text_min_px": 12,
+    "text_max_frac": 0.3,
+    "text_nms": 0.5,
+    "text_min_run": 2,
+    "text_gap": 6,
+    "text_tail": 3,
+    "text_link_iou": 0.3,
+    "check_output": true,
+    "check_stride": 1,
+    "quarantine": true,
+    "quarantine_min_px": 24,
+    "second_chance": 1,
+    "second_chance_min_px": 16,
+    "hand_rule": true,
+    "hand_windows": [
+     384,
+     512
+    ],
+    "hand_conf": 0.4,
+    "hand_presence": 0.7,
+    "hand_cover": 0.5,
+    "hand_device": "auto",
+    "screen_labels": [
+     "tv",
+     "laptop",
+     "phone"
+    ],
+    "screen_conf": 0.5,
+    "screen_nms": 0.45,
+    "screen_pad": 0.06,
+    "screen_max_area": 0.12,
+    "screen_min_run": 3,
+    "screen_tail": 6,
+    "screen_gap": 12,
+    "screen_gate_min_px": 48,
+    "screen_gate_min_run": 3,
+    "zone": true,
+    "zone_window": 512,
+    "zone_stride": 1,
+    "zone_nms": 0.5,
+    "zone_top_frac": 0.15,
+    "zone_min_hand_px": 120,
+    "zone_edge_frac": 0.25,
+    "zone_scale": 1.5,
+    "zone_memory": 3.0,
+    "zone_gate_changed": 0.01,
+    "zone_cover": 0.5,
+    "zone_face_needs_hand": true,
+    "zone_face_scale": 1.6,
+    "zone_device": "auto",
+    "nms_detect": 0.35,
+    "nms_yunet": 0.3
+   },
+   "nvidia_smi_before": "2 MiB, 32607 MiB, 0 %",
+   "total_wall_seconds": 1166.45,
+   "runs": 1,
+   "files": {
+    "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+     "wall_seconds": 294.72,
+     "detect_seconds": 142.46,
+     "encode_seconds": 54.69,
+     "check_seconds": 89.83,
+     "second_chance_seconds": 70.83,
+     "second_chance_rounds": 1,
+     "frames": 2033,
+     "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 11,
+     "second_chance_seeds_kept": 1,
+     "record_residual_faces": 3,
+     "record_residual_by_size": {
+      "40+ px": 3,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 3,
+      "residual_by_size": {
+       "40+ px": 3,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 219,
+      "frames_checked": 2033
+     },
+     "recall": null,
+     "recall_by_size": null,
+     "exposed_40": null,
+     "exposed_24_40": null,
+     "continuity": null,
+     "masked_mean": null
+    },
+    "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+     "wall_seconds": 166.5,
+     "detect_seconds": 65.0,
+     "encode_seconds": 26.99,
+     "check_seconds": 70.71,
+     "second_chance_seconds": 49.01,
+     "second_chance_rounds": 1,
+     "frames": 984,
+     "quarantined": false,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 12,
+     "second_chance_seeds_kept": 5,
+     "record_residual_faces": 0,
+     "record_residual_by_size": {
+      "40+ px": 0,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 0,
+      "residual_by_size": {
+       "40+ px": 0,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 0,
+      "frames_checked": 984
+     },
+     "recall": 1.0,
+     "recall_by_size": {
+      "large 64+": [
+       24,
+       24
+      ],
+      "medium 32-63": [
+       28,
+       28
+      ],
+      "small <32": [
+       8,
+       8
+      ]
+     },
+     "exposed_40": 81,
+     "exposed_24_40": 55,
+     "continuity": 0.9879138202837625,
+     "masked_mean": 0.0056135538073038066
+    },
+    "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+     "wall_seconds": 255.43,
+     "detect_seconds": 96.34,
+     "encode_seconds": 39.32,
+     "check_seconds": 114.54,
+     "second_chance_seconds": 76.28,
+     "second_chance_rounds": 1,
+     "frames": 938,
+     "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 32,
+     "second_chance_seeds_kept": 5,
+     "record_residual_faces": 14,
+     "record_residual_by_size": {
+      "40+ px": 12,
+      "24-40 px": 0,
+      "under 24 px": 2
+     },
+     "verify": {
+      "residual_faces": 14,
+      "residual_by_size": {
+       "40+ px": 12,
+       "24-40 px": 0,
+       "under 24 px": 2
+      },
+      "residual_max_px": 172,
+      "frames_checked": 938
+     },
+     "recall": 0.9974747474747475,
+     "recall_by_size": {
+      "large 64+": [
+       89,
+       90
+      ],
+      "medium 32-63": [
+       96,
+       96
+      ],
+      "small <32": [
+       210,
+       210
+      ]
+     },
+     "exposed_40": 69,
+     "exposed_24_40": 110,
+     "continuity": 0.9886015197973603,
+     "masked_mean": 0.023973337765957448
+    },
+    "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+     "wall_seconds": 449.19,
+     "detect_seconds": 166.05,
+     "encode_seconds": 93.66,
+     "check_seconds": 167.24,
+     "second_chance_seconds": 131.91,
+     "second_chance_rounds": 1,
+     "frames": 3971,
+     "quarantined": true,
+     "overlap_check_seconds": null,
+     "second_chance_reencoded_frames": null,
+     "frames_skipped_adaptive": null,
+     "second_chance_seeds": 67,
+     "second_chance_seeds_kept": 45,
+     "record_residual_faces": 16,
+     "record_residual_by_size": {
+      "40+ px": 8,
+      "24-40 px": 3,
+      "under 24 px": 5
+     },
+     "verify": {
+      "residual_faces": 16,
+      "residual_by_size": {
+       "40+ px": 8,
+       "24-40 px": 3,
+       "under 24 px": 5
+      },
+      "residual_max_px": 145,
+      "frames_checked": 3971
+     },
+     "recall": 0.9958563535911602,
+     "recall_by_size": {
+      "large 64+": [
+       17,
+       18
+      ],
+      "medium 32-63": [
+       209,
+       210
+      ],
+      "small <32": [
+       495,
+       496
+      ]
+     },
+     "exposed_40": 404,
+     "exposed_24_40": 1151,
+     "continuity": 0.9329754521290458,
+     "masked_mean": 0.0070100925299574806
+    }
+   }
+  },
+  "branch": {
+   "settings": {
+    "mask": [
+     "face"
+    ],
+    "engine": "yunet",
+    "conf": 0.5,
+    "conf_weak": 0.4,
+    "det_sizes": [
+     1280,
+     1920
+    ],
+    "verify": true,
+    "verify_conf": 0.3,
+    "verify_iou": 0.3,
+    "confirm_on_crops": true,
+    "crop_size": 224,
+    "crop_scale": 4.0,
+    "confirm_tta": 2,
+    "verify_conf_view": 0.4,
+    "third_opinion": true,
+    "third_conf": 0.1,
+    "verify_conf_low": 0.25,
+    "conf_agree": 0.35,
+    "verify_conf_agree": 0.35,
+    "agree_max_px": 48,
+    "conf_weak_long": 0.3,
+    "established_after": 5,
+    "continue_after": 3,
+    "weak_run": 30,
+    "track_sure_conf": 0.5,
+    "tail_long": 4,
+    "stitch_gap": 45,
+    "stitch_slack": 8.0,
+    "gap_grow": 0.04,
+    "blur_shift": 8.0,
+    "verify_conf_sure": 0.3,
+    "mirror_agree": 0.2,
+    "max_face_frac": 0.15,
+    "grow_face_frac": 0.35,
+    "min_aspect": 0.4,
+    "max_aspect": 2.5,
+    "stride": 1,
+    "device": "auto",
+    "adaptive_stride": true,
+    "adaptive_stride_max": 2,
+    "adaptive_stride_shift": 4.0,
+    "adaptive_stride_quiet": 3,
+    "min_track": 2,
+    "max_gap": 5,
+    "tail": 2,
+    "tail_before": 6,
+    "tail_grow": 0.03,
+    "track_iou": 0.3,
+    "camera_comp": true,
+    "link_dist": 0.75,
+    "fast_shift": 10.0,
+    "max_gap_fast": 10,
+    "tail_before_max": 12,
+    "tail_trend": false,
+    "ellipse_w": 1.1,
+    "ellipse_h": 1.15,
+    "pad": 0.1,
+    "feather": 6.0,
+    "mode": "blur",
+    "strength": 6,
+    "crf": 12,
+    "preset": "fast",
+    "encoder": "auto",
+    "nvenc_cq": 16,
+    "mask_budget": 0.05,
+    "chunk_seconds": 15.0,
+    "copy_clean": true,
+    "min_copy_seconds": 2.0,
+    "encode_seconds": 5.0,
+    "encode_gop_seconds": 1.0,
+    "nvenc_sessions": 6,
+    "hwaccel": "none",
+    "text_sizes": [
+     1920,
+     2560
+    ],
+    "text_thresh": 0.3,
+    "text_box_thresh": 0.6,
+    "text_unclip": 1.6,
+    "text_min_px": 12,
+    "text_max_frac": 0.3,
+    "text_nms": 0.5,
+    "text_min_run": 2,
+    "text_gap": 6,
+    "text_tail": 3,
+    "text_link_iou": 0.3,
+    "check_output": true,
+    "check_stride": 1,
+    "check_overlap": true,
+    "quarantine": true,
+    "quarantine_min_px": 24,
+    "second_chance": 1,
+    "second_chance_min_px": 16,
+    "second_chance_scope": "changed",
+    "second_chance_margin_seconds": 0.5,
+    "hand_rule": true,
+    "hand_windows": [
+     384,
+     512
+    ],
+    "hand_conf": 0.4,
+    "hand_presence": 0.7,
+    "hand_cover": 0.5,
+    "hand_device": "auto",
+    "screen_labels": [
+     "tv",
+     "laptop",
+     "phone"
+    ],
+    "screen_conf": 0.5,
+    "screen_nms": 0.45,
+    "screen_pad": 0.06,
+    "screen_max_area": 0.12,
+    "screen_min_run": 3,
+    "screen_tail": 6,
+    "screen_gap": 12,
+    "screen_gate_min_px": 48,
+    "screen_gate_min_run": 3,
+    "zone": true,
+    "zone_window": 512,
+    "zone_stride": 1,
+    "zone_nms": 0.5,
+    "zone_top_frac": 0.15,
+    "zone_min_hand_px": 120,
+    "zone_edge_frac": 0.25,
+    "zone_scale": 1.5,
+    "zone_memory": 3.0,
+    "zone_gate_changed": 0.01,
+    "zone_cover": 0.5,
+    "zone_face_needs_hand": true,
+    "zone_face_scale": 1.6,
+    "zone_device": "auto",
+    "nms_detect": 0.35,
+    "nms_yunet": 0.3
+   },
+   "nvidia_smi_before": "2 MiB, 32607 MiB, 3 %",
+   "total_wall_seconds": 774.08,
+   "runs": 1,
+   "files": {
+    "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+     "wall_seconds": 156.83,
+     "detect_seconds": 80.74,
+     "encode_seconds": 62.98,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 18.14,
+     "second_chance_rounds": 1,
+     "frames": 2033,
+     "quarantined": true,
+     "overlap_check_seconds": 160.98,
+     "second_chance_reencoded_frames": 450,
+     "frames_skipped_adaptive": 10,
+     "second_chance_seeds": 10,
+     "second_chance_seeds_kept": 3,
+     "record_residual_faces": 3,
+     "record_residual_by_size": {
+      "40+ px": 2,
+      "24-40 px": 1,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 3,
+      "residual_by_size": {
+       "40+ px": 2,
+       "24-40 px": 1,
+       "under 24 px": 0
+      },
+      "residual_max_px": 132,
+      "frames_checked": 2033
+     },
+     "recall": null,
+     "recall_by_size": null,
+     "exposed_40": null,
+     "exposed_24_40": null,
+     "continuity": null,
+     "masked_mean": null
+    },
+    "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+     "wall_seconds": 99.24,
+     "detect_seconds": 57.3,
+     "encode_seconds": 37.08,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 14.27,
+     "second_chance_rounds": 1,
+     "frames": 984,
+     "quarantined": true,
+     "overlap_check_seconds": 85.93,
+     "second_chance_reencoded_frames": 444,
+     "frames_skipped_adaptive": 26,
+     "second_chance_seeds": 9,
+     "second_chance_seeds_kept": 5,
+     "record_residual_faces": 2,
+     "record_residual_by_size": {
+      "40+ px": 2,
+      "24-40 px": 0,
+      "under 24 px": 0
+     },
+     "verify": {
+      "residual_faces": 2,
+      "residual_by_size": {
+       "40+ px": 2,
+       "24-40 px": 0,
+       "under 24 px": 0
+      },
+      "residual_max_px": 42,
+      "frames_checked": 984
+     },
+     "recall": 1.0,
+     "recall_by_size": {
+      "large 64+": [
+       24,
+       24
+      ],
+      "medium 32-63": [
+       28,
+       28
+      ],
+      "small <32": [
+       8,
+       8
+      ]
+     },
+     "exposed_40": 81,
+     "exposed_24_40": 55,
+     "continuity": 0.9879138202837625,
+     "masked_mean": 0.0056135538073038066
+    },
+    "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+     "wall_seconds": 177.56,
+     "detect_seconds": 89.33,
+     "encode_seconds": 81.4,
+     "check_seconds": 0.0,
+     "second_chance_seconds": 42.74,
+     "second_chance_rounds": 1,
+     "frames": 938,
+     "quarantined": true,
+     "overlap_check_seconds": 182.29,
+     "second_chance_reencoded_frames": 938,
+     "frames_skipped_adaptive": 0,
+     "second_chance_seeds": 38,
+     "second_chance_seeds_kept": 5,
+     "record_residual_faces": 11,
+     "record_residual_by_size": {
+      "40+ px": 7,
+      "24-40 px": 1,
+      "under 24 px": 3
+     },
+     "verify": {
+      "residual_faces": 11,
+      "residual_by_size": {
+       "40+ px": 7,
+       "24-40 px": 1,
+       "under 24 px": 3
+      },
+      "residual_max_px": 164,
+      "frames_checked": 938
+     },
+     "recall": 0.9974747474747475,
+     "recall_by_size": {
+      "large 64+": [
+       89,
+       90
+      ],
+      "medium 32-63": [
+       96,
+       96
+      ],
+      "small <32": [
+       210,
+       210
+      ]
+     },
+     "exposed_40": 69,
+     "exposed_24_40": 110,
+     "continuity": 0.9886015197973603,
+     "masked_mean": 0.023973337765957448
+    },
+    "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+     "wall_seconds": 339.75,
+     "detect_seconds": 155.89,
+     "encode_seconds": 165.14,
+     "check_seconds": 0.01,
+     "second_chance_seconds": 80.59,
+     "second_chance_rounds": 1,
+     "frames": 3971,
+     "quarantined": true,
+     "overlap_check_seconds": 468.53,
+     "second_chance_reencoded_frames": 2880,
+     "frames_skipped_adaptive": 0,
+     "second_chance_seeds": 78,
+     "second_chance_seeds_kept": 51,
+     "record_residual_faces": 13,
+     "record_residual_by_size": {
+      "40+ px": 4,
+      "24-40 px": 5,
+      "under 24 px": 4
+     },
+     "verify": {
+      "residual_faces": 13,
+      "residual_by_size": {
+       "40+ px": 4,
+       "24-40 px": 5,
+       "under 24 px": 4
+      },
+      "residual_max_px": 105,
+      "frames_checked": 3971
+     },
+     "recall": 0.9958563535911602,
+     "recall_by_size": {
+      "large 64+": [
+       17,
+       18
+      ],
+      "medium 32-63": [
+       209,
+       210
+      ],
+      "small <32": [
+       495,
+       496
+      ]
+     },
+     "exposed_40": 404,
+     "exposed_24_40": 1151,
+     "continuity": 0.9329754521290458,
+     "masked_mean": 0.0070100925299574806
+    }
+   }
+  }
+ },
+ "gates": {
+  "ego_AZER76400FE_19700101_003939_camera_left_part0001": {
+   "wall_reduction": 0.4679,
+   "wall_ok": true,
+   "faces40_baseline": 3,
+   "faces40_branch": 2,
+   "faces40_ok": true,
+   "recall_baseline": null,
+   "recall_branch": null,
+   "recall_ok": null
+  },
+  "ego_AZER76400FE_19700101_004100_camera_left_part0001": {
+   "wall_reduction": 0.404,
+   "wall_ok": true,
+   "faces40_baseline": 0,
+   "faces40_branch": 2,
+   "faces40_ok": false,
+   "recall_baseline": 1.0,
+   "recall_branch": 1.0,
+   "recall_ok": true
+  },
+  "ego_AZER76400FE_19700101_004310_camera_left_part0001": {
+   "wall_reduction": 0.3049,
+   "wall_ok": true,
+   "faces40_baseline": 12,
+   "faces40_branch": 7,
+   "faces40_ok": true,
+   "recall_baseline": 0.9974747474747475,
+   "recall_branch": 0.9974747474747475,
+   "recall_ok": true
+  },
+  "ego_AZER76400FE_19700101_005035_camera_left_part0001": {
+   "wall_reduction": 0.2436,
+   "wall_ok": false,
+   "faces40_baseline": 8,
+   "faces40_branch": 4,
+   "faces40_ok": true,
+   "recall_baseline": 0.9958563535911602,
+   "recall_branch": 0.9958563535911602,
+   "recall_ok": true
+  }
+ },
+ "all_pass": false,
+ "machine": {
+  "label": "5090",
+  "hostname": "38a3c24eb2dc",
+  "platform": "Linux-5.15.0-179-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "gpu": "NVIDIA GeForce RTX 5090, 580.159.04",
+  "onnxruntime": {
+   "version": "1.24.4",
+   "provider": "CUDAExecutionProvider"
+  },
+  "workers": 5
+ }
+}

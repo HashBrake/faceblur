@@ -211,3 +211,82 @@ def test_the_watchdog_scale_multiplies_every_limit(batch, tmp_path, paths):
 def test_a_negative_watchdog_scale_reports_and_stops(batch, capsys):
     assert cli.main([str(batch), "--watchdog-scale", "-1", *FAST]) == 2
     assert "--watchdog-scale must be 0 or more" in capsys.readouterr().err
+def _settings_of_a_run(tmp_path, monkeypatch, *flags):
+    """The Settings main() hands to the run, without running anything."""
+    folder = tmp_path / "in"
+    folder.mkdir()
+    (folder / "a.mp4").write_bytes(b"")
+    seen = {}
+
+    def fake_run_serial(jobs, settings, reporter):
+        seen["settings"] = settings
+        return []
+
+    monkeypatch.setattr(cli, "run_serial", fake_run_serial)
+    # In this process, so that run_serial sees the settings (the watchdog,
+    # on by default, would hand the video to a child process instead).
+    assert cli.main([str(folder), "-o", str(tmp_path / "out"), "--workers", "1",
+                     "--no-progress", "--watchdog-scale", "0", *flags]) == 0
+    return seen["settings"]
+
+
+def test_the_new_switches_default_to_the_settings(tmp_path, monkeypatch):
+    defaults = cli.Settings()
+    args = cli.build_parser().parse_args(["x"])
+    assert args.second_chance_scope == defaults.second_chance_scope
+    assert args.second_chance_margin == defaults.second_chance_margin_seconds
+    assert args.check_overlap == defaults.check_overlap
+    assert args.adaptive_stride == defaults.adaptive_stride
+    assert args.adaptive_stride_max == defaults.adaptive_stride_max
+    assert args.encode_gop == defaults.encode_gop_seconds
+    settings = _settings_of_a_run(tmp_path, monkeypatch)
+    for name in ("second_chance_scope", "second_chance_margin_seconds", "check_overlap",
+                 "adaptive_stride", "adaptive_stride_max", "encode_gop_seconds"):
+        assert getattr(settings, name) == getattr(defaults, name)
+
+
+def test_the_new_switches_reach_the_settings_of_the_run(tmp_path, monkeypatch):
+    settings = _settings_of_a_run(
+        tmp_path, monkeypatch,
+        "--second-chance", "1", "--second-chance-scope", "all",
+        "--second-chance-margin", "1.25", "--no-check-overlap",
+        "--no-adaptive-stride", "--adaptive-stride-max", "3", "--encode-gop", "2.5")
+    assert settings.second_chance_scope == "all"
+    assert settings.second_chance_margin_seconds == 1.25
+    assert settings.check_overlap is False
+    assert settings.adaptive_stride is False
+    assert settings.adaptive_stride_max == 3
+    assert settings.encode_gop_seconds == 2.5
+    # The audit record's settings dict is this.
+    recorded = settings.to_dict()
+    assert recorded["second_chance_scope"] == "all"
+    assert recorded["second_chance_margin_seconds"] == 1.25
+    assert recorded["check_overlap"] is False
+    assert recorded["adaptive_stride"] is False
+    assert recorded["adaptive_stride_max"] == 3
+    assert recorded["encode_gop_seconds"] == 2.5
+
+
+def test_adaptive_stride_can_be_turned_on_explicitly():
+    args = cli.build_parser().parse_args(["x", "--adaptive-stride"])
+    assert args.adaptive_stride is True
+    args = cli.build_parser().parse_args(["x", "--no-adaptive-stride"])
+    assert args.adaptive_stride is False
+
+
+def test_an_unknown_second_chance_scope_is_rejected(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["x", "--second-chance-scope", "bogus"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_help_runs(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    for flag in ("--second-chance-scope", "--second-chance-margin", "--no-check-overlap",
+                 "--adaptive-stride", "--no-adaptive-stride", "--adaptive-stride-max",
+                 "--encode-gop"):
+        assert flag in out

@@ -65,14 +65,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from .detect import Detection
-from .redact import redact, region_for
-from .zone import alpha_for
+from .redact import _blur_reach, _zone_in, redact, region_for
 from .segments import decode_range, frame_times
 from .settings import Settings
 from .video import VideoError, probe
@@ -96,7 +98,45 @@ FLAT_DIFF = 4.0
 NOISE_SAMPLE = 4
 
 
-def covered_by_zone(det: Detection, zone_mask) -> float:
+@dataclass(frozen=True)
+class ZoneCrop:
+    """A zone's mask over the one box of the frame it can be set in.
+
+    The zone is a hand or two on a 1920x1080 frame, and its mask was drawn on
+    the whole frame three times a frame: 20.7 s of the check's CPU over 1968
+    frames in docs/bench/profile_2026-10-16.md. Everything outside `box` is
+    outside the zone, so nothing there needs drawing or reading.
+    """
+
+    mask: np.ndarray          # bool, the zone over `box`
+    box: tuple                # x0, y0, x1, y1 in frame pixels
+    shape: tuple              # the frame's height and width
+
+
+def zone_crop(shape: tuple[int, int], polygons) -> Optional[ZoneCrop]:
+    """`zone.alpha_for(shape, polygons, 0.0) >= 0.5` over the polygons' box.
+
+    The box is the polygons' corners plus the reach `redact._zone_in` allows
+    an anti aliased edge, clipped to the frame, and `_zone_in` draws each
+    polygon whole, so every level inside the box is the one the whole frame
+    would have. None when the box is empty: no polygon, or none in the frame.
+    """
+    if not polygons:
+        return None
+    h, w = shape
+    pts = np.concatenate([np.asarray(poly, np.float64).reshape(-1, 2) for poly in polygons])
+    reach = _blur_reach(0.0) + 2
+    x0 = max(0, int(np.floor(pts[:, 0].min())) - reach)
+    y0 = max(0, int(np.floor(pts[:, 1].min())) - reach)
+    x1 = min(w, int(np.ceil(pts[:, 0].max())) + reach + 1)
+    y1 = min(h, int(np.ceil(pts[:, 1].max())) + reach + 1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    box = (x0, y0, x1, y1)
+    return ZoneCrop(_zone_in(shape, box, polygons, 0.0) >= 0.5, box, (h, w))
+
+
+def covered_by_zone(det: Detection, zone: Optional[ZoneCrop]) -> float:
     """Share of a box that lies inside the handled zone, 0 to 1.
 
     A find inside the zone is not a miss. The rule says nothing handled is
@@ -105,19 +145,26 @@ def covered_by_zone(det: Detection, zone_mask) -> float:
     not call that a leak. It stays in the record marked with the coverage that
     decided it, the way a hand does, and stays out of every count the gate
     reads.
+
+    The share is of the box's part inside the frame; whatever of that lies
+    outside the zone's crop lies outside the zone.
     """
-    if zone_mask is None:
+    if zone is None:
         return 0.0
-    h, w = zone_mask.shape[:2]
+    h, w = zone.shape
     x0, y0 = max(0, int(det.x)), max(0, int(det.y))
     x1, y1 = min(w, int(det.x + det.w)), min(h, int(det.y + det.h))
     if x1 <= x0 or y1 <= y0:
         return 0.0
-    return float(zone_mask[y0:y1, x0:x1].mean())
+    bx0, by0, bx1, by1 = zone.box
+    cx0, cy0, cx1, cy1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+    inside = (int(zone.mask[cy0 - by0:cy1 - by0, cx0 - bx0:cx1 - bx0].sum())
+              if cx1 > cx0 and cy1 > cy0 else 0)
+    return inside / ((x1 - x0) * (y1 - y0))
 
 
 def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
-                 noise: float) -> tuple[float, int]:
+                 noise: float, zone: Optional[ZoneCrop] = None) -> tuple[float, int]:
     """(share of the zone's pixels that moved, pixels in the zone).
 
     A pixel counts as moved when it differs by more than the encoder's own
@@ -125,18 +172,33 @@ def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
     re-encoded and every pixel differs a little. Inside the zone nothing
     should have been touched at all, so this reads zero on a clean run and the
     gate holds the copy back when it does not.
+
+    `zone` is these polygons' `zone_crop` when the caller has drawn it already.
     """
-    mask = alpha_for(before.shape[:2], polygons, 0.0) >= 0.5
+    if zone is None:
+        zone = zone_crop(before.shape[:2], polygons)
+    if zone is None:
+        return 0.0, 0
+    mask = zone.mask
     total = int(mask.sum())
     if not total:
         return 0.0, 0
     # Only the rows and columns the zone touches: a pixel outside it never
     # counts, and the whole frame in float was a fifth of the check.
     rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
-    y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
-    diff = np.abs(before[y0:y1, x0:x1].astype(np.float32)
-                  - after[y0:y1, x0:x1].astype(np.float32)).mean(axis=2)
-    moved = ((diff > noise + FLAT_DIFF) & mask[y0:y1, x0:x1]).sum()
+    bx0, by0 = zone.box[:2]
+    y0, y1 = by0 + rows[0], by0 + rows[-1] + 1
+    x0, x1 = bx0 + cols[0], bx0 + cols[-1] + 1
+    # A pixel moved when the float32 mean of its three channel differences
+    # passed the floor. That mean is a channel sum over three, and the sum is
+    # an integer up to 765, so the same rule is a least sum, read off every
+    # mean there can be: the identical answer without the float32 frames,
+    # which took this from 13.5 to 7.7 ms on two hands at 1920x1080.
+    passes = np.flatnonzero(np.arange(766, dtype=np.float32) / np.float32(3) > noise + FLAT_DIFF)
+    if not passes.size:
+        return 0.0, total
+    sums = cv2.absdiff(before[y0:y1, x0:x1], after[y0:y1, x0:x1]).sum(axis=2, dtype=np.uint16)
+    moved = ((sums >= passes[0]) & mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]).sum()
     return float(moved) / total, total
 
 
@@ -284,10 +346,21 @@ def detection_from_row(row: dict) -> Detection:
 
 
 def residual_job(job: dict) -> dict:
-    """Detect on the copy's frames start to end and say what was never masked."""
+    """Detect on the copy's frames start to end and say what was never masked.
+
+    Rows always carry source frame numbers. `out` may be the whole copy or one
+    piece of it, written before the join: `out_start` is the piece's own index
+    of source frame `start` (the same frame when `out` is the whole copy),
+    because the join is a concat of the pieces without re-encoding and the
+    check reads the same pixels either way. A `copied` job is a stretch stream
+    copied from the source, which decodes to the source's pixels bit for bit,
+    so the source frame is both sides and the copy is not decoded at all.
+    `seconds` is the job's own time, for the record's `overlap_check_seconds`.
+    """
     from .batch import _bank, _hand_rule, _screens, _zone   # the worker's cached models
 
-    src, out = Path(job["src"]), Path(job["out"])
+    t0 = time.time()
+    src = Path(job["src"])
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     stride = max(1, job.get("stride", 1))
@@ -303,10 +376,19 @@ def residual_job(job: dict) -> dict:
     zone_rows: list[dict] = []
     found, hands, checked, in_zone = [], 0, 0, 0
     flat = {name: 0 for name in wanted}
+    # The flat boxes by frame as well as in total, so that a later check over
+    # part of the file can take a frame's count back out (`merge_checks`).
+    # Every other count here is either one per checked frame or one per row.
+    flat_frames: dict[int, dict[str, int]] = {}
     source_frames = decode_range(src, job["times"], start, end, job["info"], settings.hwaccel)
-    copy_frames = decode_range(out, job["out_times"], start, end, job["out_info"],
-                               settings.hwaccel)
-    for offset, (before, after) in enumerate(zip(source_frames, copy_frames)):
+    if job.get("copied"):
+        pairs = ((frame, frame) for frame in source_frames)
+    else:
+        out_start = job.get("out_start", start)
+        copy_frames = decode_range(Path(job["out"]), job["out_times"], out_start,
+                                   out_start + (end - start), job["out_info"], settings.hwaccel)
+        pairs = zip(source_frames, copy_frames)
+    for offset, (before, after) in enumerate(pairs):
         i = start + offset
         if i % stride:
             continue
@@ -314,6 +396,8 @@ def residual_job(job: dict) -> dict:
         faces = bank.detect(after) if bank is not None else []
         glass = screens.detect(after) if screens is not None else []
         zone_mask = face_zone = None
+        # The encoder's noise, once a frame and only when something reads it.
+        noise = None
         if settings.zone:
             # The zone is rebuilt from the source: hands are unmasked in both
             # and the source is sharper. Live polygons only; see the module
@@ -326,9 +410,9 @@ def residual_job(job: dict) -> dict:
             live = [polygon_for(hand, settings, before.shape[:2]) for hand in mine]
             quads = [tuple(hand.grown(settings.zone_face_scale).quad) for hand in mine]
             if live:
-                zone_mask = alpha_for(before.shape[:2], live, 0.0) >= 0.5
+                zone_mask = zone_crop(before.shape[:2], live)
                 # Faces are asked about the hands themselves, not the reach.
-                face_zone = ((alpha_for(before.shape[:2], quads, 0.0) >= 0.5)
+                face_zone = (zone_crop(before.shape[:2], quads)
                              if settings.zone_face_needs_hand and quads
                              else zone_mask)
                 # The gate measures where the promise is **absolute**, which
@@ -341,19 +425,23 @@ def residual_job(job: dict) -> dict:
                 # `masked_in_zone_prevented`. Section 17 says so.
                 strict = quads if settings.zone_face_needs_hand else live
                 if strict:
-                    moved, pixels = zone_changed(before, after, strict,
-                                                 frame_noise(before, after))
+                    noise = frame_noise(before, after)
+                    moved, pixels = zone_changed(before, after, strict, noise,
+                                                 face_zone if strict is quads else zone_mask)
                     if moved:
                         zone_rows.append({"frame": i, "changed": round(moved, 5),
                                           "zone_px": pixels})
         if not faces and not glass:
             continue
-        noise = frame_noise(before, after)
+        if noise is None:
+            noise = frame_noise(before, after)
         for det in faces:
             changed, would = applied(before, after, det, settings)
             call = classify(changed, would, noise)
             if call == "flat":
                 flat["face"] += 1
+                counts = flat_frames.setdefault(i, {})
+                counts["face"] = counts.get("face", 0) + 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
                 cover = covered_by_zone(det, face_zone)
@@ -388,6 +476,8 @@ def residual_job(job: dict) -> dict:
             call = classify(changed, would, noise)
             if call == "flat":
                 flat["screen"] += 1
+                counts = flat_frames.setdefault(i, {})
+                counts["screen"] = counts.get("screen", 0) + 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
                 # The label as well, so that a reader knows the detector said
@@ -399,29 +489,37 @@ def residual_job(job: dict) -> dict:
                     row["zone"] = round(cover, 3)
                     in_zone += 1
                 found.append(row)
-    return {"start": start, "end": end, "checked": checked,
-            "flat": sum(flat.values()), "flat_by_kind": flat,
+    return {"start": start, "end": end, "stride": stride, "checked": checked,
+            "flat": sum(flat.values()), "flat_by_kind": flat, "flat_frames": flat_frames,
             "hands": hands, "in_zone": in_zone, "found": found, "zone": zone_rows,
             "hand_models": {} if rule is None else rule.model_hashes,
-            "hand_compute": {} if rule is None else rule.compute}
+            "hand_compute": {} if rule is None else rule.compute,
+            "seconds": round(time.time() - t0, 3)}
 
 
 def plan_jobs(src: Path, out: Path, settings: Settings, chunk: int,
-              stride: int = 1, hands: Optional[dict] = None) -> list[dict]:
+              stride: int = 1, hands: Optional[dict] = None,
+              ranges: Optional[list] = None) -> list[dict]:
     """One job per frame range, with both files' timing resolved once.
 
     `hands` is every frame's confirmed hands from the detection pass, when it
     looked at every frame; a frame missing from it had none. A job that
-    carries them does not find the hands again (see `residual_job`)."""
+    carries them does not find the hands again (see `residual_job`).
+
+    `ranges`, [start, end) pairs, limits the jobs to those frames, chunked the
+    same way inside each. The scoped second chance re-checks only what it
+    re-encoded: every other frame is the first copy's, bit for bit."""
     info, out_info = probe(src), probe(out)
     times, out_times = frame_times(src), frame_times(out)
     n = min(len(times), len(out_times))
     if n == 0:
         raise VideoError("Could not read one of these videos.")
+    step = max(1, chunk)
+    spans = [(a, min(b, n)) for a, b in (ranges if ranges is not None else [(0, n)])]
     jobs = [{"src": str(src), "out": str(out), "settings": settings, "stride": stride,
              "info": info, "out_info": out_info, "times": times, "out_times": out_times,
-             "start": a, "end": min(b, n)}
-            for a, b in [(k, k + chunk) for k in range(0, n, max(1, chunk))]]
+             "start": k, "end": min(k + step, b)}
+            for a, b in spans for k in range(a, b, step)]
     if hands is not None:
         for job in jobs:
             job["hands"] = {i: hands[i] for i in range(job["start"], job["end"]) if i in hands}
@@ -521,8 +619,10 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     # that an auditor reads. Every count above is over every row either way.
     kept = of_kind(found, "face")[:200] + of_kind(found, "screen")[:200]
     kept.sort(key=lambda row: (row["frame"], -row["px"]))
+    # Frame breaks ties, so that results merged out of frame order
+    # (`merge_checks`) list the same rows as one pass in order would.
     zone_rows = sorted((row for r in results for row in (r.get("zone") or [])),
-                       key=lambda row: -row["changed"])
+                       key=lambda row: (-row["changed"], row["frame"]))
     over = [row for row in zone_rows if row["changed"] > settings.zone_gate_changed]
     return {"frames_checked": checked,
             "hand_models": models,
@@ -549,6 +649,40 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "zone_frames_over": len(over),
             "zone_list": over[:50],
             "residual_list": kept}
+
+
+def merge_checks(first: list[dict], again: list[dict], ranges: list) -> list[dict]:
+    """The first check's results with the frames in `ranges` taken out, and
+    the check of those frames in their place. `summarise` of the list is what
+    a check of the whole file would say.
+
+    Exact rather than close: frames outside the ranges were copied from the
+    copy the first check read, so its verdict on them stands, and every count
+    `summarise` adds up is per checked frame (`checked`), per row (`hands`,
+    `in_zone`, the rows themselves) or kept per frame for this (`flat_frames`).
+    """
+    def inside(i: int) -> bool:
+        return any(a <= i < b for a, b in ranges)
+
+    kept = []
+    for r in first:
+        stride = max(1, r.get("stride", 1))
+        found = [row for row in r["found"] if not inside(row["frame"])]
+        flat_frames = {i: c for i, c in (r.get("flat_frames") or {}).items() if not inside(i)}
+        flat_by_kind = {name: 0 for name in (r.get("flat_by_kind") or {})}
+        for counts in flat_frames.values():
+            for name, count in counts.items():
+                flat_by_kind[name] = flat_by_kind.get(name, 0) + count
+        kept.append({**r,
+                     "checked": sum(1 for i in range(r["start"], r["end"])
+                                    if i % stride == 0 and not inside(i)),
+                     "flat": sum(flat_by_kind.values()), "flat_by_kind": flat_by_kind,
+                     "flat_frames": flat_frames,
+                     "hands": sum(1 for row in found if "hand" in row),
+                     "in_zone": sum(1 for row in found if "zone" in row),
+                     "found": found,
+                     "zone": [row for row in (r.get("zone") or []) if not inside(row["frame"])]})
+    return kept + list(again)
 
 
 def second_chance_seeds(report: dict, settings: Settings) -> dict:
@@ -617,15 +751,26 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
 
 def check(src: Path, out: Path, settings: Optional[Settings] = None, stride: int = 1,
           submit=None, workers: int = 1, chunk: int = 300,
-          hands: Optional[dict] = None) -> dict:
+          hands: Optional[dict] = None, ranges: Optional[list] = None,
+          results: Optional[list] = None, done: Optional[list] = None) -> dict:
     """Run the whole check. `submit` maps jobs the way batch.run_video does.
-    `hands` as in `plan_jobs`."""
+    `hands` and `ranges` as in `plan_jobs`. `results`, when given, receives
+    the per job results, which `merge_checks` needs later. `done` is per job
+    results already in hand for every frame the check would read, the pieces
+    batch.run_video checked while it wrote them: nothing is decoded or
+    detected again, they are only summed."""
     from .batch import serial_submit
 
     settings = settings or Settings()
     submit = submit or serial_submit
-    jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands)
-    return summarise(list(submit(residual_job, jobs, workers)), settings)
+    if done is not None:
+        got = list(done)
+    else:
+        jobs = plan_jobs(Path(src), Path(out), settings, chunk, stride, hands, ranges)
+        got = list(submit(residual_job, jobs, workers))
+    if results is not None:
+        results.extend(got)
+    return summarise(got, settings)
 
 
 def describe(report: dict, settings: Optional[Settings] = None) -> str:

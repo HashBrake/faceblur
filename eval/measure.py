@@ -41,18 +41,40 @@ from eval.common import (CACHE_DIR, REFERENCE, build_cache, det_from_dict,
 from faceblur.detect import confirmation, filter_candidates, iou, weak_candidates
 from faceblur.pipeline import tracker_for
 from faceblur.redact import alpha_with_zone
+from faceblur.batch import _chunks
 from faceblur.settings import Settings
+from faceblur.stride import AdaptiveStride, shift_px
 
 
-def tracked(cache: dict, settings: Settings):
+def tracked(cache: dict, settings: Settings, fps: float = 30.0):
+    """The masks the tracker draws from the cache's raw detections.
+
+    With `adaptive_stride` on, the policy production's `detect_job` applies
+    is replayed here: chunk by chunk with run_video's chunk length (`fps`,
+    30 for the Ego footage, since the cache does not hold it), a fresh policy
+    per chunk, fed the cache's per-frame camera shifts, and the frames it
+    skips get empty candidate lists. The cache measured the shift into a
+    chunk's first frame where production starts it at zero; that frame is
+    always detected, so the choice is the same.
+    """
     n = max(cache["frames"]) + 1
     shape = tuple(cache["shape"])
     have = [i in cache["frames"] and i % settings.stride == 0 for i in range(n)]
-    per = [filter_candidates(cache["frames"][i], settings, shape) if have[i] else []
-           for i in range(n)]
-    weak = [weak_candidates(cache["frames"][i], settings, shape) if have[i] else []
-            for i in range(n)]
     shifts = shifts_list(cache, n) if settings.camera_comp else None
+    per: list = [[] for _ in range(n)]
+    weak: list = [[] for _ in range(n)]
+    # The same expression as run_video's, and the same ranges.
+    chunk = max(1, int(round(settings.chunk_seconds * fps))) if settings.chunk_seconds else n
+    for a, b in _chunks(n, chunk):
+        adaptive = AdaptiveStride(settings)
+        for i in range(a, b):
+            if not have[i]:
+                continue
+            if adaptive.skip(shift_px(shifts[i] if shifts is not None else None)):
+                continue
+            per[i] = filter_candidates(cache["frames"][i], settings, shape)
+            weak[i] = weak_candidates(cache["frames"][i], settings, shape)
+            adaptive.saw(per[i], weak[i])
     return tracker_for(settings).run(per, weak, shifts, shape)
 
 

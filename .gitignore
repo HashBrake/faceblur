@@ -49,5 +49,9 @@ cloud/mano/
 # The orchestrator's session files. A hook in there must never reach main.
 .claude/
 
-# Downloaded binaries such as rclone, fetched per machine, never committed.
+# Downloaded binaries such as rclone, fetched per machine, never committed;
+# also the speed benchmark's exported baseline build.
 tools/
+
+# Speed benchmark: both builds' outputs
+bench_out/

@@ -15,6 +15,7 @@ ENCODERS = ("auto", "nvenc", "x264")
 MODES = ("blur", "pixelate", "solid")
 # The progress stage names, which are also the stages the watchdog times.
 WATCHDOG_STAGES = ("detecting", "tracking", "writing", "checking")
+SECOND_CHANCE_SCOPES = ("changed", "all")
 
 # Video extensions the batch walker treats as input.
 VIDEO_EXT = frozenset(
@@ -284,6 +285,23 @@ class Settings:
     min_aspect: float = 0.4
     max_aspect: float = 2.5
     stride: int = 1
+    # Adaptive stride (faceblur/stride.py): face detection skips a frame when
+    # the last adaptive_stride_quiet detected frames had no strong and no weak
+    # candidate and the camera moved less than adaptive_stride_shift source
+    # pixels into the frame. On the sample, 438 of 984 frames had no detection
+    # at all, and each frame's face detection costs about 71 ms of GPU-bound
+    # work at 4 workers (docs/bench/profile_2026-10-16.md). The zone and the
+    # camera shift still run on every frame. The T09 benchmark decides whether
+    # the default stays True.
+    adaptive_stride: bool = True
+    # Up to adaptive_stride_max - 1 frames skipped after each detected one:
+    # 2 means never two skips in a row; 1 means never skip.
+    adaptive_stride_max: int = 2
+    # Below fast_shift, where the tracker starts allowing longer gaps: a
+    # moving camera brings new faces in, so it is never skipped through.
+    adaptive_stride_shift: float = 4.0
+    # Consecutive detected frames with nothing in them before the first skip.
+    adaptive_stride_quiet: int = 3
     # auto uses the GPU when onnxruntime can see one (DirectML on Windows,
     # CUDA elsewhere) and falls back to the CPU.
     device: str = "auto"
@@ -385,6 +403,13 @@ class Settings:
     # Masked stretches are cut at keyframes into pieces of about this length,
     # so several workers encode them at once.
     encode_seconds: float = 5.0
+    # A keyframe every this many seconds inside each encoded piece, with no
+    # extra ones at scene cuts. The scoped second chance cuts the first copy
+    # at its keyframes, and without a set length NVENC put one only at each
+    # piece's start: on the 004100 sample 11 seeds became 684 re-encoded
+    # frames of 984 and the round saved nothing (DECISIONS D18). One second
+    # is the cadence the camera files already have.
+    encode_gop_seconds: float = 1.0
     # Concurrent NVENC encodes. GeForce drivers from 2024 allow 8; 6 is safe.
     nvenc_sessions: int = 6
     # ffmpeg hardware decode: none or cuda. Measured equal to the CPU on a
@@ -438,6 +463,13 @@ class Settings:
     # default and worth turning on for anything that leaves the machine.
     check_output: bool = False
     check_stride: int = 1
+    # Check each encoded piece as soon as it is written, on the same pool,
+    # while the next pieces encode, rather than the whole copy after the join.
+    # The encode is CPU work and the check is GPU work, and run one after the
+    # other the GPU idled through the whole encode, 39 to 173 s a file
+    # (docs/bench/profile_2026-10-16.md). Same pixels, same answer: the join
+    # is a concat of the pieces without re-encoding. Off is the old order.
+    check_overlap: bool = True
     # With this on, an output that still shows a face of quarantine_min_px or
     # more is moved into a quarantine folder beside it instead of shipping.
     # Implies check_output.
@@ -457,6 +489,19 @@ class Settings:
     # as likely to be a pattern as a face and the mask it would drag along is
     # larger than the thing it covers.
     second_chance_min_px: int = 16
+    # What a round writes and checks again. "all" is the whole file from the
+    # source. "changed" is only the stretches whose masks the round changed,
+    # with `second_chance_margin_seconds` either side, out to the first
+    # copy's keyframes; the rest is stream copied from the first copy and
+    # keeps the first check's verdict. The scope is a diff of the masks, not
+    # of the seeds, because a seed moves masks far from its own frame through
+    # stitching and gap filling (DECISIONS D06). The round was a third of the
+    # wall on every sample file, docs/bench/profile_2026-10-16.md. Half a
+    # second of margin: with a keyframe every second in the first copy
+    # (`encode_gop_seconds`), the snap out to its keyframes adds up to a
+    # second more on each side anyway (DECISIONS D18).
+    second_chance_scope: str = "changed"
+    second_chance_margin_seconds: float = 0.5
     # The check runs the same face detectors that produced the copy, and they
     # call the wearer's hand a face. The pipeline keeps hands out of the mask
     # with track-level rules; a check that reads one frame at a time cannot,
@@ -559,6 +604,11 @@ class Settings:
                                 f"{self.check_stride}")
         if self.second_chance_min_px < 0:
             raise SettingsError("second_chance_min_px must be 0 or more")
+        if self.second_chance_scope not in SECOND_CHANCE_SCOPES:
+            raise SettingsError(f"second_chance_scope must be one of {SECOND_CHANCE_SCOPES}, "
+                                f"got {self.second_chance_scope!r}")
+        if self.second_chance_margin_seconds < 0:
+            raise SettingsError("second_chance_margin_seconds must be 0 or more")
         if not self.text_sizes or any(s < 64 for s in self.text_sizes):
             raise SettingsError(f"every text size must be at least 64, got {self.text_sizes}")
         for name in ("text_thresh", "text_box_thresh", "text_nms", "text_link_iou"):
@@ -705,6 +755,20 @@ class Settings:
             raise SettingsError(f"max_face_frac must be in (0, 1], got {self.max_face_frac}")
         if self.stride < 1:
             raise SettingsError(f"stride must be at least 1, got {self.stride}")
+        if self.adaptive_stride_max < 1:
+            raise SettingsError("adaptive_stride_max must be at least 1, got "
+                                f"{self.adaptive_stride_max}")
+        if self.adaptive_stride_quiet < 1:
+            raise SettingsError("adaptive_stride_quiet must be at least 1, got "
+                                f"{self.adaptive_stride_quiet}")
+        if self.adaptive_stride_shift < 0:
+            raise SettingsError("adaptive_stride_shift must be 0 or more, got "
+                                f"{self.adaptive_stride_shift}")
+        if self.fast_shift > 0 and self.adaptive_stride_shift >= self.fast_shift:
+            # Skipping while the tracker already treats the camera as fast
+            # would skip the frames it expects the detectors to miss.
+            raise SettingsError("adaptive_stride_shift must be below fast_shift, got "
+                                f"{self.adaptive_stride_shift} and {self.fast_shift}")
         if self.min_track < 1:
             raise SettingsError(f"min_track must be at least 1, got {self.min_track}")
         if self.max_gap < 0 or self.tail < 0 or self.tail_before < 0 or self.tail_grow < 0:
@@ -713,6 +777,8 @@ class Settings:
             raise SettingsError(f"hwaccel must be none or cuda, got {self.hwaccel!r}")
         if self.encode_seconds < 0 or self.nvenc_sessions < 1:
             raise SettingsError("encode_seconds must be 0 or more and nvenc_sessions at least 1")
+        if self.encode_gop_seconds <= 0:
+            raise SettingsError(f"encode_gop_seconds must be above 0, got {self.encode_gop_seconds}")
         if self.ellipse_w <= 0 or self.ellipse_h <= 0:
             raise SettingsError("ellipse_w and ellipse_h must be above 0")
         if self.pad < 0:
@@ -748,18 +814,21 @@ class Settings:
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
+            "adaptive_stride", "adaptive_stride_max", "adaptive_stride_shift",
+            "adaptive_stride_quiet",
             "min_track", "max_gap", "tail", "tail_before", "tail_grow", "track_iou",
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
             "tail_trend",
             "ellipse_w", "ellipse_h", "pad", "feather",
             "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
-            "nvenc_sessions", "hwaccel",
+            "encode_gop_seconds", "nvenc_sessions", "hwaccel",
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
-            "check_output", "check_stride", "quarantine", "quarantine_min_px",
+            "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
+            "second_chance_scope", "second_chance_margin_seconds",
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
             "hand_device",
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",

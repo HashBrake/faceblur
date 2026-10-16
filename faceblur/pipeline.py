@@ -23,6 +23,7 @@ from .detect import Detection, DetectorBank, filter_candidates, weak_candidates
 from .motion import downscale, estimate_shift
 from .redact import masked_shares, redact
 from .settings import Settings
+from .stride import AdaptiveStride, shift_px
 from .track import Track, Tracker
 from .video import Encoder, VideoError, VideoInfo, probe, read_frames
 
@@ -49,6 +50,10 @@ class AuditRecord:
     fps: float = 0.0
     # Detection and tracking
     frames_with_detection: int = 0
+    # Frames face detection skipped under the adaptive stride (stride.py):
+    # quiet, still stretches. Their candidates are empty, as off the plain
+    # stride, and frames_with_detection counts only detected frames.
+    frames_skipped_adaptive: int = 0
     detections: int = 0
     verified_detections: int = 0
     tracks: int = 0
@@ -142,7 +147,14 @@ class AuditRecord:
     # shipped. See faceblur.verify.held_for.
     held_back_for: list = field(default_factory=list)
     quarantined: bool = False
+    # With `check_overlap` the pieces are checked while the copy is still
+    # being written, so the check's wall is shared with `encode_seconds`.
+    # `check_seconds` is then only the check work left after the join (the
+    # summary, and a whole-copy check if one still had to run), and
+    # `overlap_check_seconds` is the sum of the piece checks' own durations,
+    # which is how much check work the write hid. Without overlap it is 0.
     check_seconds: float = 0.0
+    overlap_check_seconds: float = 0.0
     # The second chance, package F1. Every count above is the last round's,
     # so these say what the first pass had and what the extra rounds did.
     # Zero everywhere means no round ran, which is the default.
@@ -153,6 +165,19 @@ class AuditRecord:
     # Seeds no track picked up, masked on their own frame instead. See the
     # comment in batch.run_video: a seed is evidence, not a stray detection.
     second_chance_seeds_kept: int = 0
+    # Frames the rounds encoded again, over all rounds. With the scope
+    # "changed" the rest came from the first copy, and `frames_copied` keeps
+    # meaning frames copied from the source, in the first write.
+    second_chance_reencoded_frames: int = 0
+    # The [start, end) frame ranges those were, over all rounds. Empty when
+    # a round wrote the whole file from the source (scope "all").
+    second_chance_ranges: list = field(default_factory=list)
+    # Why a round under the scope "changed" wrote the whole file anyway, the
+    # first round's reason: "all_changed", "reorder_delay", "probe_failed",
+    # "no_copy_segment" or "join_failed". None otherwise.
+    second_chance_scope_fallback: Optional[str] = None
+    # Frames whose masks differed between the round's write and its re-track, before the margin, summed over rounds.
+    second_chance_changed_frames: int = 0
     second_chance_seconds: float = 0.0
     # What the source carried besides pictures, package M1. The tag names
     # only: a value can hold a location or a device serial, and this record
@@ -180,6 +205,7 @@ class Plan:
     verified: int
     detect_seconds: float
     stopped: bool = False
+    skipped_adaptive: int = 0     # stride frames the adaptive stride skipped
 
 
 def sidecar_path(dst: Path) -> Path:
@@ -230,6 +256,9 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
     verified = 0
     prev_small = None
     shape = None
+    # One policy for the whole pass: the single pass is one video in one
+    # process, the equivalent of batch.detect_job's one policy per chunk.
+    adaptive = AdaptiveStride(settings)
     for index, frame in enumerate(read_frames(src)):
         if _cancelled(cancel):
             return Plan(info, [], [], 0, 0, 0, time.time() - t0, stopped=True)
@@ -238,7 +267,12 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
             small = downscale(frame)
             shifts.append(estimate_shift(prev_small, small, max(shape)))
             prev_small = small
-        if index % settings.stride == 0:
+        # Without camera_comp there is no shift, which counts as moving.
+        on_stride = index % settings.stride == 0
+        if on_stride and adaptive.skip(shift_px(shifts[-1] if settings.camera_comp else None)):
+            # Empty, as a frame off the plain stride is.
+            on_stride = False
+        if on_stride:
             if raw_cache is not None and index in raw_cache:
                 raw = raw_cache[index]
             else:
@@ -248,6 +282,7 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
             last = filter_candidates(raw, settings, frame.shape[:2])
             detected.append(last)
             weak.append(weak_candidates(raw, settings, frame.shape[:2]))
+            adaptive.saw(last, weak[-1])
             verified += sum(1 for d in last if d.verified)
         else:
             detected.append([])
@@ -262,7 +297,8 @@ def plan(src: Path, settings: Settings, bank: DetectorBank,
     return Plan(info, per_frame, tracks,
                 raw_hits=sum(1 for f in detected if f),
                 raw_boxes=sum(len(f) for f in detected),
-                verified=verified, detect_seconds=time.time() - t0)
+                verified=verified, detect_seconds=time.time() - t0,
+                skipped_adaptive=adaptive.count)
 
 
 def process_video(
@@ -308,6 +344,7 @@ def process_video(
     record.resolution = f"{p.info.width}x{p.info.height}"
     record.fps = round(p.info.fps, 3)
     record.frames_with_detection = p.raw_hits
+    record.frames_skipped_adaptive = p.skipped_adaptive
     record.detections = p.raw_boxes
     record.verified_detections = p.verified
     record.tracks = len(p.tracks)
