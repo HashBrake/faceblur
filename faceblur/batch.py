@@ -36,6 +36,7 @@ from .redact import build_alpha, masked_shares, redact
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
+from .stride import AdaptiveStride, shift_px
 from .verify import (check, held_for, merge_checks, residual_job, second_chance_seeds,
                      summarise)
 from .video import VideoError, VideoInfo, part_path, probe, unchecked_path
@@ -244,6 +245,9 @@ def detect_job(job: dict) -> dict:
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
+    # Fresh per job: the policy's state never crosses a chunk, so the first
+    # frame of every chunk is detected.
+    adaptive = AdaptiveStride(settings)
     for offset, frame in enumerate(decode_range(src, times, start, end, info, settings.hwaccel)):
         i = start + offset
         if progress is not None and offset % 5 == 0:
@@ -266,9 +270,15 @@ def detect_job(job: dict) -> dict:
             hits = screens.detect(frame)
             if hits:
                 found_screens[i] = hits
+        # Without camera_comp there is no shift, which counts as moving.
+        if adaptive.skip(shift_px(shifts.get(i))):
+            # Empty, as a frame off the plain stride is (and the tracker
+            # reads a missing frame as empty).
+            continue
         raw = bank.detect_raw(frame)
         strong[i] = filter_candidates(raw, settings, shape)
         weak[i] = weak_candidates(raw, settings, shape)
+        adaptive.saw(strong[i], weak[i])
     compute = dict(bank.compute)
     hashes = dict(bank.model_hashes)
     if screens is not None:
@@ -279,6 +289,7 @@ def detect_job(job: dict) -> dict:
         hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
             "screens": found_screens, "hands": found_hands,
+            "skipped_adaptive": adaptive.count,
             "compute": compute, "hashes": hashes}
 
 
@@ -502,6 +513,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             shifts[i] = sh
         screens_found.update(result.get("screens") or {})
         hands_found.update(result.get("hands") or {})
+        record.frames_skipped_adaptive += result.get("skipped_adaptive", 0)
         compute, hashes = result["compute"], result["hashes"]
         done_frames += result["end"] - result["start"]
         report("detecting", done_frames, n)

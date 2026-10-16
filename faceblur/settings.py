@@ -283,6 +283,23 @@ class Settings:
     min_aspect: float = 0.4
     max_aspect: float = 2.5
     stride: int = 1
+    # Adaptive stride (faceblur/stride.py): face detection skips a frame when
+    # the last adaptive_stride_quiet detected frames had no strong and no weak
+    # candidate and the camera moved less than adaptive_stride_shift source
+    # pixels into the frame. On the sample, 438 of 984 frames had no detection
+    # at all, and each frame's face detection costs about 71 ms of GPU-bound
+    # work at 4 workers (docs/bench/profile_2026-10-16.md). The zone and the
+    # camera shift still run on every frame. The T09 benchmark decides whether
+    # the default stays True.
+    adaptive_stride: bool = True
+    # Up to adaptive_stride_max - 1 frames skipped after each detected one:
+    # 2 means never two skips in a row; 1 means never skip.
+    adaptive_stride_max: int = 2
+    # Below fast_shift, where the tracker starts allowing longer gaps: a
+    # moving camera brings new faces in, so it is never skipped through.
+    adaptive_stride_shift: float = 4.0
+    # Consecutive detected frames with nothing in them before the first skip.
+    adaptive_stride_quiet: int = 3
     # auto uses the GPU when onnxruntime can see one (DirectML on Windows,
     # CUDA elsewhere) and falls back to the CPU.
     device: str = "auto"
@@ -722,6 +739,20 @@ class Settings:
             raise SettingsError(f"max_face_frac must be in (0, 1], got {self.max_face_frac}")
         if self.stride < 1:
             raise SettingsError(f"stride must be at least 1, got {self.stride}")
+        if self.adaptive_stride_max < 1:
+            raise SettingsError("adaptive_stride_max must be at least 1, got "
+                                f"{self.adaptive_stride_max}")
+        if self.adaptive_stride_quiet < 1:
+            raise SettingsError("adaptive_stride_quiet must be at least 1, got "
+                                f"{self.adaptive_stride_quiet}")
+        if self.adaptive_stride_shift < 0:
+            raise SettingsError("adaptive_stride_shift must be 0 or more, got "
+                                f"{self.adaptive_stride_shift}")
+        if self.fast_shift > 0 and self.adaptive_stride_shift >= self.fast_shift:
+            # Skipping while the tracker already treats the camera as fast
+            # would skip the frames it expects the detectors to miss.
+            raise SettingsError("adaptive_stride_shift must be below fast_shift, got "
+                                f"{self.adaptive_stride_shift} and {self.fast_shift}")
         if self.min_track < 1:
             raise SettingsError(f"min_track must be at least 1, got {self.min_track}")
         if self.max_gap < 0 or self.tail < 0 or self.tail_before < 0 or self.tail_grow < 0:
@@ -757,6 +788,8 @@ class Settings:
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
+            "adaptive_stride", "adaptive_stride_max", "adaptive_stride_shift",
+            "adaptive_stride_quiet",
             "min_track", "max_gap", "tail", "tail_before", "tail_grow", "track_iou",
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
             "tail_trend",

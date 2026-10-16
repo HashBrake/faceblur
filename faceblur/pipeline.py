@@ -49,6 +49,10 @@ class AuditRecord:
     fps: float = 0.0
     # Detection and tracking
     frames_with_detection: int = 0
+    # Frames face detection skipped under the adaptive stride (stride.py):
+    # quiet, still stretches. Their candidates are empty, as off the plain
+    # stride, and frames_with_detection counts only detected frames.
+    frames_skipped_adaptive: int = 0
     detections: int = 0
     verified_detections: int = 0
     tracks: int = 0
