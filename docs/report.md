@@ -3040,7 +3040,7 @@ RTX 3070, the local PC, ffmpeg 7.1 (gyan.dev, via imageio-ffmpeg), from
 | 32 | 0.11 | 92.2 | 93.4 | 160.5 |
 | 34 | 0.09 | 89.2 | 90.6 | 160.6 |
 
-| AV1 libaom crf, file 004310 only | size ratio | VMAF | encode fps |
+| AV1 libaom crf, file 004100 only (the smallest by bytes) | size ratio | VMAF | encode fps |
 |---|---|---|---|
 | 24 | 0.13 | 97.0 | 1.7 |
 | 30 | 0.08 | 94.4 | 2.0 |
@@ -3056,7 +3056,7 @@ RTX 5090, one GreenNode VM, ffmpeg n8.1.3 (BtbN static build), from
 | 24 | 0.31 | 98.3 | 0.45 | 99.5 |
 | 26 | 0.24 | 97.6 | 0.37 | 99.3 |
 | **28** | **0.18** | **96.5** | 0.30 | 99.1 |
-| 30 | 0.14 | 95.0 | 0.24 | 98.8 |
+| 30 | 0.14 | 94.98 | 0.24 | 98.8 |
 | 32 | 0.11 | 92.8 | 0.20 | 98.4 |
 | 34 | 0.08 | 90.0 | 0.16 | 97.8 |
 | 36 | | | 0.14 | 96.9 |
@@ -3067,8 +3067,8 @@ RTX 5090, one GreenNode VM, ffmpeg n8.1.3 (BtbN static build), from
 
 **Both GPUs choose cq 28**, so there was no tie to break (D15): min VMAF
 96.2 at 0.19 on the 3070, 96.5 at 0.18 on the 5090. One step further, cq
-30, misses the floor on both: 94.5 on the 3070, and 95.0 on the 5090, which
-is the floor to one decimal and leaves no margin at all. The two GPUs track
+30, misses the floor on both: 94.5 on the 3070, and 94.98 on the 5090, just under
+it. The two GPUs track
 each other closely, at most a hundredth of size and under one point of VMAF apart at
 every cq.
 
