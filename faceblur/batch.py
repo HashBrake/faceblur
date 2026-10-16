@@ -755,12 +755,13 @@ def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
 
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
-                    work: Path, report, cancelled, zones=None):
+                    work: Path, report, cancelled, zones=None, audio: bool = True):
     """Returns (masked, by kind, prevented, problem text, frames copied), or None.
 
     `masked` is the union share of each frame and `masked by kind` splits it.
     `prevented` is what the handled zone took back out of the mask. Copied
-    stretches carry no mask at all, so they are zero in all three.
+    stretches carry no mask at all, so they are zero in all three. `audio` as
+    in `segments.concat`; only the patch pass turns it off.
     """
     parts = [work / f"seg{k:05d}.mp4" for k in range(len(segments))]
     encode_jobs, copy_jobs = [], []
@@ -807,7 +808,7 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
         return masked, by_kind, prevented, str(exc), 0
 
     part = part_path(dst)
-    error = concat(parts, src, part, work / "list.txt")
+    error = concat(parts, src, part, work / "list.txt", audio=audio)
     if error:
         part.unlink(missing_ok=True)
         return (masked, by_kind, prevented,

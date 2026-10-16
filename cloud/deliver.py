@@ -18,6 +18,11 @@ and name for name, with three changes decided by the owner on 2026-10-06:
 FaceBlur's own records go beside the tree, not into it, under
 `faceblur-records/` at the same relative paths.
 
+With `--patched` (owner, 2026-10-16), a held back copy that the patch pass
+(`cloud/patch_run.py`) finished is delivered from `patched/` instead, and its
+patch record goes to `faceblur-records/` as `<video>.patch.json`, beside the
+record that held it back. Without the flag nothing changes.
+
 Videos are copied inside the bucket (an S3 server side copy); the other files
 are uploaded from SOURCE_FOLDER. Without `--apply` it only says what it would
 do. Configuration as in stream_run.py (S3_* and BUCKET, from cloud/greennode.env).
@@ -72,6 +77,39 @@ def listing(remote: str) -> dict[str, int]:
     return {e["Path"]: e["Size"] for e in json.loads(out or "[]")}
 
 
+def pick(rel: str, out: dict, patched: dict, suffix: str,
+         use_patched: bool = False) -> dict | None:
+    """Where one source video's delivered copy comes from, and its records.
+
+    Paths are relative to the work bucket. The delivered copy is the one
+    under `out/`, beside the source's path or in `quarantine/` there, and
+    only once its record stands beside it: the copy is uploaded first, so a
+    record means the copy is whole. With `use_patched`, a held back copy that
+    the patch pass (`cloud/patch_run.py`) has finished is delivered patched
+    instead, from `patched/` at the same path without `quarantine/`, and its
+    patch record goes to the records as well as the one that held it back.
+    A patch whose record is missing never finished and is not used.
+
+    None when the video has no finished copy at all.
+    """
+    p = PurePosixPath(rel)
+    name = output_path(Path(p.name), Path("."), suffix).name
+    for where in (p.parent / name, p.parent / "quarantine" / name):
+        w = str(where)
+        if w not in out or f"{w}.json" not in out:
+            continue
+        held = "quarantine" in where.parts
+        records = [(f"out/{w}.json", f"{rel}.json")]
+        fixed = str(p.parent / name)
+        if held and use_patched and fixed in patched and f"{fixed}.json" in patched:
+            return {"video": f"patched/{fixed}", "size": patched[fixed],
+                    "held": True, "patched": True,
+                    "records": records + [(f"patched/{fixed}.json", f"{rel}.patch.json")]}
+        return {"video": f"out/{w}", "size": out[w], "held": held, "patched": False,
+                "records": records}
+    return None
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("source", type=Path)
@@ -80,6 +118,9 @@ def main(argv: list[str]) -> int:
                     help="the bucket the delivered tree goes to; it holds nothing else")
     ap.add_argument("--acl", default="public-read",
                     help="ACL for every delivered object (the owner chose a public link)")
+    ap.add_argument("--patched", action="store_true",
+                    help="deliver a held back copy from patched/ where the patch pass "
+                         "(cloud/patch_run.py) finished it")
     args = ap.parse_args(argv)
     load_env()
     b = f"vs:{os.environ['BUCKET']}"
@@ -88,6 +129,7 @@ def main(argv: list[str]) -> int:
     local = {p.relative_to(args.source).as_posix(): p.stat().st_size
              for p in args.source.rglob("*") if p.is_file()}
     uploaded, out = listing(f"{b}/in"), listing(f"{b}/out")
+    patched = listing(f"{b}/patched") if args.patched else {}
 
     copies, records, stubs, missing, audio_kept = [], [], [], [], []
     for rel, size in sorted(local.items()):
@@ -97,14 +139,12 @@ def main(argv: list[str]) -> int:
         if size < EMPTY:
             stubs.append(rel)
             continue
-        name = output_path(Path(p.name), Path("."), suffix).name
-        for where in (p.parent / name, p.parent / "quarantine" / name):
-            if str(where) in out and f"{where}.json" in out:
-                copies.append((str(where), rel))
-                records.append((f"{where}.json", f"{rel}.json"))
-                break
-        else:
+        got = pick(rel, out, patched, suffix, args.patched)
+        if got is None:
             missing.append(rel)
+            continue
+        copies.append((got, rel))
+        records.extend(got["records"])
 
     others = [rel for rel in local
               if PurePosixPath(rel).suffix.lower() not in VIDEO_EXT
@@ -116,17 +156,34 @@ def main(argv: list[str]) -> int:
 
     # Every record: a held back copy's says what the check still found, and
     # any of them may say the source carried sound, which must not be shipped.
-    rows = []
-    for src, rel in copies:
-        r = json.loads(rclone("cat", f"{b}/out/{src}.json"))
+    rows, bad_patches = [], []
+    for got, rel in copies:
+        r = json.loads(rclone("cat", f"{b}/{got['records'][0][0]}"))
         if r.get("source_audio"):
             audio_kept.append(rel)
-        if "quarantine" in PurePosixPath(src).parts:
-            rows.append([rel, r.get("residual_faces", 0), r.get("residual_max_px", 0),
-                         r.get("residual_frames", 0)])
-    print(f"held back but delivered blurred: {len(rows)}")
+        if got["patched"]:
+            # The patch writes pictures only, and says so; a record that says
+            # otherwise, or that the patch failed, stops the delivery the same way.
+            pr = json.loads(rclone("cat", f"{b}/{got['records'][1][0]}"))
+            if pr.get("output_audio"):
+                audio_kept.append(rel)
+            if pr.get("error") or pr.get("status") != "done":
+                bad_patches.append(rel)
+        if got["held"]:
+            row = [rel, r.get("residual_faces", 0), r.get("residual_max_px", 0),
+                   r.get("residual_frames", 0)]
+            if args.patched:
+                row += [pr.get("masked", 0) if got["patched"] else ""]
+            rows.append(row)
+    print(f"held back but delivered blurred: {len(rows)}"
+          + (f", {sum(1 for g, _ in copies if g['patched'])} of them patched"
+             if args.patched else ""))
     if audio_kept:
         print(f"STOP: {len(audio_kept)} copies carry the source's audio track, e.g. {audio_kept[:3]}")
+        return 2
+    if bad_patches:
+        print(f"STOP: {len(bad_patches)} patched copies have a record that says the patch "
+              f"failed, e.g. {bad_patches[:3]}")
         return 2
     if not args.apply:
         print("dry run; --apply to do it")
@@ -136,10 +193,10 @@ def main(argv: list[str]) -> int:
     acl = ["--s3-acl", args.acl] if args.acl else []
     rclone("mkdir", d)
 
-    for src, rel in copies:
-        rclone("copyto", f"{b}/out/{src}", f"{d}/{rel}", *acl)
+    for got, rel in copies:
+        rclone("copyto", f"{b}/{got['video']}", f"{d}/{rel}", *acl)
     for src, rel in records:
-        rclone("copyto", f"{b}/out/{src}", f"{b}/faceblur-records/{rel}")
+        rclone("copyto", f"{b}/{src}", f"{b}/faceblur-records/{rel}")
     for rel in stubs:
         rclone("copyto", str(args.source / rel), f"{d}/{rel}", *acl)
     filters = "\n".join(["- *.mp4", "- *.MP4", *[f"- *{a}" for a in AUDIO], "+ **"])
@@ -147,7 +204,8 @@ def main(argv: list[str]) -> int:
            stdin=filters)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["video", "faces_left", "largest_px", "frames_with_a_face"])
+    w.writerow(["video", "faces_left", "largest_px", "frames_with_a_face"]
+               + (["patched_faces_masked"] if args.patched else []))
     w.writerows(rows)
     rclone("rcat", f"{b}/faceblur-records/held_back.csv", stdin=buf.getvalue())
     rclone("rcat", f"{b}/faceblur-records/not_delivered.txt", stdin="\n".join(missing) + "\n")
@@ -155,7 +213,7 @@ def main(argv: list[str]) -> int:
     # Nothing raw may be in the delivered tree: every delivered video must be
     # a copy that came out of the pipeline, or a stub.
     delivered = listing(d)
-    expected = {rel: out[src] for src, rel in copies}
+    expected = {rel: got["size"] for got, rel in copies}
     raw = [rel for rel, size in delivered.items()
            if PurePosixPath(rel).suffix.lower() in VIDEO_EXT and size >= EMPTY
            and (expected.get(rel) != size or uploaded.get(rel) == size)]

@@ -287,12 +287,18 @@ class SegmentEncoder:
         self.out.unlink(missing_ok=True)
 
 
-def concat(parts: Sequence[Path], src: Path, dst: Path, list_file: Path) -> str:
-    """Join segments in order and add the source audio. Returns ffmpeg's error text."""
+def concat(parts: Sequence[Path], src: Path, dst: Path, list_file: Path,
+           audio: bool = True) -> str:
+    """Join segments in order and add the source audio. Returns ffmpeg's error text.
+
+    `audio` False writes the pictures only. The patch pass (`faceblur/patch.py`)
+    joins pieces of a finished copy, not of a source, and nothing it delivers
+    may carry sound, whatever the copy it started from carried."""
     list_file.write_text("".join(f"file '{Path(p).resolve().as_posix()}'\n" for p in parts),
                          encoding="utf-8")
+    sound = ["-i", str(src), "-map", "0:v:0", "-map", "1:a?"] if audio else ["-map", "0:v:0"]
     r = _run(["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_file),
-              "-i", str(src), "-map", "0:v:0", "-map", "1:a?", "-c", "copy",
+              *sound, "-c", "copy",
               "-movflags", "+faststart", "-f", "mp4", str(dst)])
     return r.stderr.decode(errors="replace").strip() if r.returncode else ""
 
