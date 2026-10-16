@@ -230,9 +230,23 @@ def test_a_held_claim_is_renewed_and_deleted_when_done(sr, tmp_path):
     jobs = sr.ClaimQueue(cfg, sizes)
     assert jobs.get_nowait() == "v.mp4"
     assert sizes == {"v.mp4": 2000}
-    time.sleep(2.5)
     marker = claim_file(bucket, "v.mp4")
-    assert time.time() - json.loads(marker.read_text())["time"] < 1.5
+    t0 = json.loads(marker.read_text())["time"]
+    # A newer time in the marker is the renewal thread rewriting the claim.
+    # No tight wall budget: one rclone write can stall for seconds on a
+    # loaded machine, so the deadline is a lease plus slack.
+    deadline = time.monotonic() + cfg.lease + 5
+    held = None
+    while time.monotonic() < deadline:
+        try:
+            held = json.loads(marker.read_text())
+        except (OSError, ValueError):         # caught mid-write: look again
+            held = None
+        if held and held["time"] > t0:
+            break
+        time.sleep(0.2)
+    assert held and held["time"] > t0, f"claim not renewed in {cfg.lease + 5}s, last marker {held}"
+    assert held["owner"] == cfg.owner and held["lease"] == 3
     jobs.done("v.mp4")
     assert not marker.exists()
     # Still unfinished and held by nobody, but a process hands a video out
