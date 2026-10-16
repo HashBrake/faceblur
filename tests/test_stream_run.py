@@ -112,6 +112,10 @@ import json, os, sys, time
 from pathlib import Path
 src = Path(sys.argv[1])
 out = Path(sys.argv[sys.argv.index("-o") + 1])
+if os.environ.get("FAKE_FAIL") == src.stem:
+    with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as f:
+        f.write(f"{os.getpid()} {src.name}\\n")
+    sys.exit(1)
 if os.environ.get("FAKE_SLEEP") == src.stem:
     time.sleep(float(os.environ.get("FAKE_SLEEP_S", "5")))
 out.mkdir(parents=True, exist_ok=True)
@@ -228,17 +232,15 @@ def test_a_held_claim_is_renewed_and_deleted_when_done(sr, tmp_path):
     assert time.time() - json.loads(marker.read_text())["time"] < 1.5
     jobs.done("v.mp4")
     assert not marker.exists()
-    # Held by nobody but still unfinished: the next call takes it again, and
-    # with it held there is nothing more to claim.
-    assert jobs.get_nowait() == "v.mp4"
+    # Still unfinished and held by nobody, but a process hands a video out
+    # once: a video that failed here is not taken again in a loop.
     with pytest.raises(queue.Empty):
         jobs.get_nowait()
-    jobs.done("v.mp4")
 
 
 def queue_env(exe: str, bucket: Path, fake: Path, work: Path, calls: Path, **extra) -> dict:
     base = {k: v for k, v in os.environ.items()
-            if k not in NAMES and k not in ("FAKE_SLEEP", "FAKE_SLEEP_S")
+            if k not in NAMES and k not in ("FAKE_SLEEP", "FAKE_SLEEP_S", "FAKE_FAIL")
             and not k.startswith("RCLONE_CONFIG")}
     return dict(base, REMOTE=bucket.as_posix(), RCLONE=exe,
                 PIPELINE_CMD=shlex.join([Path(sys.executable).as_posix(), fake.as_posix()]),
@@ -324,3 +326,22 @@ def test_a_dead_workers_video_is_taken_once_its_lease_runs_out(sr, tmp_path):
     (done,) = (out / "_logs").glob("q-*_DONE.json")
     assert json.loads(done.read_text())["tally"].get("delivered", 0) >= 1
     assert not marker.exists()
+
+
+def test_a_failing_video_is_tried_once_per_worker(sr, tmp_path):
+    exe = need_rclone()
+    bucket, fake = make_bucket(tmp_path, {"bad.mp4": 5000, "good.mp4": 2000})
+    calls = tmp_path / "calls.log"
+    r = subprocess.run([sys.executable, str(SOURCE)], cwd=ROOT,
+                       env=queue_env(exe, bucket, fake, tmp_path / "work", calls, LEASE="30",
+                                     FAKE_FAIL="bad"),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 1, r.stdout + r.stderr
+    names = [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()]
+    assert sorted(names) == ["bad.mp4", "good.mp4"], r.stdout
+    out = bucket / "out"
+    assert (out / sr.record_names("good.mp4")[0]).is_file()
+    assert not any((out / n).exists() for n in sr.record_names("bad.mp4"))
+    assert [f for f in (out / "_claims").rglob("*") if f.is_file()] == []
+    (done,) = (out / "_logs").glob("q-*_DONE.json")
+    assert json.loads(done.read_text())["tally"] == {"failed": 1, "delivered": 1}

@@ -256,7 +256,8 @@ def write_claim(cfg: Config, rel: str, owner: str) -> None:
 
 def claim(cfg: Config, rel: str, owner: str) -> bool:
     held = read_claim(cfg, rel)
-    if held and held.get("owner") != owner and time.time() - held["time"] < held["lease"]:
+    if (held and held.get("owner") != owner
+            and time.time() - held.get("time", 0) < held.get("lease", cfg.lease)):
         return False
     write_claim(cfg, rel, owner)
     time.sleep(cfg.claim_settle)
@@ -279,7 +280,8 @@ def next_claim(cfg: Config, owner: str, ours: set[str]) -> tuple[str, int, float
     its size and the monotonic time just before its claim was written, or
     None when there is none. Everything is listed afresh because the other
     machines change it all the time. `ours` are the videos this process
-    holds already: claim() would hand one of them out a second time."""
+    has handed out already, held or finished: claim() would hand one of them
+    out a second time."""
     inputs = videos(cfg)
     outputs = listing(cfg, cfg.out)
     now = time.time()
@@ -309,11 +311,16 @@ class ClaimQueue:
     Each video handed out is claimed first and its claim renewed in the
     background until done(), so other machines leave it alone while it is
     fetched and run. done() deletes the claim: the record in OUT is what
-    says finished, so a claim left behind by a crash does no harm."""
+    says finished, so a claim left behind by a crash does no harm.
+
+    A video is handed out once per process, so one that fails here is not
+    retried in a loop, while another machine may still try it once, in case
+    the failure was this machine's own (a CPU fallback, a full disk)."""
 
     def __init__(self, cfg: Config, sizes: dict):
         self.cfg, self.sizes = cfg, sizes
         self.held: dict[str, tuple[threading.Event, threading.Thread]] = {}
+        self.given: set[str] = set()
         self.lock = threading.Lock()
         # Every claim of one process names the same owner, so two cards
         # claiming at once would both read their claim back as theirs.
@@ -323,7 +330,7 @@ class ClaimQueue:
     def get_nowait(self) -> str:
         with self.claiming:
             with self.lock:
-                ours = set(self.held)
+                ours = set(self.given)
             got = next_claim(self.cfg, self.cfg.owner, ours)
             if got is None:
                 raise queue.Empty
@@ -344,6 +351,7 @@ class ClaimQueue:
             with self.lock:
                 self.sizes[rel] = size
                 self.held[rel] = (stop, t)
+                self.given.add(rel)
             t.start()
         return rel
 
