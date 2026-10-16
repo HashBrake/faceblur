@@ -9,8 +9,16 @@ copies, 30 empty stubs, **0 not delivered**, 799 other files, 297 audio files
 left out, no copy with audio. 289 of the 321 copies are held back by the
 check: the checker still sees a face on 112,102 of 12.87 M frames (0.87 %;
 54,474 face sightings 40 px or larger), and 237 are also flagged for the
-handled zone. `--apply` (public bucket) waits for the owner's go-ahead on that.
-Then the blurred link, cleanup. In parallel, the partner's
+handled zone. Spot check 2026-10-16 of 40 checker finds in held-back
+copies: the 20 largest are all the wearer's hands, gloves or objects; of 20
+mid-sized ones, 1 is a real bystander face left unblurred, 1 the wearer's
+masked mirror reflection, 18 false alarms. **Owner's decisions, 2026-10-16:**
+deliver now to `faceblur-blurred` with `--acl private` and a 7-day signed
+link (not public); `faceblur-hands-pilot` deleted; then a **patch pass** on
+the 289 held-back copies (re-run the checker on copy vs source, blur every
+face it finds outside the hand and zone marks, hold each blur for a couple of
+frames either side, re-encode), approved at about $80 on 8 RTX 5090 VMs
+(~90 GPU-hours, ~12 h). Public only after that. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). "The production run"
