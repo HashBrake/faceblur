@@ -32,7 +32,7 @@ from .detect import Detection, DetectorBank, filter_candidates, iou, weak_candid
 from .motion import downscale, estimate_shift
 from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED,
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
-from .redact import build_alpha, masked_shares, redact
+from .redact import redact_measured
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
@@ -325,15 +325,11 @@ def encode_job(job: dict) -> dict:
                     progress(offset)
                 d = dets.get(seg.start + offset, [])
                 z = zones.get(seg.start + offset)
-                frame_out, alpha = redact(frame, d, settings, zone=z)
-                masked.append(float((alpha >= 0.5).mean()) if d else 0.0)
-                if d and z:
-                    plain = build_alpha(frame.shape[:2], d, settings) >= 0.5
-                    prevented.append(float((plain & ~(alpha >= 0.5)).mean()))
-                else:
-                    prevented.append(0.0)
-                shares = (masked_shares(frame.shape[:2], d, settings, alpha, z)
-                          if d else {})
+                # Mask work on the box around the regions only; the numbers
+                # are the full frame's, see `redact.redact_measured`.
+                frame_out, share, shares, took_back = redact_measured(frame, d, settings, z)
+                masked.append(share)
+                prevented.append(took_back)
                 for name in set(by_kind) | set(shares):
                     row = by_kind.setdefault(name, [0.0] * (len(masked) - 1))
                     row.append(shares.get(name, 0.0))
