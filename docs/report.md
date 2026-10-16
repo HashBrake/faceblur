@@ -3053,8 +3053,9 @@ and the zone and the camera shift still run on every frame.
 **The detector's input built in place.** YuNet's padded, channel-ordered
 float32 input is written by one strided copy into a buffer kept per frame
 size, instead of `copyMakeBorder` plus `cv2.dnn.blobFromImage`. The tensor
-is bit-identical, and the preparation went from about 25 ms to about 5 ms a
-frame at the two sizes (D21).
+is bit-identical, and the preparation went from about 25 ms a frame over
+the 1920 and 1280 sizes to 4.1 and 0.9 ms (T05; the timing is from
+`detect.py`'s `blob` docstring, against the T02 profile).
 
 **The encode's mask work on the region of interest.** The alpha, the zone
 cut and the `prevented` alpha are computed on the union of the frame's
