@@ -66,14 +66,15 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from .detect import Detection
-from .redact import redact, region_for
-from .zone import alpha_for
+from .redact import _blur_reach, _zone_in, redact, region_for
 from .segments import decode_range, frame_times
 from .settings import Settings
 from .video import VideoError, probe
@@ -97,7 +98,45 @@ FLAT_DIFF = 4.0
 NOISE_SAMPLE = 4
 
 
-def covered_by_zone(det: Detection, zone_mask) -> float:
+@dataclass(frozen=True)
+class ZoneCrop:
+    """A zone's mask over the one box of the frame it can be set in.
+
+    The zone is a hand or two on a 1920x1080 frame, and its mask was drawn on
+    the whole frame three times a frame: 20.7 s of the check's CPU over 1968
+    frames in docs/bench/profile_2026-10-16.md. Everything outside `box` is
+    outside the zone, so nothing there needs drawing or reading.
+    """
+
+    mask: np.ndarray          # bool, the zone over `box`
+    box: tuple                # x0, y0, x1, y1 in frame pixels
+    shape: tuple              # the frame's height and width
+
+
+def zone_crop(shape: tuple[int, int], polygons) -> Optional[ZoneCrop]:
+    """`zone.alpha_for(shape, polygons, 0.0) >= 0.5` over the polygons' box.
+
+    The box is the polygons' corners plus the reach `redact._zone_in` allows
+    an anti aliased edge, clipped to the frame, and `_zone_in` draws each
+    polygon whole, so every level inside the box is the one the whole frame
+    would have. None when the box is empty: no polygon, or none in the frame.
+    """
+    if not polygons:
+        return None
+    h, w = shape
+    pts = np.concatenate([np.asarray(poly, np.float64).reshape(-1, 2) for poly in polygons])
+    reach = _blur_reach(0.0) + 2
+    x0 = max(0, int(np.floor(pts[:, 0].min())) - reach)
+    y0 = max(0, int(np.floor(pts[:, 1].min())) - reach)
+    x1 = min(w, int(np.ceil(pts[:, 0].max())) + reach + 1)
+    y1 = min(h, int(np.ceil(pts[:, 1].max())) + reach + 1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    box = (x0, y0, x1, y1)
+    return ZoneCrop(_zone_in(shape, box, polygons, 0.0) >= 0.5, box, (h, w))
+
+
+def covered_by_zone(det: Detection, zone: Optional[ZoneCrop]) -> float:
     """Share of a box that lies inside the handled zone, 0 to 1.
 
     A find inside the zone is not a miss. The rule says nothing handled is
@@ -106,19 +145,26 @@ def covered_by_zone(det: Detection, zone_mask) -> float:
     not call that a leak. It stays in the record marked with the coverage that
     decided it, the way a hand does, and stays out of every count the gate
     reads.
+
+    The share is of the box's part inside the frame; whatever of that lies
+    outside the zone's crop lies outside the zone.
     """
-    if zone_mask is None:
+    if zone is None:
         return 0.0
-    h, w = zone_mask.shape[:2]
+    h, w = zone.shape
     x0, y0 = max(0, int(det.x)), max(0, int(det.y))
     x1, y1 = min(w, int(det.x + det.w)), min(h, int(det.y + det.h))
     if x1 <= x0 or y1 <= y0:
         return 0.0
-    return float(zone_mask[y0:y1, x0:x1].mean())
+    bx0, by0, bx1, by1 = zone.box
+    cx0, cy0, cx1, cy1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+    inside = (int(zone.mask[cy0 - by0:cy1 - by0, cx0 - bx0:cx1 - bx0].sum())
+              if cx1 > cx0 and cy1 > cy0 else 0)
+    return inside / ((x1 - x0) * (y1 - y0))
 
 
 def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
-                 noise: float) -> tuple[float, int]:
+                 noise: float, zone: Optional[ZoneCrop] = None) -> tuple[float, int]:
     """(share of the zone's pixels that moved, pixels in the zone).
 
     A pixel counts as moved when it differs by more than the encoder's own
@@ -126,18 +172,33 @@ def zone_changed(before: np.ndarray, after: np.ndarray, polygons,
     re-encoded and every pixel differs a little. Inside the zone nothing
     should have been touched at all, so this reads zero on a clean run and the
     gate holds the copy back when it does not.
+
+    `zone` is these polygons' `zone_crop` when the caller has drawn it already.
     """
-    mask = alpha_for(before.shape[:2], polygons, 0.0) >= 0.5
+    if zone is None:
+        zone = zone_crop(before.shape[:2], polygons)
+    if zone is None:
+        return 0.0, 0
+    mask = zone.mask
     total = int(mask.sum())
     if not total:
         return 0.0, 0
     # Only the rows and columns the zone touches: a pixel outside it never
     # counts, and the whole frame in float was a fifth of the check.
     rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
-    y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
-    diff = np.abs(before[y0:y1, x0:x1].astype(np.float32)
-                  - after[y0:y1, x0:x1].astype(np.float32)).mean(axis=2)
-    moved = ((diff > noise + FLAT_DIFF) & mask[y0:y1, x0:x1]).sum()
+    bx0, by0 = zone.box[:2]
+    y0, y1 = by0 + rows[0], by0 + rows[-1] + 1
+    x0, x1 = bx0 + cols[0], bx0 + cols[-1] + 1
+    # A pixel moved when the float32 mean of its three channel differences
+    # passed the floor. That mean is a channel sum over three, and the sum is
+    # an integer up to 765, so the same rule is a least sum, read off every
+    # mean there can be: the identical answer without the float32 frames,
+    # which took this from 13.5 to 7.7 ms on two hands at 1920x1080.
+    passes = np.flatnonzero(np.arange(766, dtype=np.float32) / np.float32(3) > noise + FLAT_DIFF)
+    if not passes.size:
+        return 0.0, total
+    sums = cv2.absdiff(before[y0:y1, x0:x1], after[y0:y1, x0:x1]).sum(axis=2, dtype=np.uint16)
+    moved = ((sums >= passes[0]) & mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]).sum()
     return float(moved) / total, total
 
 
@@ -335,6 +396,8 @@ def residual_job(job: dict) -> dict:
         faces = bank.detect(after) if bank is not None else []
         glass = screens.detect(after) if screens is not None else []
         zone_mask = face_zone = None
+        # The encoder's noise, once a frame and only when something reads it.
+        noise = None
         if settings.zone:
             # The zone is rebuilt from the source: hands are unmasked in both
             # and the source is sharper. Live polygons only; see the module
@@ -347,9 +410,9 @@ def residual_job(job: dict) -> dict:
             live = [polygon_for(hand, settings, before.shape[:2]) for hand in mine]
             quads = [tuple(hand.grown(settings.zone_face_scale).quad) for hand in mine]
             if live:
-                zone_mask = alpha_for(before.shape[:2], live, 0.0) >= 0.5
+                zone_mask = zone_crop(before.shape[:2], live)
                 # Faces are asked about the hands themselves, not the reach.
-                face_zone = ((alpha_for(before.shape[:2], quads, 0.0) >= 0.5)
+                face_zone = (zone_crop(before.shape[:2], quads)
                              if settings.zone_face_needs_hand and quads
                              else zone_mask)
                 # The gate measures where the promise is **absolute**, which
@@ -362,14 +425,16 @@ def residual_job(job: dict) -> dict:
                 # `masked_in_zone_prevented`. Section 17 says so.
                 strict = quads if settings.zone_face_needs_hand else live
                 if strict:
-                    moved, pixels = zone_changed(before, after, strict,
-                                                 frame_noise(before, after))
+                    noise = frame_noise(before, after)
+                    moved, pixels = zone_changed(before, after, strict, noise,
+                                                 face_zone if strict is quads else zone_mask)
                     if moved:
                         zone_rows.append({"frame": i, "changed": round(moved, 5),
                                           "zone_px": pixels})
         if not faces and not glass:
             continue
-        noise = frame_noise(before, after)
+        if noise is None:
+            noise = frame_noise(before, after)
         for det in faces:
             changed, would = applied(before, after, det, settings)
             call = classify(changed, would, noise)
