@@ -24,8 +24,22 @@ frames either side, re-encode), approved at about $80 on 8 RTX 5090 VMs
 vs:faceblur-blurred "Player One - Phase 0 full (blurred)" --expire 168h
 --apply`, run in the image) **expires 2026-10-23 10:53 UTC**; the link itself
 is not kept in git. Patch pass: `faceblur-patch-1` (103.196.239.232, created
-through the API 2026-10-16 17:15) runs share 0/8 with `vm_run.sh patch`; the
-other seven wait until its first output is checked. In parallel, the partner's
+through the API 2026-10-16 17:15) runs share 0/8 with `vm_run.sh patch`. First two
+copies patched (1,979 and 2,678 faces masked, ~1.8-2 h per one-hour video
+per lane; before/after crops checked). A bug deleted each lane's prefetched
+next pair (fixed in `3e4c83d`; restarted 12:48 UTC). Measured: ~19 fps per
+lane with 2 lanes, so the pass is ~100 VM-hours (~$90-100, owner told).
+`faceblur-patch-2` to `-8` (shares 1/8 to 7/8) created through the API
+2026-10-16 ~19:50 local and bootstrapped; `cloud/vm_status.sh` lists them.
+**Hand showcase** (owner, 2026-10-16): 4 x 2-minute left clips (devices 97,
+B2, D5, FF; windows clear of every checker find) run through the EgoSmith
+toolkit on `faceblur-hands-2` (deleted after upload). The fisheye input
+beat undistorted input (hand found in 45-90 % of frames against 11-48 %); the
+pilot's "too small" skeletons came from the toolkit's renderer drawing
+pinhole estimates through the fisheye model, so `overlay.mp4` is drawn with
+the pinhole camera the toolkit used. In `vs:faceblur/hands_showcase/`
+(1,581 files, 2.3 GB, README and metrics.json), with its own 7-day signed
+link, **expires 2026-10-23 12:47 UTC**; the link is not kept in git. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). "The production run"
