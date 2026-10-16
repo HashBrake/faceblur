@@ -18,7 +18,14 @@ link (not public); `faceblur-hands-pilot` deleted; then a **patch pass** on
 the 289 held-back copies (re-run the checker on copy vs source, blur every
 face it finds outside the hand and zone marks, hold each blur for a couple of
 frames either side, re-encode), approved at about $80 on 8 RTX 5090 VMs
-(~90 GPU-hours, ~12 h). Public only after that. In parallel, the partner's
+(~90 GPU-hours, ~12 h). Public only after that. **Delivered privately 2026-10-16
+10:50 UTC:** 1,150 files (1.3 TB) in `faceblur-blurred`, every object private,
+0 raw videos, 0 audio files. Its 7-day signed link (from `cloud/links.py
+vs:faceblur-blurred "Player One - Phase 0 full (blurred)" --expire 168h
+--apply`, run in the image) **expires 2026-10-23 10:53 UTC**; the link itself
+is not kept in git. Patch pass: `faceblur-patch-1` (103.196.239.232, created
+through the API 2026-10-16 17:15) runs share 0/8 with `vm_run.sh patch`; the
+other seven wait until its first output is checked. In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). "The production run"
