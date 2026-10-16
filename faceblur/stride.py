@@ -64,5 +64,15 @@ class AdaptiveStride:
 
 
 def shift_px(shift: Optional[tuple[float, float]]) -> Optional[float]:
-    """The magnitude of a (dx, dy) camera shift, None when there is none."""
-    return None if shift is None else math.hypot(*shift)
+    """The magnitude of a (dx, dy) camera shift, None when there is no estimate.
+
+    An exact (0.0, 0.0) is no estimate either: `motion.estimate_shift` returns
+    it when there is no frame before or the phase correlation has no clear
+    peak (a cut, a black frame, pure texture, a frame smeared by a fast move),
+    while a camera that is really still gives tiny non-zero subpixel values.
+    Read as still, the fallback would skip detection in the middle of a fast
+    move; as None it counts as moving.
+    """
+    if shift is None or (shift[0] == 0.0 and shift[1] == 0.0):
+        return None
+    return math.hypot(*shift)

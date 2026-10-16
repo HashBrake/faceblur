@@ -17,7 +17,7 @@ from faceblur.batch import _chunks, _mask_key, detect_job, run_video, serial_sub
 from faceblur.pipeline import STATUS_DONE
 from faceblur.segments import frame_times
 from faceblur.settings import Settings, SettingsError
-from faceblur.stride import AdaptiveStride, skip_next
+from faceblur.stride import AdaptiveStride, shift_px, skip_next
 from faceblur.video import probe
 
 from eval import measure
@@ -83,6 +83,18 @@ def test_never_skips_when_the_camera_moves_or_the_shift_is_missing():
     assert _drive(ON, [([], [], 3.99)] * 5) == [3]
 
 
+def test_an_exact_zero_shift_is_no_estimate():
+    # motion.estimate_shift falls back to exactly (0.0, 0.0) where it has no
+    # estimate; a still camera measures small non-zero values.
+    assert shift_px((0.0, 0.0)) is None
+    assert shift_px(None) is None
+    assert shift_px((0.3, 0.0)) == pytest.approx(0.3)
+    zero = [([], [], shift_px((0.0, 0.0)))] * 20
+    assert _drive(ON, zero) == []
+    still = [([], [], shift_px((0.3, 0.0)))] * 5
+    assert _drive(ON, still) == [3]
+
+
 def test_max_1_or_off_never_skips():
     assert _drive(ON.with_changes(adaptive_stride_max=1), [([], [], 0.0)] * 30) == []
     assert _drive(ON.with_changes(adaptive_stride=False), [([], [], 0.0)] * 30) == []
@@ -121,9 +133,14 @@ def test_detect_job_detects_every_frame_while_the_face_is_there(video_with_face)
 
 @pytest.fixture(scope="module")
 def face_wall_face(tmp_path_factory, lena) -> Path:
-    """The clip of tests/test_overlap.py: a grey wall for three seconds, a
-    still face for one, the wall for four more, 10 fps."""
-    out = tmp_path_factory.mktemp("clips") / "face_wall_face.mp4"
+    """The clip of tests/test_overlap.py, a wall for three seconds, a still
+    face for one, the wall for four more, 10 fps, but the wall is a still
+    texture rather than flat grey. On flat grey the phase correlation finds no
+    peak and `estimate_shift` falls back to an exact zero, which is no
+    estimate; on a texture a still camera measures a few hundredths of a pixel."""
+    out = tmp_path_factory.mktemp("clips") / "face_texture_face.mp4"
+    wall = ("geq=lum='128+50*sin(X/9)*cos(Y/13)+30*sin((X+2*Y)/23)':cb=128:cr=128,"
+            "setsar=1,format=yuv420p")
     face = "scale=160:-2,pad=640:640:240:240:gray,setsar=1,format=yuv420p"
     result = run_ffmpeg([
         "-y", "-loglevel", "error",
@@ -131,7 +148,7 @@ def face_wall_face(tmp_path_factory, lena) -> Path:
         "-loop", "1", "-framerate", "10", "-t", "1", "-i", str(lena),
         "-f", "lavfi", "-i", "color=c=gray:s=640x640:r=10:d=4",
         "-filter_complex",
-        f"[0:v]setsar=1,format=yuv420p[a];[1:v]{face}[b];[2:v]setsar=1,format=yuv420p[c];"
+        f"[0:v]{wall}[a];[1:v]{face}[b];[2:v]{wall}[c];"
         "[a][b][c]concat=n=3:v=1[v]",
         "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12",
         "-g", "10", "-keyint_min", "10", "-sc_threshold", "0", "-pix_fmt", "yuv420p",
