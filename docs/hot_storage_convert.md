@@ -1,11 +1,14 @@
-# Hot storage: calibrated defaults and the converter run on the four samples
+# Hot storage: measurement log
+
+This is the measurement log of the hot-storage build (branch `build/hot-storage`), written task by task from T06 to T09.
+`docs/report.md` section 26 summarises it; the size-vs-VMAF curves are in `hot_storage_curve.md` (RTX 3070) and `hot_storage_curve_5090.md` (RTX 5090).
 
 - Date: 2026-10-16 (libx265 measurement 06:52 local, converter run 07:04 local, UTC+7)
 - Machine: the local PC, NVIDIA GeForce RTX 3070 (driver 595.79), ffmpeg 7.1 (gyan.dev, via imageio-ffmpeg)
-- Code: the commit that adds this file (task T06, parent 9370dc0)
+- Code: from T06 (1a4d052) on; each section names the task that measured it
 - Inputs: the four blurred H.264 samples in `faceblur-hot-storage-data/blurred/` (927.0 MB in all)
 
-## Defaults (faceblur/settings.py)
+## Defaults (T06, `faceblur/settings.py`)
 
 | setting | value | source |
 |---|---|---|
@@ -15,7 +18,7 @@
 
 `storage.convert` resolves `--encoder auto` first, then takes `hevc_cq` for NVENC or `hevc_crf` for libx265, so the manifest's `encoder` and `quality` always agree. `--gop` defaults to `Settings().gop`.
 
-## libx265 crf measurement
+## libx265 crf measurement (T06)
 
 Command (through the GPU lock), on a copy of 004100 alone (105.7 MB, 984 frames, 32.8 s):
 
@@ -36,7 +39,7 @@ The whole run took 192 s, well inside the 45 min bound.
 The rule: the crf whose VMAF on 004100 is nearest to NVENC cq 28's on the same file (96.58, `hot_storage_curve.json`) while staying at or above 95. crf 22 is 0.10 away; crf 20 is 1.31 away; crf 24 is below 95. **Chosen: `hevc_crf = 22`.**
 The crf 20 encode ran at 10.9 fps against 46-50 fps for the other two. It was the first encode of the run (cold file cache, and the CPU is shared with other sessions; the lock holds the GPU, not the CPU), so that figure is not a property of crf 20.
 
-## Converter run
+## Converter run (T06)
 
 Driver `faceblur-hot-storage-data/t06/run_convert.py`, run once through the GPU lock. All defaults: `--codec hevc --encoder auto` (resolved to `nvenc`), quality `hevc_cq` 28, gop 60, VMAF floor 95, 3 windows of 60 s (all four files are under 180 s, so VMAF scores each file whole and the min window equals the mean).
 
@@ -65,6 +68,7 @@ After the run, `probe()` on each file in `converted/` reports codec `hevc` with 
 
 - The four sources in `blurred/` were left unchanged: size and SHA-256 of each were the same before and after the run, and no temporary file was left beside them.
 - `converted/hot_storage_manifest.parquet` holds 8 rows: 4 `dry-run` (paths in `blurred/`) and 4 `applied` (paths in `converted/`). Every row has `checks_passed` true, VMAF at least 95, `codec_after` hevc, `encoder` nvenc, `quality` 28.
+- This run predates T11, so its rows hold absolute paths. Since T11 the converter writes `path` relative to the manifest's folder (POSIX form) when the file is inside it, and the path as given otherwise; it writes the `applied` row only after the rename has succeeded; and `python -m storage.manifest TREE` keeps the converter's rows and replaces only its own `listed` rows.
 
 ### Decode check fix
 
@@ -138,7 +142,7 @@ Files given and every `*_imu.csv` / `*_pts.csv` under `--tree` (recursive) are c
 
 The CLI run over the folder exited 0 in 5.55 s with a peak working set of 447 MB. A second process, without the storage code, regenerated each CSV from its Parquet in plain Python (`f"{v:.6f}"` per value) and its sha256 matched the source for all four files. Sizes and modification times of all nine files in the read-only recording folder were the same before and after; `--apply` was not used, so every CSV is still in place.
 
-## --codec hevc in the blur pipeline (T09)
+## `--codec hevc` in the blur pipeline (T09)
 
 `cli.py --codec {h264,hevc}` (setting `codec`, default `h264`) picks the codec of the blurred copy. `h264` is unchanged, with exactly the same ffmpeg command line as before. `hevc` writes the copy straight in the hot-storage format, so no second `storage.convert` pass is needed.
 
@@ -174,7 +178,7 @@ Faces: the HEVC copy has no misses that the H.264 copy lacks. It has fewer (7 ag
 
 Zone gate: this one fails on HEVC only. It counts zone pixels that moved between the source and the copy, and its 1 percent threshold assumes a near-lossless copy (H.264 crf 12 / cq 16). At cq 28 the compression noise alone moves up to 9.8 percent of the zone's pixels. With `--check-output` or `--quarantine`, every HEVC copy would therefore be held back for `zone`. This needs a follow-up: compare the zone against a reference that knows the codec, or skip that gate for lossy storage copies. It is not changed here.
 
-### Zone gate against HEVC quality
+### Zone gate against HEVC quality (T09)
 
 How much HEVC quality can the existing zone gate take? It flags a frame when more than `zone_gate_changed = 0.010` of the zone's pixels move by more than the frame's median re-encode noise plus `FLAT_DIFF` (4 levels). The cq 16, 20 and 24 files below are second-generation encodes: the H.264 blurred copy re-encoded with `storage.encode.encode_file(h264_copy, dst, "hevc", "nvenc", quality=Q, gop=60)`. They are not pipeline outputs. The cq 28 row is the T09 pipeline output. All five files were checked against the original source with the same command, on the RTX 3070, through the GPU lock:
 

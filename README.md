@@ -378,6 +378,15 @@ a television, a picture on a wall, a motion smear — and 6 could not be called.
 and a half to one, so a copy the gate holds back is usually being held back
 for the right reason.
 
+The storage tools in `storage/` shrink finished copies for hot storage:
+`python -m storage.convert FILE [--apply]` re-encodes to HEVC (NVENC cq 28, or
+libx265 crf 22), checks and replaces only with `--apply`; `storage.manifest TREE`
+lists a tree in Parquet; `storage.calibrate DIR` measures the size-vs-VMAF curve;
+`storage.randaccess COPY --source H264` checks random seeks; `storage.csv2parquet
+--tree DIR [--out DIR] [--apply]` turns IMU and pts CSVs into Parquet byte for
+byte; `cli.py ... --codec hevc` writes the blurred copy as HEVC directly. See
+`docs/hot_storage_convert.md` and `docs/report.md` section 26.
+
 ## What it writes
 
 - `<name>_blurred.mp4`, the blurred copy, H.264 at crf 12 with the source audio.
@@ -560,6 +569,8 @@ These exact versions passed the tests. `requirements.txt` pins every one.
 
 The evaluation harness needs `requirements-eval.txt` in its own environment,
 because MediaPipe pins numpy below 2.
+
+The storage tools need `requirements-storage.txt` in the same `.venv`: av 19.0.1, pyarrow 26.0.0.
 
 ## Run the tests
 
