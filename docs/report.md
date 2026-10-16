@@ -2984,3 +2984,272 @@ the whole frame and the 2560 scan, is still rejected by the hand gate, which
 did not move.
 
 `docs/f2_combined.md` is the table for all 54 rows.
+
+## 26. The blur pipeline 30 % faster (2026-10-16)
+
+The brief: the production run, `--quarantine --second-chance 1` at 4
+workers, at least 30 % less wall time per file on this PC, with no recall
+traded for it and no more faces of 40 px or more left in the output. The
+baseline is commit `3eb0100`, measured again on the same day and through the
+same GPU lock as the branch, with the same flags:
+
+    cli.py FOOTAGE -o OUT --workers 4 --quarantine --second-chance 1 --report OUT\report.json --no-progress
+
+The numbers are in `docs/bench/speed_2026-10-16.json` (this PC) and
+`docs/bench/speed_2026-10-16_5090.json` (the cloud VM). Faces of 40 px or
+more are counted by the baseline export's own `faceblur.verify` on both
+outputs, so the branch is not judged by code it changed. Recall is the
+labelled harness on `004100`, `004310` and `005035`; `003939` has no labels.
+
+### 26.1 What the profile said, and what was built from it
+
+`docs/bench/profile_2026-10-16.md` ran `004100` serially, instrumented. Three
+things decided the plan. **The second chance repeated the whole write and
+the whole check**, and that round was 31 to 34 % of the wall on every file
+(004100: 69.7 s first round, 70.3 s second). Detection is GPU-bound at 4
+workers: 46 % of the serial detect phase is inference, and the workers' GPU
+work overlaps. The check runs the same detectors on the copy (39 %
+inference). The encode is CPU work only, 0 % GPU, so while it ran the GPU
+idled: 39 to 173 s a file in the baseline. Seven changes came out of it,
+each behind a setting where it changes behaviour.
+
+**The 1 s keyframe cadence.** Each encoded piece gets a keyframe every
+second with no extra ones at scene cuts (`encode_gop_seconds`, default 1.0;
+`--encode-gop SECONDS`). A scoped second chance can only cut the first copy
+at its keyframes, and NVENC had put one at each 5 s piece's start only: on
+`004100` the scoped round then re-encoded 684 of 984 frames for 11 seeds and
+saved nothing (D18). The camera files already carry a keyframe every second.
+
+**The second chance scoped to what it changed.** With
+`second_chance_scope` "changed" (the default; `--second-chance-scope
+changed|all`) a round writes again only the stretches whose masks differ
+after the seeded re-track, widened by `second_chance_margin_seconds` (0.5 s;
+`--second-chance-margin SECONDS`) either side and out to the first copy's
+keyframes. The rest is stream copied from the first copy and keeps the
+first check's verdict; only the re-encoded stretches are checked again.
+The scope is a diff of the masks, not of the seeds, because a seed moves
+masks far from its own frame through stitching and gap filling (D06).
+"all" is the old whole-file round.
+
+**The check overlapped with the encode.** Each encoded piece is checked as
+soon as it is written, on the same pool, while the next pieces encode,
+instead of the whole copy after the join (`check_overlap`, default on;
+`--no-check-overlap` is the old order). The join is a concat without
+re-encoding, so the pixels checked are the pixels delivered.
+
+**The adaptive detection stride.** Face detection skips a frame when the
+last `adaptive_stride_quiet` (3) detected frames had no strong and no weak
+candidate and the camera moved less than `adaptive_stride_shift` (4.0)
+source pixels into the frame; at most `adaptive_stride_max` − 1 frames are
+skipped after each detected one, and the default 2 means never two skips in
+a row (`--adaptive-stride/--no-adaptive-stride`, `--adaptive-stride-max N`).
+A shift that was not measured counts as moving, and so does an exact
+(0.0, 0.0): `motion.estimate_shift` returns that when it has no estimate (a
+cut, a black frame, a smeared fast move), while a still camera gives tiny
+non-zero values. The shift threshold must stay below `fast_shift`. The
+policy restarts in every chunk, so each chunk's first frame is detected,
+and the zone and the camera shift still run on every frame.
+
+**The detector's input built in place.** YuNet's padded, channel-ordered
+float32 input is written by one strided copy into a buffer kept per frame
+size, instead of `copyMakeBorder` plus `cv2.dnn.blobFromImage`. The tensor
+is bit-identical, and the preparation went from about 25 ms to about 5 ms a
+frame at the two sizes (D21).
+
+**The encode's mask work on the region of interest.** The alpha, the zone
+cut and the `prevented` alpha are computed on the union of the frame's
+regions grown by the blur margin, and the masked shares are counted on that
+crop over the frame's area. The rendered frames and the masked numbers are
+identical to the old full-frame code.
+
+**The check's CPU side.** The zone masks are drawn only over the box of
+the zone's polygons, the hands, rather than over the whole frame three
+times a frame; the moved-pixel rule, a float32 mean
+of three channel differences against a floor, is read as an integer channel
+sum (at most 765) against a threshold table built from that same float32
+rule; the encoder's noise is measured once a frame, and only when something
+reads it. The check's results are identical.
+
+### 26.2 This PC
+
+RTX with 8 GB, DirectML, 4 workers, both runs through the GPU lock. Each
+cell is baseline → branch. In the branch records the post-join check is 0.0
+(0.01 on `005035`) because the check ran during the encode, so the check
+column puts the baseline's check seconds beside the branch's
+`overlap_check_seconds`: check work done while the encode ran, summed over
+jobs, which is work and not wall. The branch's `encode_seconds` is also
+summed job work, so neither of those two columns compares as wall time. The
+re-encoded column is the frames the second chance wrote again; the baseline
+wrote all of them.
+
+| File | Frames | Wall s | Change | Detect s | Encode s | Check s → overlapped check work s | Second chance s | Re-encoded | Skipped by stride | Verify 40+ px | Recall |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `003939` | 2033 | 413.6 → 242.8 | **−41.3 %** | 131.4 → 126.1 | 109.7 → 98.4 | 158.7 → 204.4 | 132.2 → 28.0 | all → 413 | 10 | 2 → **3** | no labels |
+| `004100` | 984 | 217.1 → 127.0 | **−41.5 %** | 70.1 → 62.4 | 38.8 → 52.2 | 101.2 → 105.4 | 70.3 → 21.4 | all → 420 | 26 | 1 → 0 | 1.0 → 1.0 |
+| `004310` | 938 | 345.0 → 207.2 | **−39.9 %** | 100.5 → 91.2 | 65.6 → 107.0 | 170.9 → 231.3 | 116.7 → 53.9 | all → 938 | 0 | 8 → 5 | 0.9975 → 0.9975 |
+| `005035` | 3971 | 805.9 → 498.6 | **−38.1 %** | 265.1 → 247.5 | 172.6 → 219.6 | 340.6 → 583.0 | 253.0 → 90.6 | all → 2460 | 0 | 3 → **4** | 0.9945 → 0.9945 |
+| All four | 7926 | 1782.9 → 1084.4 | **−39.2 %** | 567.1 → 527.2 | 386.8 → 477.2 | 771.4 → 1124.0 | 572.2 → 193.9 | all → 4231 | 36 | 14 → 12 | |
+
+The totals row's wall is the whole run's (`total_wall_seconds`); the
+per-file walls sum to 1781.7 and 1075.6 s. The other totals are sums.
+Recall is 60 of 60 labelled faces on `004100`, 395 of 396 on `004310` and
+720 of 724 on `005035`, the same faces in both builds. `004100` was
+delivered by the branch and held back by the baseline; the other three were
+held back by both.
+
+**The wall gate passes on all four files**, 38.1 to 41.5 % lower. **The
+recall gate passes**: identical on the three labelled files. **The verify
+count gate fails by its letter on two files, by one detector hit each**:
+`003939` shows 3 faces of 40 px or more against the baseline's 2, `005035`
+4 against 3. Across the four files the branch leaves 12 against 14. So
+`all_pass` in the benchmark file is false, for that reason alone.
+
+What those hits are (D24, every differing hit compared frame by frame
+against the source): on `003939` frame 1101 (228 px) is pixel-identical in
+both outputs, both blur the head, and the detector flags it on one encoding
+only; frames 648 and 656 are one 87 px detection where each output leaves
+one of the two frames bare. On `005035` frames 2408 and 2498 are hits on a
+person's hands and torso, where the baseline's extra seed blurred most of
+the body and the branch the head only; frames 489 and 2132 are the reverse,
+masked by the branch and bare in the baseline; frame 3606 is a 41 px blob
+neither output resolves. The check reads encoded pixels, and its borderline
+hits move with the keyframe cadence in both directions: first-pass hits,
+branch against baseline, were 12 vs 10, 7 vs 11, 41 vs 36 and 73 vs 83.
+Detections of the source and the tracker's masks are identical to the
+baseline's on every file (D19, D24).
+
+The measured alternative is the branch with the encoder's old cadence,
+`--encode-gop 5` (D25): walls 41.9 / 43.4 / 40.3 / 35.2 % below baseline,
+and verify faces of 40 px or more 4 / 0 / 10 / 3 against the baseline's
+2 / 1 / 8 / 3. Its output is not pixel-identical to the baseline's either,
+because NVENC encodes differently once `-g` and `-no-scenecut` are given
+(9 seeds against 11 on `004100`), and it fails the count on two files as
+well. With any change to the encoding the per-file count moves by one or
+two hits either way; the only configuration that reproduces it exactly is a
+byte-identical output, which cannot be 30 % faster. The defaults stay at
+the 1 s cadence and the scope "changed". The recommendation is to judge
+quality by the recall harness and the frame evidence and to read the verify
+count as noise of about two hits; **the call is the owner's**.
+
+### 26.3 The RTX 5090
+
+One GreenNode VM, `faceblur-dev-b-1`: an RTX 5090 with 32607 MiB, driver
+580.159.04, 24 vCPU, the production image `faceblur-cuda:3`, Python 3.12.3,
+onnxruntime 1.24.4 on the CUDA execution provider, 5 workers as the
+production run uses, no GPU lock because nothing else ran on it. It was up
+from 14:37:46 to 15:53:53 (+07), 1.27 VM-hours, about $1.13, and deleted
+after the TensorRT trial in 26.6. Same table, same reading of the columns:
+
+| File | Frames | Wall s | Change | Detect s | Encode s | Check s → overlapped check work s | Second chance s | Re-encoded | Skipped by stride | Verify 40+ px | Recall |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `003939` | 2033 | 294.7 → 156.8 | **−46.8 %** | 142.5 → 80.7 | 54.7 → 63.0 | 89.8 → 161.0 | 70.8 → 18.1 | all → 450 | 10 | 3 → 2 | no labels |
+| `004100` | 984 | 166.5 → 99.2 | **−40.4 %** | 65.0 → 57.3 | 27.0 → 37.1 | 70.7 → 85.9 | 49.0 → 14.3 | all → 444 | 26 | 0 → **2** | 1.0 → 1.0 |
+| `004310` | 938 | 255.4 → 177.6 | **−30.5 %** | 96.3 → 89.3 | 39.3 → 81.4 | 114.5 → 182.3 | 76.3 → 42.7 | all → 938 | 0 | 12 → 7 | 0.9975 → 0.9975 |
+| `005035` | 3971 | 449.2 → 339.8 | **−24.4 %** | 166.1 → 155.9 | 93.7 → 165.1 | 167.2 → 468.5 | 131.9 → 80.6 | all → 2880 | 0 | 8 → 4 | 0.9959 → 0.9959 |
+| All four | 7926 | 1166.5 → 774.1 | **−33.6 %** | 469.9 → 383.3 | 214.7 → 346.6 | 442.3 → 897.7 | 328.0 → 155.7 | all → 4712 | 36 | 23 → 15 | |
+
+The per-file walls sum to 1165.8 and 773.4 s. Recall on `005035` is 721 of
+724 here against 720 locally, the same in both builds on each machine.
+
+**The total is 33.6 % lower, and `005035` misses the wall gate at −24.4 %.**
+The verify count moves the other way from this PC: `004100` goes from 0 to
+2 faces of 40 px or more, and the branch held it back where the baseline
+delivered it, the mirror image of the local 1 → 0. It is the same
+borderline noise as in 26.2, in the other direction. Recall is identical on
+the three labelled files. The local gate is the one the brief sets; these
+numbers are reported beside it.
+
+Why the gain is smaller on the faster GPU (D27): the 5090 is about 1.6
+times faster at detection (166 against 265 s on `005035` in the baseline),
+which shrinks the GPU seconds the branch saves, while the CPU costs it does
+not touch stay where they were: the encode (94 s on `005035` in the
+baseline) and the Python side of the check and of `redact`. And the scoped
+round could not help on the two long files: `005035` re-encoded 2880 of
+3971 frames in 12 ranges, and `004310` the whole file. The next levers on
+this machine are the check work, 468.5 s of it on `005035`, and the
+whole-file fallback.
+
+### 26.4 Where the scoped second chance saves, and where it cannot
+
+| File | Frames | Re-encoded, this PC | Re-encoded, 5090 | Second chance s, this PC | Second chance s, 5090 |
+|---|---|---|---|---|---|
+| `003939` | 2033 | 413 (20 %) | 450 (22 %) | 132.2 → 28.0 | 70.8 → 18.1 |
+| `004100` | 984 | 420 (43 %) | 444 (45 %) | 70.3 → 21.4 | 49.0 → 14.3 |
+| `004310` | 938 | 938 (100 %) | 938 (100 %) | 116.7 → 53.9 | 76.3 → 42.7 |
+| `005035` | 3971 | 2460 (62 %) | 2880 (73 %) | 253.0 → 90.6 | 131.9 → 80.6 |
+
+The round saves most where the check finds few faces close together, as on
+`003939` and `004100`, and nothing where its seeds are spread over the file.
+`004310` was measured twice on this PC to find out which case it is
+(`docs/bench/second_chance_scope_2026-10-16.md`, D30, D31).
+
+The first run (220.7 s wall) recorded why the round wrote the whole file:
+`no_copy_segment`. 41 seeds, 3 kept, reorder delay 0, keyframes every 30
+frames (32 in 938), so the copy could be cut at any second; but once clean
+stretches shorter than `min_copy_seconds` (2.0 s, 60 frames) are folded
+into their neighbours, nothing is left to copy. The second run (213.3 s,
+the mask key wrapped in the process) counted what the re-track changed: 600
+of 938 frames before the margin, of which 541 gained or lost a box and 59
+moved a box by 2 px or more; none moved by less than 2 px. The changed
+frames fall in 23 runs across the file and the longest clean stretch is 81
+frames. So the re-track is not jitter: 41 seeds re-anchor the tracker over
+most of the file, which is the second chance doing its job (residual faces
+41 → 7), and the round correctly falls back to the whole file there.
+
+The audit record now says which case a file was:
+`second_chance_scope_fallback` is the first round's reason for writing the
+whole file under the scope "changed" (`all_changed`, `reorder_delay`,
+`probe_failed`, `no_copy_segment` or `join_failed`; empty otherwise), and
+`second_chance_changed_frames` counts the frames whose masks differed
+between the round's write and its re-track, before the margin, summed over
+rounds. `eval/bench_speed.py` copies both into the benchmark file. The two
+benchmark runs above predate the fields.
+
+### 26.5 The adaptive stride stays on
+
+Frames skipped by the stride: `003939` 10, `004100` 26, `004310` 0,
+`005035` 0, the same on both machines, 36 of 7926 frames. It is a small
+saving on this footage, and a free one. Recall is identical on every
+labelled file with it on, so it is on by default. `--no-adaptive-stride` (or
+`adaptive_stride = False`) turns it off, and `--adaptive-stride-max 1` is
+the same as off.
+
+### 26.6 TensorRT FP16 is not adopted
+
+`docs/bench/trt_2026-10-16.md` tried onnxruntime's TensorRT provider in FP16
+on the 5090, on the first 60 frames of `004100`. It runs only once a 4.30 GB
+TensorRT wheel is installed beside the image, which has no
+`libnvinfer.so.10`. `DetectorBank.detect_raw` went from 38.67 ms a frame on
+CUDA to 36.57 with YuNet alone on TensorRT (−5 %) and 35.45 with all three
+models (−8 %); YuNet's raw session run at 1920 went from 4.23 to 3.58 ms.
+Each engine takes about 9 s to build per input shape (9.237 s at 1568x1920,
+9.128 s at 1056x1280) and 0.07 s from its cache. Every box scoring 0.4 or
+more is the same in both; scores move by up to 0.05, and the box count at
+the 0.05 floor differs on 12 of 60 frames at 1920.
+
+Detection is 35 to 45 % of the branch's wall on the 5090, so the whole gain
+is about 3 % of wall (D26), against a larger image, an engine cache per
+shape (the cache key of an in-memory model leaves the shape out), a silent
+fallback to CUDA when the provider fails, and detections that are not
+identical and would need a full recall run to accept. Not worth a setting.
+
+### 26.7 What this does not do
+
+**The zone's palm windows are not batched** (D21).
+`models/palm_detection.onnx` has a fixed batch of 1, in its input and in
+its Reshape constants, so the 24 windows a frame cannot go in one call
+without a re-exported model, and `models/` was not to be touched. It is the
+largest remaining GPU item in the detection pass.
+
+The detectors, their models and every threshold are as they were; the
+source's detections and the tracker's masks are identical to the
+baseline's. The single-pass `process_video` path, one video in one process,
+applies the adaptive stride too (T16), with one policy for the whole pass
+where the batch path has one per chunk.
+
+Next steps: TensorRT built into the 5090 image, with an engine cache per
+input shape, if a recall run accepts its detections; the check phase on the
+5090, which is where its wall now goes; and a minimum copy of its own for
+the second write, which on `004310` could copy a few stretches of 60 to 81
+frames, at most about 3 % of that file's wall, and is not worth changing a
+setting both writes share.
