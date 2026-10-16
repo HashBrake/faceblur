@@ -39,7 +39,17 @@ pilot's "too small" skeletons came from the toolkit's renderer drawing
 pinhole estimates through the fisheye model, so `overlay.mp4` is drawn with
 the pinhole camera the toolkit used. In `vs:faceblur/hands_showcase/`
 (1,581 files, 2.3 GB, README and metrics.json), with its own 7-day signed
-link, **expires 2026-10-23 12:47 UTC**; the link is not kept in git. In parallel, the partner's
+link, **expires 2026-10-23 12:47 UTC**; the link is not kept in git.
+**Build sessions A-D finished 2026-10-16** (all DONE, ~3.7 VM-hours, ~$3.3).
+Owner's decisions the same evening: merge all four into `main` (order A, B,
+D, C; being done in worktree `D:\Claude Projects\faceblur-merge`, branch
+`merge/builds`, then fast-forward `main`); accept B's speedups as defaults
+(recall identical; the verify count differs by one detector hit on 2 of 4
+files); turn on A's self-delete hook **with the current full-access API
+keys** on the VMs (owner told the risk: a VM with the keys can manage every
+server in the project), as an opt-in per run; compare C's stereo tracker
+with EgoSmith on the four showcase clips (results under
+`hands_showcase/<clip>/stereo/`). In parallel, the partner's
 hand toolkit (EgoSmith, HaWoR + MANO) ran its pilot but is not good enough
 to show yet (see "The hand toolkit"); four build sessions run locally
 ("Build sessions from the build plan"). The robustness build on branch
