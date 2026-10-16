@@ -235,13 +235,16 @@ def test_the_branch_is_scored_with_its_production_defaults():
 
 def test_the_new_record_fields_are_reported_and_none_on_older_records():
     new = ("overlap_check_seconds", "second_chance_reencoded_frames",
-           "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept")
+           "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept",
+           "second_chance_scope_fallback", "second_chance_changed_frames")
     assert set(new) <= set(bench.RECORD_KEYS)
     branch = bench.file_entry({"wall_seconds": 10, "overlap_check_seconds": 2.5,
                                "second_chance_reencoded_frames": 30,
                                "frames_skipped_adaptive": 100, "second_chance_seeds": 7,
-                               "second_chance_seeds_kept": 1}, None, None)
-    assert [branch[k] for k in new] == [2.5, 30, 100, 7, 1]
+                               "second_chance_seeds_kept": 1,
+                               "second_chance_scope_fallback": "too many zones",
+                               "second_chance_changed_frames": 12}, None, None)
+    assert [branch[k] for k in new] == [2.5, 30, 100, 7, 1, "too many zones", 12]
     baseline = bench.file_entry({"wall_seconds": 10}, None, None)
     assert all(baseline[k] is None for k in new)
 

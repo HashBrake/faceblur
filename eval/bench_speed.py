@@ -504,7 +504,8 @@ def all_pass(gates: dict) -> bool | None:
 RECORD_KEYS = ("wall_seconds", "detect_seconds", "encode_seconds", "check_seconds",
                "second_chance_seconds", "second_chance_rounds", "frames", "quarantined",
                "overlap_check_seconds", "second_chance_reencoded_frames",
-               "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept")
+               "frames_skipped_adaptive", "second_chance_seeds", "second_chance_seeds_kept",
+               "second_chance_scope_fallback", "second_chance_changed_frames")
 RECALL_KEYS = ("recall", "recall_by_size", "exposed_40", "exposed_24_40", "continuity",
                "masked_mean")
 
