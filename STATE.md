@@ -30,7 +30,7 @@ per lane; before/after crops checked). A bug deleted each lane's prefetched
 next pair (fixed in `3e4c83d`; restarted 12:48 UTC). Measured: ~19 fps per
 lane with 2 lanes, so the pass is ~100 VM-hours (~$90-100, owner told).
 `faceblur-patch-2` to `-8` (shares 1/8 to 7/8) created through the API
-2026-10-16 ~19:50 local and bootstrapped; `cloud/vm_status.sh` lists them. Share 0/8 finished 2026-10-17 01:24 UTC (36/36, 2 with nothing to mask); `faceblur-patch-1` deleted. Share 6/8 finished 03:29 UTC (36/36); `faceblur-patch-7` deleted. Share 4/8 finished 04:14 UTC (36/36, 1 with nothing to mask); `faceblur-patch-5` deleted. Share 1/8 finished 04:51 UTC (36/36, 2 with nothing to mask); `faceblur-patch-2` deleted.
+2026-10-16 ~19:50 local and bootstrapped; `cloud/vm_status.sh` lists them. Share 0/8 finished 2026-10-17 01:24 UTC (36/36, 2 with nothing to mask); `faceblur-patch-1` deleted. Share 6/8 finished 03:29 UTC (36/36); `faceblur-patch-7` deleted. Share 4/8 finished 04:14 UTC (36/36, 1 with nothing to mask); `faceblur-patch-5` deleted. Share 1/8 finished 04:51 UTC (36/36, 2 with nothing to mask); `faceblur-patch-2` deleted. Share 3/8 finished 05:01 UTC (36/36, 1 with nothing to mask); `faceblur-patch-4` deleted.
 **Hand showcase** (owner, 2026-10-16): 4 x 2-minute left clips (devices 97,
 B2, D5, FF; windows clear of every checker find) run through the EgoSmith
 toolkit on `faceblur-hands-2` (deleted after upload). The fisheye input
