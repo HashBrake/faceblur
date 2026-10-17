@@ -3,7 +3,7 @@
 #   bash cloud/vm_status.sh            (the patch fleet of 2026-10-16)
 #   bash cloud/vm_status.sh IP:k/n ...
 # Reads the patch pass's log where there is one, else the blur run's.
-FLEET=${*:-103.196.239.232:0/8 116.118.92.82:1/8 116.118.92.65:2/8 116.118.92.83:3/8
+FLEET=${*:-116.118.92.82:1/8 116.118.92.65:2/8 116.118.92.83:3/8
 116.118.92.109:4/8 116.118.92.112:5/8 116.118.92.111:6/8 116.118.92.113:7/8}
 for spec in $FLEET; do
     ip=${spec%%:*}; shard=${spec#*:}
