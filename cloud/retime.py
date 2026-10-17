@@ -59,8 +59,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 from faceblur import __version__  # noqa: E402
-from faceblur.timestamps import (TimingError, check_retimed, copy_layout,  # noqa: E402
-                                 decode_check, retime, same_timing, source_timing,
+from faceblur.timestamps import (SourceTiming, TimingError, check_retimed,  # noqa: E402
+                                 copy_layout, decode_check, retime, same_timing,
+                                 source_timing,
                                  _max_error_ms)
 
 DELIVERED = "vs:faceblur-blurred"
@@ -293,6 +294,8 @@ def tree(args) -> int:
     skip = [rel for rel in todo if rel in ledger.done
             and ledger.done[rel].get("delivered_bytes") == videos[rel]]
     todo = [rel for rel in todo if rel not in skip]
+    if args.only:
+        todo = [rel for rel in todo if args.only in rel]
     if args.limit:
         todo = todo[:args.limit]
     print(f"videos {len(videos)}; stubs skipped {len(stubs)}; done before (ledger) {len(skip)}; "
@@ -436,10 +439,16 @@ class Object:
         return data
 
 
-def sparse_index(read, total: int, dst: Path, chunk: int = 1 << 16) -> list:
+def sparse_index(read, total: int, dst: Path, chunk: int = 1 << 16,
+                 tolerate_damage: bool = False) -> list:
     """Write `dst`: `total` bytes long, every top level box in place except
     the media data, of which only the box headers are written; the rest are
-    holes. Returns [(kind, offset, size, header length)]."""
+    holes. Returns [(kind, offset, size, header length)].
+
+    `tolerate_damage`: a recording the camera cut off ends in a box whose
+    size is not written (an 8 byte `mdat` followed by loose data). The walk
+    stops there instead of failing, the file is cut at that point, and the
+    last entry is (b"!bad", offset, 0, 0)."""
     import struct
     boxes = []
     off = 0
@@ -462,6 +471,10 @@ def sparse_index(read, total: int, dst: Path, chunk: int = 1 << 16) -> list:
                 elif size == 0:
                     size = total - off
                 if size < hl or off + size > total:
+                    if tolerate_damage:
+                        boxes.append((b"!bad", off, 0, 0))
+                        f.truncate(off)
+                        return boxes
                     raise TimingError(f"bad box {kind!r} at {off}, size {size}")
                 boxes.append((kind, off, size, hl))
                 f.seek(off)
@@ -692,9 +705,15 @@ def compose_one(s3, rel: str, copy_remote: str, src_remote: str, work: Path,
             raise TimingError("the copy is the size of its source")
         ci, si = d / "copy_index.mp4", d / "source_index.mp4"
         cboxes = sparse_index(copy.read, copy.size, ci)
-        sparse_index(src.read, src.size, si)
+        sboxes = sparse_index(src.read, src.size, si, tolerate_damage=True)
         timing = source_timing(si)
         layout = copy_layout(ci)
+        if sboxes[-1][0] == b"!bad" and len(timing) > layout.frames > 0:
+            # A cut-off source: the pipeline dropped its last frames, which
+            # do not decode; frame n of the copy is still frame n here.
+            n = layout.frames
+            rec["source_damaged_tail"] = {"at": sboxes[-1][1], "frames_dropped": len(timing) - n}
+            timing = SourceTiming(timing.time_base, timing.pts[:n], timing.pts[n] - timing.pts[n - 1])
         rec.update(frames=layout.frames, source_frames=len(timing),
                    time_base=f"{timing.time_base.numerator}/{timing.time_base.denominator}")
         if layout.frames != len(timing):
@@ -829,6 +848,76 @@ def compose_tree(args) -> int:
     return 0 if not any(k not in DONE and k != "dry_run" for k in counts) else 1
 
 
+def check_tree(args) -> int:
+    """Measure delivered copies against their sources, the comparison.json
+    way (every frame within 2 ms of the source's container pts after
+    removing one constant offset), from their indexes only; and look for
+    anything raw or any audio in the delivered tree."""
+    import random
+    s3 = s3_client()
+    work = Path(args.work)
+    work.mkdir(parents=True, exist_ok=True)
+    ledger = Ledger(work / "ledger.jsonl")
+    delivered = listing(DELIVERED)
+    sources, repaired = listing(SOURCES), listing(REPAIRED)
+    videos = sorted(rel for rel, size in delivered.items()
+                    if PurePosixPath(rel).suffix.lower() in VIDEO_EXT and size >= EMPTY)
+    audio = [rel for rel in delivered if rel.endswith(("_audio.wav", "_audio_pts.csv"))]
+    raw = [rel for rel in videos if delivered[rel] in (sources.get(rel), repaired.get(rel))]
+    unrecorded = [rel for rel in videos if rel not in ledger.done
+                  or (ledger.done[rel]["status"] == "retimed"
+                      and ledger.done[rel].get("bytes") != delivered[rel])
+                  or (ledger.done[rel]["status"] == "already"
+                      and ledger.done[rel].get("delivered_bytes") != delivered[rel])]
+    picks = videos
+    if args.sample:
+        picks = sorted(random.Random(args.seed).sample(videos, min(args.sample, len(videos))))
+    picks = sorted(set(picks) | {rel for rel in args.also if rel in delivered})
+
+    def one(rel):
+        d = work / f"check_{abs(hash(rel)) % 10**10}"
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            row = ledger.done.get(rel) or {}
+            src_remote = row.get("source") or (f"{REPAIRED}/{rel}" if rel in repaired
+                                               else f"{SOURCES}/{rel}")
+            c, s = Object(s3, f"{DELIVERED}/{rel}"), Object(s3, src_remote)
+            sparse_index(c.read, c.size, d / "c.mp4")
+            sb = sparse_index(s.read, s.size, d / "s.mp4", tolerate_damage=True)
+            a, b = source_timing(d / "s.mp4"), source_timing(d / "c.mp4")
+            n = min(len(a), len(b))
+            cut = sb[-1][0] == b"!bad" and len(a) > len(b)       # frames the pipeline dropped
+            err = _max_error_ms(b.seconds()[:n], a.seconds()[:n])
+            return {"path": rel, "source": src_remote, "frames_copy": len(b),
+                    "frames_raw": len(a), "source_damaged_tail": cut,
+                    "max_abs_diff_ms_after_offset": round(err, 3),
+                    "exact": a.pts[:n] == b.pts and a.time_base == b.time_base,
+                    "timestamps_preserved": (len(a) == len(b) or cut) and err <= 2.0}
+        except Exception as exc:
+            return {"path": rel, "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "timestamps_preserved": False}
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        for res in pool.map(one, picks):
+            results.append(res)
+            print(json.dumps(res), flush=True)
+    bad = [r for r in results if not r.get("timestamps_preserved")]
+    summary = {"checked": len(results), "preserved": len(results) - len(bad),
+               "exact": sum(1 for r in results if r.get("exact")),
+               "max_error_ms": max((r.get("max_abs_diff_ms_after_offset", 0) for r in results),
+                                   default=None),
+               "not_preserved": [r["path"] for r in bad],
+               "delivered_videos": len(videos), "raw_videos_found": raw,
+               "audio_files_found": audio, "not_matching_the_ledger": unrecorded}
+    print("SUMMARY " + json.dumps(summary), flush=True)
+    (work / "check_summary.json").write_text(json.dumps({"summary": summary,
+                                                         "results": results}, indent=1))
+    return 0 if not bad and not raw and not audio else 1
+
+
 def measure(source: Path, copy: Path) -> dict:
     """The comparison.json measure: every frame within 2 ms of the source's
     container pts after removing one constant offset."""
@@ -853,6 +942,7 @@ def main(argv: list[str]) -> int:
     t.add_argument("--limit", type=int, default=0)
     t.add_argument("--dry-run", action="store_true",
                    help="download, retime and check, but upload nothing")
+    t.add_argument("--only", default="", help="only paths containing this text")
     t.add_argument("--stage", action="store_true",
                    help="take the copies from the work bucket and upload to vs:faceblur/retimed/")
     cp = sub.add_parser("compose", help="retime the copies deliver.py picks into "
@@ -864,6 +954,13 @@ def main(argv: list[str]) -> int:
     cp.add_argument("--from-in", action="store_true",
                     help="use vs:faceblur/in/ even where vs:faceblur/in_repaired/ has the source")
     cp.add_argument("--dry-run", action="store_true")
+    ck = sub.add_parser("check", help="measure delivered copies against their sources "
+                                      "from their indexes; look for raw videos and audio")
+    ck.add_argument("--work", default="/scratch/retime")
+    ck.add_argument("--workers", type=int, default=12)
+    ck.add_argument("--sample", type=int, default=0, help="this many at random; 0: all")
+    ck.add_argument("--seed", type=int, default=0)
+    ck.add_argument("--also", nargs="*", default=[], help="paths checked besides the sample")
     pb = sub.add_parser("publish", help="put staged files over the delivered copies")
     pb.add_argument("--work", default="/scratch/retime")
     pb.add_argument("--workers", type=int, default=16)
@@ -884,6 +981,8 @@ def main(argv: list[str]) -> int:
         return publish(args)
     if args.cmd == "compose":
         return compose_tree(args)
+    if args.cmd == "check":
+        return check_tree(args)
     return tree(args)
 
 
