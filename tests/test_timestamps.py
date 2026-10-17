@@ -279,3 +279,81 @@ def test_tool_refuses_different_counts_and_b_frames(vfr_source, tmp_path):
     rec = tool.retime_file(vfr_source, _cfr(tmp_path / "b.mp4", bf=2), tmp_path / "o.mp4")
     assert rec["status"] == "refused" and "presentation order" in rec["error"]
     assert not (tmp_path / "o.mp4").exists()
+
+
+# ------------------------------------------- compose: only the index moves
+
+def _local(path: Path):
+    data = path.read_bytes()
+    return lambda off, n: data[off:off + n]
+
+
+def _fragmented(src: Path, dst: Path) -> Path:
+    with av.open(str(src)) as cin, av.open(
+            str(dst), "w", format="mp4",
+            options={"movflags": "frag_keyframe+empty_moov+default_base_moof"}) as out:
+        vin = cin.streams.video[0]
+        vout = out.add_stream_from_template(vin)
+        vout.time_base = vin.time_base
+        for p in cin.demux(vin):
+            if p.size:
+                p.stream = vout
+                out.mux(p)
+    return dst
+
+
+def _assemble(tool, copy: Path, source: Path, tmp: Path) -> tuple[bytes, bytes]:
+    """What compose does, on local files: (header, the copy's payload)."""
+    si, ci = tmp / "si.mp4", tmp / "ci.mp4"
+    tool.sparse_index(_local(source), source.stat().st_size, si)
+    cboxes = tool.sparse_index(_local(copy), copy.stat().st_size, ci)
+    timing = source_timing(si)
+    kinds = [k for k, _, _, _ in cboxes]
+    _, mo, ms, _ = cboxes[kinds.index(b"moov")]
+    _, do, ds, dh = cboxes[-1]
+    index = ci.read_bytes()[:do + dh]
+    moov = tool.retimed_moov(index[mo:mo + ms], list(timing.pts), timing.last_duration,
+                             timing.time_base, 0)
+    data = copy.read_bytes()
+    return index[:mo] + moov + index[mo + ms:do + dh], data[do + dh:do + ds]
+
+
+def test_compose_moves_only_the_index(vfr_source, tmp_path):
+    """The tool's compose mode reads only the indexes (sparse files, holes
+    for the pictures) of a fragmented source, as the camera writes, and of a
+    faststart copy, and assembles a new index + the copy's payload bytes.
+    The result carries the source's pts, the copy's packets and key frames,
+    and decodes."""
+    tool = _tool()
+    frag = _fragmented(vfr_source, tmp_path / "frag_source.mp4")
+    assert _pts(frag) == _vfr_pts()
+    copy = tmp_path / "copy.mp4"
+    r = run_ffmpeg(["-y", "-v", "error", "-i", str(_cfr(tmp_path / "c0.mp4")), "-c", "copy",
+                    "-movflags", "+faststart", str(copy)])
+    assert r.returncode == 0
+    si = tmp_path / "si_check.mp4"
+    boxes = tool.sparse_index(_local(frag), frag.stat().st_size, si)
+    assert sum(1 for b in boxes if b[0] == b"moof") > 1
+    assert source_timing(si) == source_timing(frag)
+    assert si.read_bytes() != frag.read_bytes()                # holes where the pictures were
+    header, payload = _assemble(tool, copy, frag, tmp_path)
+    out = tmp_path / "assembled.mp4"
+    out.write_bytes(header + payload)
+    assert _pts(out) == _vfr_pts()
+    assert source_timing(out).time_base == Fraction(1, TB)
+    with av.open(str(copy)) as a, av.open(str(out)) as b:
+        pa = [(bytes(p), p.is_keyframe) for p in a.demux(a.streams.video[0]) if p.size]
+        pb = [(bytes(p), p.is_keyframe) for p in b.demux(b.streams.video[0]) if p.size]
+    assert pa == pb and sum(k for _, k in pa) == 4
+    assert decode_check(out, N) == ""
+    assert verify(out, N) == ""
+
+
+def test_compose_refuses_a_source_that_does_not_start_at_zero(tmp_path):
+    tool = _tool()
+    src = _stamp(_cfr(tmp_path / "c.mp4"), tmp_path / "s.mp4", _vfr_pts(start=4500))
+    copy = tmp_path / "copy.mp4"
+    run_ffmpeg(["-y", "-v", "error", "-i", str(_cfr(tmp_path / "c0.mp4")), "-c", "copy",
+                "-movflags", "+faststart", str(copy)])
+    with pytest.raises(TimingError, match="not 0"):
+        _assemble(tool, copy, src, tmp_path)
