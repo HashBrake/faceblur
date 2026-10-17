@@ -34,6 +34,7 @@ from .motion import downscale, estimate_shift
 from .pipeline import (STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED, STATUS_STOPPED,
                        AuditRecord, ProgressCallback, sidecar_path, tracker_for)
 from .redact import redact_measured
+from .timestamps import retime
 from .segments import (Segment, SegmentEncoder, concat, cut_copy, decode_range, frame_times,
                        keyframes, plan_segments, reorder_delay, split_long, verify)
 from .settings import Settings
@@ -1062,8 +1063,15 @@ def quarantine_output(dst: Path, copy: Optional[Path] = None) -> Path:
 
 def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit, workers,
                     work: Path, report, cancelled, zones=None, copy_src=None, copy_times=None,
-                    checks: Optional[dict] = None, audio: bool = True):
+                    checks: Optional[dict] = None, audio: bool = True, timing=None):
     """Returns (masked, by kind, prevented, problem text, frames copied), or None.
+
+    The joined file carries the per frame timestamps of `timing` (a file;
+    `src` when not given), exactly, in its time base: frame n of the copy
+    shows at the source's frame n time, whichever way the piece holding it
+    was made. The pieces are joined on the encoder's constant rate and then
+    remuxed once onto the source's clock (`timestamps.retime`); the patch
+    pass, whose `src` is a delivered copy, hands the original source here.
 
     `checks`, when given, has each piece checked as soon as it is written, on
     the same pool, while the next pieces encode: `chunk`, `stride` and
@@ -1146,11 +1154,24 @@ def _write_and_join(src, dst, info, times, settings, segments, per_frame, submit
             results.close()
 
     part = part_path(dst)
-    error = concat(parts, src, part, work / "list.txt", audio=audio)
+    joined = work / "joined.mp4"
+    error = concat(parts, src, joined, work / "list.txt", audio=False)
     if error:
-        part.unlink(missing_ok=True)
+        joined.unlink(missing_ok=True)
         return (masked, by_kind, prevented,
                 f"Could not write the blurred copy. ffmpeg said: {error[:300]}", 0)
+    problem = verify(joined, len(per_frame))
+    if problem:
+        joined.unlink(missing_ok=True)
+        return masked, by_kind, prevented, f"The joined file did not verify: {problem}", 0
+    try:
+        retime(joined, Path(timing) if timing is not None else Path(src), part,
+               audio_from=Path(src) if audio else None, frames=len(per_frame))
+    except VideoError as exc:
+        part.unlink(missing_ok=True)
+        return masked, by_kind, prevented, f"Could not keep the source's timestamps: {exc}", 0
+    finally:
+        joined.unlink(missing_ok=True)
     problem = verify(part, len(per_frame), times[-1] - times[0])
     if problem:
         part.unlink(missing_ok=True)

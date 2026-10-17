@@ -1,5 +1,6 @@
 # Exact versions installed and tested on Python 3.12.8, Windows 11.
 # Regenerate with: .venv/Scripts/python.exe -m pip freeze
+av==19.0.1
 colorama==0.4.6
 flatbuffers==25.12.19
 imageio-ffmpeg==0.6.0

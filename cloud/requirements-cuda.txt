@@ -1,6 +1,7 @@
 # The cloud run: Linux, an NVIDIA card through CUDA. The same versions as
 # requirements.txt, with onnxruntime-gpu in place of onnxruntime-directml and
 # no window toolkit, because nothing here opens a window.
+av==19.0.1
 flatbuffers==25.12.19
 imageio-ffmpeg==0.6.0
 iniconfig==2.3.0

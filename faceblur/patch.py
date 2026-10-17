@@ -42,6 +42,7 @@ from . import __version__
 from .detect import Detection, iou
 from .segments import frame_times, keyframes, plan_segments, reorder_delay, split_long
 from .settings import Settings
+from .timestamps import SourceTiming, retime, same_timing, source_timing
 from .verify import detection_from_row, not_hands, of_kind, plan_jobs, residual_job, runs_of
 from .video import VideoError, has_audio, probe
 
@@ -131,7 +132,7 @@ def by_size(rows: list[dict]) -> dict[str, int]:
 
 
 def write(copy: Path, output: Path, per_frame: list[list[Detection]], settings: Settings,
-          submit, workers: int) -> dict:
+          submit, workers: int, timing: Optional[Path] = None) -> dict:
     """Mask `per_frame` on the copy and write `output`: the pipeline's write pass.
 
     The same steps `batch.run_video` takes, in the same order, with the copy
@@ -140,6 +141,10 @@ def write(copy: Path, output: Path, per_frame: list[list[Detection]], settings: 
     clean stretches copied when the copy has no reordering, and the whole
     file encoded if the mixed join does not verify. `zones` is not passed:
     rows in the zone were left out already (see `to_mask` and `held`).
+
+    `timing` is the original source: the output carries its frame
+    timestamps, not the copy's (which may be on the encoder's constant
+    rate). None keeps the copy's.
     """
     from .batch import _write_and_join
 
@@ -162,7 +167,7 @@ def write(copy: Path, output: Path, per_frame: list[list[Detection]], settings: 
         try:
             result = _write_and_join(copy, output, info, times, settings, segments, per_frame,
                                      submit, workers, Path(work), lambda *a: None,
-                                     lambda: False, None, audio=False)
+                                     lambda: False, None, audio=False, timing=timing)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         _, _, _, problem, copied = result
@@ -170,6 +175,7 @@ def write(copy: Path, output: Path, per_frame: list[list[Detection]], settings: 
         out["error"] = problem
         if not problem:
             out["frames_copied"] = copied
+            out["retimed"] = timing is not None
             break
         output.unlink(missing_ok=True)
     return out
@@ -198,7 +204,7 @@ def patch(src: Path, copy: Path, output: Path, settings: Optional[Settings] = No
               "flat_boxes": 0, "frames_found": 0, "frames_touched": 0,
               "masked_by_size": {}, "masked_max_px": 0, "masked_runs": [],
               "masked_list": [], "frames_copied": 0, "join_attempts": 0,
-              "copy_audio": False, "output_audio": False,
+              "copy_audio": False, "output_audio": False, "retimed": False,
               "hand_models": {}, "compute": {},
               "check_seconds": 0.0, "encode_seconds": 0.0, "wall_seconds": 0.0,
               "settings": settings.to_dict(), "faceblur_version": __version__,
@@ -241,14 +247,22 @@ def patch(src: Path, copy: Path, output: Path, settings: Optional[Settings] = No
         if not chosen:
             # Nothing to mask: the copy goes through as it is, byte for byte,
             # so the output always exists and is exactly what was checked.
-            part = Path(str(output) + ".part")
-            shutil.copyfile(copy, part)
-            part.replace(output)
+            # Unless it is not on the source's clock: then its packets go
+            # through unchanged, remuxed with the source's timestamps.
+            ref = source_timing(src)
+            if len(ref) >= n and same_timing(copy, SourceTiming(ref.time_base, ref.pts[:n],
+                                                                 ref.last_duration)):
+                part = Path(str(output) + ".part")
+                shutil.copyfile(copy, part)
+                part.replace(output)
+            else:
+                retime(copy, src, output, frames=n)
+                record["retimed"] = True
         else:
             boxes = held(chosen, n, hold)
             record["frames_touched"] = len(boxes)
             per_frame = [boxes.get(i, []) for i in range(n)]
-            got = write(copy, output, per_frame, settings, submit, workers)
+            got = write(copy, output, per_frame, settings, submit, workers, timing=src)
             record.update(got)
             if got["error"]:
                 raise VideoError(got["error"])
