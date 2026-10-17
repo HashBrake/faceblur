@@ -357,3 +357,29 @@ def test_compose_refuses_a_source_that_does_not_start_at_zero(tmp_path):
                 "-movflags", "+faststart", str(copy)])
     with pytest.raises(TimingError, match="not 0"):
         _assemble(tool, copy, src, tmp_path)
+
+
+def test_compose_takes_the_source_time_scale(tmp_path):
+    """Some sources are on 1/15360, the copies on 1/90000."""
+    tool = _tool()
+    pts = [p * 15360 // 90000 for p in _vfr_pts()]
+    src = tmp_path / "s.mp4"
+    with av.open(str(_cfr(tmp_path / "c.mp4"))) as cin, av.open(str(src), "w", format="mp4") as out:
+        vin = cin.streams.video[0]
+        vout = out.add_stream_from_template(vin)
+        vout.time_base = Fraction(1, 15360)
+        for i, p in enumerate(q for q in cin.demux(vin) if q.size):
+            p.pts = p.dts = pts[i]
+            p.duration = (pts[i + 1] - pts[i]) if i + 1 < N else 1536
+            p.time_base = Fraction(1, 15360)
+            p.stream = vout
+            out.mux(p)
+    assert source_timing(src).time_base == Fraction(1, 15360)
+    copy = tmp_path / "copy.mp4"
+    run_ffmpeg(["-y", "-v", "error", "-i", str(_cfr(tmp_path / "c0.mp4")), "-c", "copy",
+                "-movflags", "+faststart", str(copy)])
+    header, payload = _assemble(tool, copy, src, tmp_path)
+    out = tmp_path / "assembled.mp4"
+    out.write_bytes(header + payload)
+    assert source_timing(out) == source_timing(src)
+    assert decode_check(out, N) == ""

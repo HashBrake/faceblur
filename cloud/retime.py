@@ -545,9 +545,9 @@ def retimed_moov(moov: bytes, pts: list, last_duration: int, time_base, shift: i
     durations, and chunk offsets moved by `shift` plus the change in the
     box's own size. Everything else stays the copy's, byte for byte.
 
-    For a one track video copy with no reordering (no `ctts` offsets), a
-    media time scale of the source's time base and a source whose first
-    frame is at 0; anything else is refused."""
+    For a one track video copy with no reordering (no `ctts` offsets) and a
+    source whose first frame is at 0; anything else is refused. The track
+    takes the source's time scale."""
     import struct
     tree = _parse(moov[8:])
     traks = _find(tree, b"trak")
@@ -568,9 +568,14 @@ def retimed_moov(moov: bytes, pts: list, last_duration: int, time_base, shift: i
     b = bytearray(mdhd[1])
     v = b[0]
     ts_at = 20 if v == 1 else 12
-    media_ts = struct.unpack(">I", b[ts_at:ts_at + 4])[0]
-    if time_base.numerator != 1 or time_base.denominator != media_ts:
-        raise TimingError(f"time scale {media_ts}, source time base {time_base}")
+    if time_base.numerator != 1:
+        raise TimingError(f"source time base {time_base}")
+    # The track takes the source's time scale (the copies were written on
+    # 1/90000; some sources are on 1/15360). Only media times use it: the
+    # sample durations and the media duration, both rewritten here, and the
+    # edit list's start, which must be 0.
+    media_ts = time_base.denominator
+    b[ts_at:ts_at + 4] = struct.pack(">I", media_ts)
     durations = [y - x for x, y in zip(pts, pts[1:])] + [last_duration]
     total = sum(durations)
     if v == 1:
