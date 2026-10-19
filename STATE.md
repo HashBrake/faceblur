@@ -1,5 +1,19 @@
 # STATE, handover notes
 
+**2026-10-19, comparison clips:** 5 side-by-side clips (30 s, 3x2 panes: raw,
+old blur, old + patch (delivered), new blur + patch, new + HEVC, EgoSmith
+hands), windows B2 004332 (most missed faces) and four picked for hand work
+by a WiLoR-YOLO hand scan (0097 010719 p2, B2 071244, D5 022846 p2, EV
+000044). New-pipeline panes made locally on a ~40 s cut; EgoSmith run on
+the delivered blurred cuts on `faceblur-hands-3` (10:26-11:33 UTC, deleted,
+~$1; weights put into the build from the PC to dodge the VM's slow
+downloads). Files `vs:faceblur/compare/` (`*_with_raw*` hold raw faces:
+private only); signed links (7 days, to 2026-10-26) not kept in git. Owner
+page (private artifact) "FaceBlur Before and After" shows the shareable
+versions. Measured footage: 59.6 h of recording on 5 devices (the "119 h"
+counts both cameras). Open: free ~10 GB (owner to confirm which folders),
+scan device FF for a hand clip. Replies to Hieu end with the time taken in [].
+
 Last updated 2026-10-16 07:50. **The blur run is complete.** All eight
 slices (8 RTX 5090 VMs, deleted) and the 9 cut-off videos on
 `faceblur-hands-pilot` are done; the last one (`FF_000137` left) finished
