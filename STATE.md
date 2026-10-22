@@ -1,5 +1,32 @@
 # STATE, handover notes
 
+**2026-10-22, PTL run (new footage, in progress):** owner asked to blur
+`D:\Player One - Phase 0 - PTL` (3 devices 09K/AM/FE, 81 videos, 14.76
+camera-hours, 143.9 GiB of mp4; assembly and electronics work; checked
+442/442 files against OneDrive) with the latest pipeline, output to a
+separate folder (`D:\Player One - Phase 0 - PTL (blurred)`), then add sample
+clips to the "FaceBlur Before and After" page like last time. Owner chose
+GreenNode VMs. Upload (mp4 only, PC rclone `tools/rclone`) to
+`vs:faceblur/ptl/in/`, script `D:\faceblur_ptl\upload.sh` (log beside it; use
+`--s3-disable-checksum`, the pre-hash stalled it). Run: image :3 + av +
+pyarrow, main HEAD's `faceblur/`, `cli.py`, `cloud/` mounted, stream_run.py
+QUEUE=1 LANES=2 WORKERS=6, `--quarantine --second-chance 1`, PIPELINE_CMD =
+`D:\faceblur_ptl\vm\ptl_pipeline.py` (blur, then `faceblur.patch` on a
+held-back copy into `<rec>/patched/`), out to `vs:faceblur/ptl/out/`,
+SELF_DELETE=1. Scripts in `D:\faceblur_ptl\vm\` (`start_vm.sh NAME IP
+prep|run`). Test on `faceblur-ptl-1` passed (FE 233331 L+R: blurred, held
+back, patched, uploaded; ~25 min a lane per 5 min of video). The upload is
+slower than the fleet, so the container runs `ptl_loop.py`: stream_run.py
+passes every 2 min until `vs:faceblur/ptl/_upload_done` exists (**create it
+by hand when the upload exits 0**: `date | rclone rcat
+vs:faceblur/ptl/_upload_done`), then self-deletes. Fleet since 12:20 local:
+`faceblur-ptl-1` 116.118.92.181, `-2` .182, `-3` 103.196.239.7, `-4`
+116.118.92.184, `-5` .183; `bash D:\faceblur_ptl\status.sh` for a line each.
+Estimate ~37 VM-hours (~$35). Then: download to the blurred folder (patched
+copy where one exists, else delivered, else held-back), copy csv/yaml, check
+counts; sample clips for the page. Device data rate measured: ~21.6 GB per
+recording hour on these 3 devices (19-27 by device; plan cards at ~28).
+
 **2026-10-22, GitHub hand-over to Daniel (in progress; PC restart):** owner
 asked (2026-10-21) to make `HashBrake/faceblur` private, put the latest
 blur, hand and compression tools in it, and give Daniel (GitHub
