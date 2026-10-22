@@ -1,5 +1,32 @@
 # STATE, handover notes
 
+**2026-10-22, GitHub hand-over to Daniel (in progress; PC restart):** owner
+asked (2026-10-21) to make `HashBrake/faceblur` private, put the latest
+blur, hand and compression tools in it, and give Daniel (GitHub
+`mizuharaa`) full access. Owner chose: include the EgoSmith code, and move
+the repo to a GitHub organization so Daniel can be Admin.
+- **Blocked on the owner:** (1) Settings → Danger Zone → Change to private
+  (GitHub asks for the password; the agent cannot type it). Still public
+  as of 2026-10-22. (2) Create a free organization and give its name.
+- **Then:** transfer the repo to the org, invite `mizuharaa` as Admin,
+  merge branch `egosmith-toolkit` into main and push.
+- **Do not push `egosmith-toolkit` while the repo is public**: commit
+  044c6d7 adds the partner's `egosmith_hand_mano_toolkit` under
+  `cloud/hands/` (with our prep/undistort, run, overlay and fetch scripts,
+  a README, and a tool table at the top of README.md). MANO `.pkl` files
+  and weights stay out of git (licensed).
+- **T12 zone-gate merge (HEVC copies no longer held back by the zone
+  gate):** resolved and staged, not committed, in worktree
+  `.claude/worktrees/agent-a516aec170b80730d` (branch
+  `worktree-agent-a516aec170b80730d`, merge of `build/hot-storage`).
+  Targeted tests pass (verify/settings/zone, 148/149 then 14/14 after a
+  fixture fix); the full suite still has to run before committing. It could
+  not run because free RAM was 2-6 GB (Fusion 360 held ~21 GB). Review its
+  edits to `tests/test_verify_fast.py` (reference rule swapped to T12's, a
+  second marked box on frame 6) before accepting.
+- Raw-footage signed link expired 2026-10-22 04:16 UTC (renew only if
+  asked). No FaceBlur VMs running; periodic checks were quiet.
+
 **2026-10-19, comparison clips:** 5 side-by-side clips (30 s, 3x2 panes: raw,
 old blur, old + patch (delivered), new blur + patch, new + HEVC, EgoSmith
 hands), windows B2 004332 (most missed faces) and four picked for hand work
