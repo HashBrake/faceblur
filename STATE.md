@@ -19,10 +19,21 @@ back, patched, uploaded; ~25 min a lane per 5 min of video). The upload is
 slower than the fleet, so the container runs `ptl_loop.py`: stream_run.py
 passes every 2 min until `vs:faceblur/ptl/_upload_done` exists (**create it
 by hand when the upload exits 0**: `date | rclone rcat
-vs:faceblur/ptl/_upload_done`), then self-deletes. Fleet since 12:20 local:
-`faceblur-ptl-1` 116.118.92.181, `-2` .182, `-3` 103.196.239.7, `-4`
-116.118.92.184, `-5` .183; `bash D:\faceblur_ptl\status.sh` for a line each.
-Estimate ~37 VM-hours (~$35). Then: download to the blurred folder (patched
+vs:faceblur/ptl/_upload_done`), then self-deletes. Upload finished 19:15
+local (81/81, rclone check 0 differences); marker written 19:16. Fleet:
+`faceblur-ptl-1` .181, `-2` .182, `-6` .193, `-7` .194, `-8` .192, `-10`
+.196, `-11` .189, `-12` 116.118.92.37 (all self-delete; -3/-4/-5 deleted
+early while the upload lagged; a 4th VM at 17:35 hit the project MEM quota).
+`faceblur-ptl-9` .191 blurs too but does NOT self-delete: it holds the
+EgoSmith image `egosmith:cu128` (built 2026-10-22 from weights prefetched on
+the PC, now in `D:\faceblur_ptl\egosmith_cache`) for the sample clips;
+**delete it by hand when the clips are done**. `bash
+D:\faceblur_ptl\status.sh` gives a line per VM. Stream passes fix their
+video list at start, so a lane idles until its pass ends if the queue was
+short then. Estimate ~37 VM-hours (~$35). Sample clips: briefs in
+`D:\faceblur_ptl\clips\` (09K 000048 soldering, 09K 004024 battery pack,
+AM 033203 frame assembly, FE 234012 machine frame; panes blurred +
+EgoSmith, a private `_with_raw` version adds raw). Then: download to the blurred folder (patched
 copy where one exists, else delivered, else held-back), copy csv/yaml, check
 counts; sample clips for the page. Device data rate measured: ~21.6 GB per
 recording hour on these 3 devices (19-27 by device; plan cards at ~28).
