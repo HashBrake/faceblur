@@ -1,15 +1,18 @@
 # STATE, handover notes
 
-**2026-10-22 23:00, PTL status:** blur done, 81/81 videos have a copy, every
+**2026-10-23, PTL done:** blur done, 81/81 videos have a copy, every
 held-back copy patched; all VMs deleted (ptl-9 by hand 22:50). Sample clips
 done and on the page (version 5, new section "Assembly and electronics": 09K
 soldering + battery pack, AM frame assembly, FE CNC frame); private
 with_raw/shareable copies and EgoSmith outputs in `vs:faceblur/compare/ptl/`.
-In progress: download to `D:\Player One - Phase 0 - PTL (blurred)` (brief
-`D:\faceblur_ptl\download_brief.md`: original names, no audio, records in a
-sibling `(blurred records)` folder, pts checked per video). Next: confirm
-the download check, then ask the owner whether to delete `vs:faceblur/ptl/in`
-(raw) and `ptl/out`. FE clip note: a few small blur patches land on the
+**Delivered locally 2026-10-23 ~03:05:** `D:\Player One - Phase 0 - PTL
+(blurred)` (149 GB, 344 files = source minus audio; 81 videos under original
+names, 63 from `patched/`, 18 passed the check, 0 quarantine-only), records
+in `D:\Player One - Phase 0 - PTL (blurred records)` (144). Checked
+(`D:\faceblur_ptl\dl\verify.txt`): every side file same size, every video
+same size as the bucket, 81/81 same packet count and identical pts as the raw
+(max diff 0), 0 audio streams. Download ran ~10.6 MiB/s (3h51m). Next: ask
+the owner whether to delete `vs:faceblur/ptl/in` (raw) and `ptl/out`. FE clip note: a few small blur patches land on the
 wearer's own hand/arm in FE frames.
 
 **2026-10-22, PTL run (new footage):** owner asked to blur
