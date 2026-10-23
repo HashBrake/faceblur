@@ -1,5 +1,16 @@
 # STATE, handover notes
 
+**2026-10-23 11:00, page:** owner asked for more PTL examples and for every
+clip on the page to show only new blurred + hand tracking. Page version 7:
+the 5 earlier clips rebuilt as 2 panes (new pipeline blur + patch | EgoSmith)
+from the private 6-pane `compare/*_shareable_egosmith.mp4` (top 60 px
+cropped to drop old labels; script `D:\faceblur_ptl\clips\old\two_pane.py`),
+old `_ego.mp4` files removed, HEVC/old-pipeline captions dropped; 4 more PTL
+clips added (09K 003047 wiring, AM 043955 parts sorting, FE 025009 freezer
+sealing, FE 123323 insole cutting; brief `D:\faceblur_ptl\clips\brief_more.md`)
+on VM `faceblur-hands-ptl` (EgoSmith image rebuilt in ~12 min; deleted 10:55).
+No VMs left.
+
 **2026-10-23, PTL done:** blur done, 81/81 videos have a copy, every
 held-back copy patched; all VMs deleted (ptl-9 by hand 22:50). Sample clips
 done and on the page (version 5, new section "Assembly and electronics": 09K
