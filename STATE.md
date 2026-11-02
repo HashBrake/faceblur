@@ -3,7 +3,7 @@
 **2026-11-02 22:00, downloads page:** owner asked for one link holding every
 download, password-protected, sent to them on Teams (done, notes chat). Page
 https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T (private; links encrypted
-in the page, AES-GCM + PBKDF2; builder `D:\faceblur_ptl\hub\build_hub.py``D:aceblur_ptl\hubuild_hub.py`,
+in the page, AES-GCM + PBKDF2; builder `D:aceblur_ptl\hubuild_hub.py`,
 links in `entries.json`, password in `password.txt` beside it, never in git).
 PTL delivered tree now also in the bucket: `vs:faceblur/ptl/delivered/` (344
 files, server-side copies of the 81 videos, rclone check 0 differences) and
