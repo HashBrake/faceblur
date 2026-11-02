@@ -3,11 +3,11 @@
 **2026-11-02 23:00, downloads page now raw only:** owner asked to drop the
 pipeline page and every processed link and list only raw data (owner's own
 exception to the raw-stays-on-PC rule; raw links stay private-signed, page
-password-locked). Page version 2 lists  (now complete:
-non-mp4 files uploaded, 442 files, 0 differences vs )
-and  (1,447 files, 0 differences vs );
+password-locked). Page version 2 lists `vs:faceblur/ptl/in` (now complete:
+non-mp4 files uploaded, 442 files, 0 differences vs `D:\Player One - Phase 0 - PTL`)
+and `vs:faceblur/in` (1,447 files, 0 differences vs `D:\Player One - Phase 0 full`);
 7-day links expire **2026-11-09 ~22:45**. Blurred link list kept in
- beside the builder. 
+`entries_blurred_backup.json` beside the builder. `vs:faceblur/in_repaired/`
 (9 repaired raw mp4, 17.6 GiB) is not on the page.
 
 **2026-11-02 22:00, downloads page:** owner asked for one link holding every
