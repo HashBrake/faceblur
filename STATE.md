@@ -1,5 +1,14 @@
 # STATE, handover notes
 
+**2026-11-04 12:00, download command fixed:** partner said the download
+command did not work (no error given). `cloud/links.py` pages now save the
+list first and then read it (no pipe; PowerShell 5.1 re-encodes pipes), add
+`--parallel-immediate` (without it the storage served one file at a time),
+and give a one-at-a-time fallback line for curl older than 7.68. Both raw
+pages rebuilt; links now expire **2026-11-11 ~12:00**; locked page v3 and
+the public copy re-uploaded. Tested in Windows PowerShell: fast line 53
+files in 20 s, fallback line works.
+
 **2026-11-04, public copy:** owner asked for the page to open for anyone
 without login, password only. Standalone copy (same ciphertext) hosted
 public-read at https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html

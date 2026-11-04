@@ -95,9 +95,18 @@ def main(argv: list[str]) -> int:
     list_url = url(LIST)
     page_rel = PAGE
 
-    flags = "--parallel --parallel-max 16 --create-dirs --retry 5 --continue-at - -K -"
-    win = f'curl.exe -s "{list_url}" | curl.exe {flags}'
-    nix = f"curl -s '{list_url}' | curl {flags}"
+    # Two steps (save the list, then read it) instead of a pipe: Windows
+    # PowerShell 5.1 re-encodes text piped between programs. The plain line
+    # works on every curl since 7.55 (Windows 10's first one); --parallel needs
+    # 7.66 or later (older Windows 10 builds and macOS 11 and earlier lack it); --parallel-immediate needs 7.68.
+    basic = "--create-dirs --retry 5 --continue-at - -K files.txt"
+    # --parallel-immediate: without it curl waits to multiplex on one
+    # connection and the storage serves one file at a time.
+    fast = "--parallel --parallel-immediate --parallel-max 16 " + basic
+    win = f'curl.exe -s -o files.txt "{list_url}"; curl.exe {fast}'
+    win_plain = f'curl.exe -s -o files.txt "{list_url}"; curl.exe {basic}'
+    nix = f"curl -s -o files.txt '{list_url}' && curl {fast}"
+    nix_plain = f"curl -s -o files.txt '{list_url}' && curl {basic}"
     expiry = ("These links do not expire." if args.public else
               f"These links stop working {args.expire} after they were made. "
               "Ask for new ones after that.")
@@ -120,8 +129,14 @@ table{{border-collapse:collapse;width:100%}} td{{padding:2px 8px;border-bottom:1
 <p>Open a terminal in the place the folder should go, paste one line, press Enter.
 It downloads 16 files at a time and keeps the folder structure. If it stops,
 run the same line again: finished files are skipped and a broken one carries on.</p>
-<p><b>Windows</b> (PowerShell or Command Prompt):</p><pre>{html.escape(win)}</pre>
-<p><b>macOS or Linux</b>:</p><pre>{html.escape(nix)}</pre>
+<p><b>Windows</b>: open <b>PowerShell</b> (Start menu, type PowerShell), not Command Prompt.
+Type <code>curl.exe</code>, not <code>curl</code>, as written below.</p><pre>{html.escape(win)}</pre>
+<p><b>macOS or Linux</b> (Terminal):</p><pre>{html.escape(nix)}</pre>
+<p><b>If it says an option is unknown</b> (<code>--parallel</code>), the computer has an older curl.
+Use this line instead; it downloads one file at a time.</p>
+<p>Windows (PowerShell):</p><pre>{html.escape(win_plain)}</pre>
+<p>macOS or Linux:</p><pre>{html.escape(nix_plain)}</pre>
+<p>If neither line works, copy the exact error message you see and send it to us.</p>
 <h2>Every file</h2>
 <table>{rows}</table>
 </body></html>
