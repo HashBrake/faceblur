@@ -1,5 +1,12 @@
 # STATE, handover notes
 
+**2026-11-04, public copy:** owner asked for the page to open for anyone
+without login, password only. Standalone copy (same ciphertext) hosted
+public-read at https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html
+(only that object is public; bucket listing 403; built from the artifact file,
+upload script `D:\faceblur_ptl\hub\put_public.py`). Re-upload it whenever the
+links are refreshed.
+
 **2026-11-02 23:00, downloads page now raw only:** owner asked to drop the
 pipeline page and every processed link and list only raw data (owner's own
 exception to the raw-stays-on-PC rule; raw links stay private-signed, page
