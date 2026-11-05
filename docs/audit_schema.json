@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://faceblur.local/audit_schema.json",
+  "title": "FaceBlur audit.jsonl line",
+  "description": "One line of audit.jsonl, the record of one privacy desensitization run. The file is append-only JSONL. Each line is canonical JSON (sorted keys, no spaces, ASCII) and is chained to the line before it: `hash` is sha256(prev + canonical(line without hash)), and `prev` is the previous line's `hash` (64 zeros on the first line). Editing, removing or reordering any line breaks every hash after it. A file holds exactly one header (seq 0), then frame, speech and camera_done lines, then at most one footer, last.",
+  "type": "object",
+  "required": ["seq", "prev", "hash", "type", "time"],
+  "properties": {
+    "seq": {"$ref": "#/$defs/seq"},
+    "prev": {"$ref": "#/$defs/prev"},
+    "hash": {"$ref": "#/$defs/hash"},
+    "type": {
+      "description": "What this line records: header (the run's inputs and models), frame (what was removed from one video frame), speech (one stretch of speech in the removed audio), camera_done (summary of one camera), footer (the output and how the run ended).",
+      "enum": ["header", "frame", "speech", "camera_done", "footer"]
+    },
+    "time": {"$ref": "#/$defs/time"}
+  },
+  "oneOf": [
+    {
+      "title": "header",
+      "description": "First line of every file (seq 0): what went in and what processed it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "prev", "hash", "type", "time", "input_sha256", "input_name", "cameras", "models", "settings", "image_digest", "tool_version"],
+      "properties": {
+        "seq": {"$ref": "#/$defs/seq"},
+        "prev": {"$ref": "#/$defs/prev"},
+        "hash": {"$ref": "#/$defs/hash"},
+        "type": {"const": "header", "description": "Marks the header line."},
+        "time": {"$ref": "#/$defs/time"},
+        "input_sha256": {"$ref": "#/$defs/sha256", "description": "sha256 of the input episode file, so the record can be matched to the original that was processed."},
+        "input_name": {"type": "string", "description": "File name of the input episode (no directory)."},
+        "cameras": {"type": "array", "items": {"type": "string"}, "description": "Names of the camera streams found in the input, in processing order."},
+        "models": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Every model used, mapped from its name to the sha256 of its weights file, so the exact detectors can be identified later."},
+        "settings": {"type": "object", "description": "The full detection and blur settings of the run (free form; the tool's Settings object as a dict)."},
+        "image_digest": {"type": ["string", "null"], "description": "Digest of the container image the run executed in, or null when it ran outside a container."},
+        "tool_version": {"type": "string", "description": "Version of the FaceBlur tool that wrote this record."}
+      }
+    },
+    {
+      "title": "frame",
+      "description": "What was found and blurred in one video frame of one camera.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "prev", "hash", "type", "time", "camera", "frame", "pts_ns", "counts", "boxes"],
+      "properties": {
+        "seq": {"$ref": "#/$defs/seq"},
+        "prev": {"$ref": "#/$defs/prev"},
+        "hash": {"$ref": "#/$defs/hash"},
+        "type": {"const": "frame", "description": "Marks a per-frame line."},
+        "time": {"$ref": "#/$defs/time"},
+        "camera": {"type": "string", "description": "Name of the camera stream the frame belongs to."},
+        "frame": {"type": "integer", "minimum": 0, "description": "Zero-based index of the frame in its camera stream."},
+        "pts_ns": {"type": "integer", "description": "Presentation timestamp of the frame in nanoseconds."},
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["face", "plate", "screen", "text"],
+          "description": "Number of regions of each class blurred in this frame. Every class is present; 0 means looked for and none found.",
+          "properties": {
+            "face": {"type": "integer", "minimum": 0, "description": "Faces blurred."},
+            "plate": {"type": "integer", "minimum": 0, "description": "Licence plates blurred."},
+            "screen": {"type": "integer", "minimum": 0, "description": "Screens (phones, monitors, TVs) blurred."},
+            "text": {"type": "integer", "minimum": 0, "description": "Text regions blurred."}
+          }
+        },
+        "boxes": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Axis-aligned boxes of the blurred regions, per class. A class may be absent when it has none.",
+          "properties": {
+            "face": {"$ref": "#/$defs/boxes", "description": "Face boxes."},
+            "plate": {"$ref": "#/$defs/boxes", "description": "Licence plate boxes."},
+            "screen": {"$ref": "#/$defs/boxes", "description": "Screen boxes."},
+            "text": {"$ref": "#/$defs/boxes", "description": "Text boxes."}
+          }
+        },
+        "quads": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional rotated outlines for classes detected as quadrilaterals (text, plates): per class, a list of four corners.",
+          "properties": {
+            "face": {"$ref": "#/$defs/quads", "description": "Face outlines."},
+            "plate": {"$ref": "#/$defs/quads", "description": "Licence plate outlines."},
+            "screen": {"$ref": "#/$defs/quads", "description": "Screen outlines."},
+            "text": {"$ref": "#/$defs/quads", "description": "Text outlines."}
+          }
+        }
+      }
+    },
+    {
+      "title": "speech",
+      "description": "One stretch of speech found in the input audio. The output carries no audio; these lines record what was removed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "prev", "hash", "type", "time", "start_s", "end_s", "pad_ms"],
+      "properties": {
+        "seq": {"$ref": "#/$defs/seq"},
+        "prev": {"$ref": "#/$defs/prev"},
+        "hash": {"$ref": "#/$defs/hash"},
+        "type": {"const": "speech", "description": "Marks a speech segment line."},
+        "time": {"$ref": "#/$defs/time"},
+        "start_s": {"type": "number", "minimum": 0, "description": "Start of the speech in seconds from the start of the audio, padding included."},
+        "end_s": {"type": "number", "minimum": 0, "description": "End of the speech in seconds from the start of the audio, padding included."},
+        "pad_ms": {"type": "integer", "minimum": 0, "description": "Milliseconds of padding added on each side of the detected speech."}
+      }
+    },
+    {
+      "title": "camera_done",
+      "description": "Summary written when one camera stream has been fully processed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "prev", "hash", "type", "time", "camera", "frames", "seconds", "record"],
+      "properties": {
+        "seq": {"$ref": "#/$defs/seq"},
+        "prev": {"$ref": "#/$defs/prev"},
+        "hash": {"$ref": "#/$defs/hash"},
+        "type": {"const": "camera_done", "description": "Marks a camera summary line."},
+        "time": {"$ref": "#/$defs/time"},
+        "camera": {"type": "string", "description": "Name of the camera stream."},
+        "frames": {"type": "integer", "minimum": 0, "description": "Number of frames processed in this camera."},
+        "seconds": {"type": "number", "minimum": 0, "description": "Wall-clock seconds spent processing this camera."},
+        "record": {"type": "object", "description": "The per-file audit of this camera (faceblur.pipeline.AuditRecord as a dict): detection, tracking and mask-coverage statistics. Free form."}
+      }
+    },
+    {
+      "title": "footer",
+      "description": "Last line of a finished run: what came out and how the run ended. A file without a footer is from a run that did not finish.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "prev", "hash", "type", "time", "output_sha256", "output_name", "status", "error"],
+      "properties": {
+        "seq": {"$ref": "#/$defs/seq"},
+        "prev": {"$ref": "#/$defs/prev"},
+        "hash": {"$ref": "#/$defs/hash"},
+        "type": {"const": "footer", "description": "Marks the footer line."},
+        "time": {"$ref": "#/$defs/time"},
+        "output_sha256": {"$ref": "#/$defs/sha256", "description": "sha256 of the de-identified output episode file."},
+        "output_name": {"type": "string", "description": "File name of the output episode (no directory)."},
+        "status": {"type": "string", "minLength": 1, "description": "How the run ended, for example ok or failed."},
+        "error": {"type": "string", "description": "Error message when the run failed; empty otherwise."}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "A sha256 digest as 64 lowercase hex characters."},
+    "seq": {"type": "integer", "minimum": 0, "description": "Position of the line in the file, 0 for the header, increasing by 1 per line."},
+    "prev": {"$ref": "#/$defs/sha256", "description": "The `hash` of the previous line; 64 zeros on the first line."},
+    "hash": {"$ref": "#/$defs/sha256", "description": "sha256 of `prev` (as ASCII) followed by the canonical JSON of this line without its `hash` field."},
+    "time": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$", "description": "UTC time the line was written, ISO 8601 to the second with Z, e.g. 2026-11-05T09:30:00Z."},
+    "box": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "[x, y, w, h] in pixels of the full frame, top-left origin, rounded to 0.1."},
+    "boxes": {"type": "array", "items": {"$ref": "#/$defs/box"}, "description": "A list of [x, y, w, h] boxes."},
+    "point": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] in pixels, rounded to 0.1."},
+    "quad": {"type": "array", "items": {"$ref": "#/$defs/point"}, "minItems": 4, "maxItems": 4, "description": "Four corners of a rotated region, in order around its outline."},
+    "quads": {"type": "array", "items": {"$ref": "#/$defs/quad"}, "description": "A list of four-corner outlines."}
+  }
+}
