@@ -1,5 +1,28 @@
 # STATE, handover notes
 
+**2026-11-05, PC cleanup (owner asked):** scattered work folders moved
+under `D:\Claude Projects\FaceBlur-work\` (`faceblur_ptl`, `faceblur_stage`,
+`faceblur_cmp`, `faceblur_retime_check`, `hands_compare`, `pipeline_demo`;
+absolute paths in their scripts and in this file rewritten). Repo-root
+`footage_blurred*` outputs and sweep logs moved to `FaceBlur-work\repo_outputs\`
+(moved, not deleted). Merged worktrees `faceblur-blur-speed`, `-merge`,
+`-robustness` and `-stereo-hands` removed (branches kept; their result data
+is in `FaceBlur-work\worktree_outputs\`). Kept: `faceblur-hot-storage` and its
+data folder (1 unmerged commit), and `.claude\worktrees\agent-a516…`, which
+has 8 staged, uncommitted changes. Footage was left alone, but these checks
+are open for the owner:
+`D:\Player One - Phase 0 - 1` is an exact subset of `Phase 0 full` (279 GB);
+`D:\Archive\Desktop\Player One Internal videos` is a subset of
+`D:\Player One Internal videos` (1.9 GB). **`D:\Player One - Phase 0 - PTL`
+(the "raw" PTL set) is byte-identical to `D:\Player One Internal videos
+blurred`** (432 shared files, sha256 checked on samples), whose
+`_faceblur_report.json` says it is faceblur output made 2026-09-26..28. So
+either the PTL "raw" set (on the downloads page and in `vs:faceblur/ptl/in`)
+is already old-pipeline blurred, or that "blurred" folder is raw. Still
+unresolved: settle it with a face-detector pass on one PTL clip. Reports:
+`inventory.md`, `footage_dups.md`, `cleanup_report.md` in the 2026-11-05
+session scratchpad.
+
 **2026-11-04 12:00, download command fixed:** partner said the download
 command did not work (no error given). `cloud/links.py` pages now save the
 list first and then read it (no pipe; PowerShell 5.1 re-encodes pipes), add
@@ -13,7 +36,7 @@ files in 20 s, fallback line works.
 without login, password only. Standalone copy (same ciphertext) hosted
 public-read at https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html
 (only that object is public; bucket listing 403; built from the artifact file,
-upload script `D:\faceblur_ptl\hub\put_public.py`). Re-upload it whenever the
+upload script `D:\Claude Projects\FaceBlur-work\faceblur_ptl\hub\put_public.py`). Re-upload it whenever the
 links are refreshed.
 
 **2026-11-02 23:00, downloads page now raw only:** owner asked to drop the
@@ -29,7 +52,7 @@ and `vs:faceblur/in` (1,447 files, 0 differences vs `D:\Player One - Phase 0 ful
 **2026-11-02 22:00, downloads page:** owner asked for one link holding every
 download, password-protected, sent to them on Teams (done, notes chat). Page
 https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T (private; links encrypted
-in the page, AES-GCM + PBKDF2; builder `D:\faceblur_ptl\hub\build_hub.py`,
+in the page, AES-GCM + PBKDF2; builder `D:\Claude Projects\FaceBlur-work\faceblur_ptl\hub\build_hub.py`,
 links in `entries.json`, password in `password.txt` beside it, never in git).
 PTL delivered tree now also in the bucket: `vs:faceblur/ptl/delivered/` (344
 files, server-side copies of the 81 videos, rclone check 0 differences) and
@@ -42,10 +65,10 @@ rebuild the page then. Phase 0 blurred link is the permanent public one.
 clip on the page to show only new blurred + hand tracking. Page version 7:
 the 5 earlier clips rebuilt as 2 panes (new pipeline blur + patch | EgoSmith)
 from the private 6-pane `compare/*_shareable_egosmith.mp4` (top 60 px
-cropped to drop old labels; script `D:\faceblur_ptl\clips\old\two_pane.py`),
+cropped to drop old labels; script `D:\Claude Projects\FaceBlur-work\faceblur_ptl\clips\old\two_pane.py`),
 old `_ego.mp4` files removed, HEVC/old-pipeline captions dropped; 4 more PTL
 clips added (09K 003047 wiring, AM 043955 parts sorting, FE 025009 freezer
-sealing, FE 123323 insole cutting; brief `D:\faceblur_ptl\clips\brief_more.md`)
+sealing, FE 123323 insole cutting; brief `D:\Claude Projects\FaceBlur-work\faceblur_ptl\clips\brief_more.md`)
 on VM `faceblur-hands-ptl` (EgoSmith image rebuilt in ~12 min; deleted 10:55).
 No VMs left.
 
@@ -58,7 +81,7 @@ with_raw/shareable copies and EgoSmith outputs in `vs:faceblur/compare/ptl/`.
 (blurred)` (149 GB, 344 files = source minus audio; 81 videos under original
 names, 63 from `patched/`, 18 passed the check, 0 quarantine-only), records
 in `D:\Player One - Phase 0 - PTL (blurred records)` (144). Checked
-(`D:\faceblur_ptl\dl\verify.txt`): every side file same size, every video
+(`D:\Claude Projects\FaceBlur-work\faceblur_ptl\dl\verify.txt`): every side file same size, every video
 same size as the bucket, 81/81 same packet count and identical pts as the raw
 (max diff 0), 0 audio streams. Download ran ~10.6 MiB/s (3h51m). Next: ask
 the owner whether to delete `vs:faceblur/ptl/in` (raw) and `ptl/out`. FE clip note: a few small blur patches land on the
@@ -71,13 +94,13 @@ camera-hours, 143.9 GiB of mp4; assembly and electronics work; checked
 separate folder (`D:\Player One - Phase 0 - PTL (blurred)`), then add sample
 clips to the "FaceBlur Before and After" page like last time. Owner chose
 GreenNode VMs. Upload (mp4 only, PC rclone `tools/rclone`) to
-`vs:faceblur/ptl/in/`, script `D:\faceblur_ptl\upload.sh` (log beside it; use
+`vs:faceblur/ptl/in/`, script `D:\Claude Projects\FaceBlur-work\faceblur_ptl\upload.sh` (log beside it; use
 `--s3-disable-checksum`, the pre-hash stalled it). Run: image :3 + av +
 pyarrow, main HEAD's `faceblur/`, `cli.py`, `cloud/` mounted, stream_run.py
 QUEUE=1 LANES=2 WORKERS=6, `--quarantine --second-chance 1`, PIPELINE_CMD =
-`D:\faceblur_ptl\vm\ptl_pipeline.py` (blur, then `faceblur.patch` on a
+`D:\Claude Projects\FaceBlur-work\faceblur_ptl\vm\ptl_pipeline.py` (blur, then `faceblur.patch` on a
 held-back copy into `<rec>/patched/`), out to `vs:faceblur/ptl/out/`,
-SELF_DELETE=1. Scripts in `D:\faceblur_ptl\vm\` (`start_vm.sh NAME IP
+SELF_DELETE=1. Scripts in `D:\Claude Projects\FaceBlur-work\faceblur_ptl\vm\` (`start_vm.sh NAME IP
 prep|run`). Test on `faceblur-ptl-1` passed (FE 233331 L+R: blurred, held
 back, patched, uploaded; ~25 min a lane per 5 min of video). The upload is
 slower than the fleet, so the container runs `ptl_loop.py`: stream_run.py
@@ -90,12 +113,12 @@ local (81/81, rclone check 0 differences); marker written 19:16. Fleet:
 early while the upload lagged; a 4th VM at 17:35 hit the project MEM quota).
 `faceblur-ptl-9` .191 blurs too but does NOT self-delete: it holds the
 EgoSmith image `egosmith:cu128` (built 2026-10-22 from weights prefetched on
-the PC, now in `D:\faceblur_ptl\egosmith_cache`) for the sample clips;
+the PC, now in `D:\Claude Projects\FaceBlur-work\faceblur_ptl\egosmith_cache`) for the sample clips;
 **delete it by hand when the clips are done**. `bash
-D:\faceblur_ptl\status.sh` gives a line per VM. Stream passes fix their
+D:\Claude Projects\FaceBlur-work\faceblur_ptl\status.sh` gives a line per VM. Stream passes fix their
 video list at start, so a lane idles until its pass ends if the queue was
 short then. Estimate ~37 VM-hours (~$35). Sample clips: briefs in
-`D:\faceblur_ptl\clips\` (09K 000048 soldering, 09K 004024 battery pack,
+`D:\Claude Projects\FaceBlur-work\faceblur_ptl\clips\` (09K 000048 soldering, 09K 004024 battery pack,
 AM 033203 frame assembly, FE 234012 machine frame; panes blurred +
 EgoSmith, a private `_with_raw` version adds raw). Then: download to the blurred folder (patched
 copy where one exists, else delivered, else held-back), copy csv/yaml, check
@@ -173,7 +196,7 @@ per lane; before/after crops checked). A bug deleted each lane's prefetched
 next pair (fixed in `3e4c83d`; restarted 12:48 UTC). Measured: ~19 fps per
 lane with 2 lanes, so the pass is ~100 VM-hours (~$90-100, owner told).
 `faceblur-patch-2` to `-8` (shares 1/8 to 7/8) created through the API
-2026-10-16 ~19:50 local and bootstrapped; `cloud/vm_status.sh` lists them. Share 0/8 finished 2026-10-17 01:24 UTC (36/36, 2 with nothing to mask); `faceblur-patch-1` deleted. Share 6/8 finished 03:29 UTC (36/36); `faceblur-patch-7` deleted. Share 4/8 finished 04:14 UTC (36/36, 1 with nothing to mask); `faceblur-patch-5` deleted. Share 1/8 finished 04:51 UTC (36/36, 2 with nothing to mask); `faceblur-patch-2` deleted. Share 3/8 finished 05:01 UTC (36/36, 1 with nothing to mask); `faceblur-patch-4` deleted. Share 7/8 finished 05:19 UTC (36/36); `faceblur-patch-8` deleted. Share 5/8 finished 05:40 UTC (36/36); `faceblur-patch-6` deleted. Share 2/8 finished 06:07 UTC (37/37); `faceblur-patch-3` deleted. **Patch pass complete 2026-10-17 06:07 UTC:** 289 patched copies + 289 records under `vs:faceblur/patched/`, 8 DONE markers, no failures; about 140 VM-hours (~$125). Next: re-deliver with `deliver.py --patched`, then the public link, pending the owner's calls on timestamps and gloved hands. Owner chose (2026-10-17): re-deliver privately, fix timestamps, then public. Done: `deliver.py --patched --apply --acl private` (1,152 files, 289/289 patched, 0 raw, 0 audio, finished 2026-10-18 02:19); the pipeline keeps source pts (`a69f5e1`); 313 delivered copies retimed in place by index rewrite (`cloud/retime.py compose`; 8 already exact), staged copies in `vs:faceblur/retimed/` (1.3 TB, delete after the check). **Incident 2026-10-18:** D: filled (Docker's `docker_data.vhdx` had grown to 907 GB) and the retime check's placeholder files (not sparse on NTFS) filled C:; owner chose to reset Docker's disk (vhdx deleted, Docker restarted empty; re-pull the faceblur image when needed). The check reruns from `D:/faceblur_retime_check`. **Released 2026-10-18 ~04:30 local:** the check (run on VM `faceblur-check-1`, deleted) found all 321 delivered videos exact (max error 0.0 ms), 0 raw, 0 audio; `vs:faceblur/retimed/` (1.18 TB) deleted; every object of `faceblur-blurred` set public-read in place (1,152) and the permanent public link made: https://hcm04.vstorage.vngcloud.vn/faceblur-blurred/_download/index.html . Never re-run `deliver.py` on this tree without re-running the retime publish (it would put un-retimed copies back). Left to clean up: `faceblur/out/`, `faceblur/patched/`, `faceblur/in_repaired/`, subnet `faceblur-1b`, SG `faceblur-ssh`, console SSH key `faceblur_greennode`, AI Platform volume `faceblur-test-nv`; `faceblur/in/` (raw) stays until the owner says otherwise.
+2026-10-16 ~19:50 local and bootstrapped; `cloud/vm_status.sh` lists them. Share 0/8 finished 2026-10-17 01:24 UTC (36/36, 2 with nothing to mask); `faceblur-patch-1` deleted. Share 6/8 finished 03:29 UTC (36/36); `faceblur-patch-7` deleted. Share 4/8 finished 04:14 UTC (36/36, 1 with nothing to mask); `faceblur-patch-5` deleted. Share 1/8 finished 04:51 UTC (36/36, 2 with nothing to mask); `faceblur-patch-2` deleted. Share 3/8 finished 05:01 UTC (36/36, 1 with nothing to mask); `faceblur-patch-4` deleted. Share 7/8 finished 05:19 UTC (36/36); `faceblur-patch-8` deleted. Share 5/8 finished 05:40 UTC (36/36); `faceblur-patch-6` deleted. Share 2/8 finished 06:07 UTC (37/37); `faceblur-patch-3` deleted. **Patch pass complete 2026-10-17 06:07 UTC:** 289 patched copies + 289 records under `vs:faceblur/patched/`, 8 DONE markers, no failures; about 140 VM-hours (~$125). Next: re-deliver with `deliver.py --patched`, then the public link, pending the owner's calls on timestamps and gloved hands. Owner chose (2026-10-17): re-deliver privately, fix timestamps, then public. Done: `deliver.py --patched --apply --acl private` (1,152 files, 289/289 patched, 0 raw, 0 audio, finished 2026-10-18 02:19); the pipeline keeps source pts (`a69f5e1`); 313 delivered copies retimed in place by index rewrite (`cloud/retime.py compose`; 8 already exact), staged copies in `vs:faceblur/retimed/` (1.3 TB, delete after the check). **Incident 2026-10-18:** D: filled (Docker's `docker_data.vhdx` had grown to 907 GB) and the retime check's placeholder files (not sparse on NTFS) filled C:; owner chose to reset Docker's disk (vhdx deleted, Docker restarted empty; re-pull the faceblur image when needed). The check reruns from `D:/Claude Projects/FaceBlur-work/faceblur_retime_check`. **Released 2026-10-18 ~04:30 local:** the check (run on VM `faceblur-check-1`, deleted) found all 321 delivered videos exact (max error 0.0 ms), 0 raw, 0 audio; `vs:faceblur/retimed/` (1.18 TB) deleted; every object of `faceblur-blurred` set public-read in place (1,152) and the permanent public link made: https://hcm04.vstorage.vngcloud.vn/faceblur-blurred/_download/index.html . Never re-run `deliver.py` on this tree without re-running the retime publish (it would put un-retimed copies back). Left to clean up: `faceblur/out/`, `faceblur/patched/`, `faceblur/in_repaired/`, subnet `faceblur-1b`, SG `faceblur-ssh`, console SSH key `faceblur_greennode`, AI Platform volume `faceblur-test-nv`; `faceblur/in/` (raw) stays until the owner says otherwise.
 **Hand showcase** (owner, 2026-10-16): 4 x 2-minute left clips (devices 97,
 B2, D5, FF; windows clear of every checker find) run through the EgoSmith
 toolkit on `faceblur-hands-2` (deleted after upload). The fisheye input
@@ -212,7 +235,7 @@ pipeline keeps source pts. **Pipeline demo** (owner, 2026-10-16): merged main
 `f2e4e5b` on 4 recordings (B2 004332, FF 221215, D5 021054, B2 054241) on
 `faceblur-demo-1` (4.3 VM-h, deleted); outputs in `vs:faceblur/pipeline_demo/`
 (187 files, 19.9 GB) with a 7-day link **expiring 2026-10-23 21:28 UTC**;
-numbers in `D:\Claude Projects\pipeline_demo\comparison.json` and the
+numbers in `D:\Claude Projects\FaceBlur-work\pipeline_demo\comparison.json` and the
 owner's Claude Doc "FaceBlur pipeline: before and after the improvements".
 Findings: blur 9-21 % faster on the fair test, same faces left; patch removes
 them but also blurs gloved hands and objects (not re-checked); HEVC 0.19-0.24
