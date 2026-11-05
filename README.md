@@ -415,6 +415,170 @@ byte; `cli.py ... --codec hevc` writes the blurred copy as HEVC directly. See
   copy back. The file is not deleted: it is the only blurred copy of that
   video, and the record says which frames stopped it.
 
+## The HDF5 module
+
+The same pipeline also runs as the privacy stage of the partner's
+post-processing chain, where a recording arrives as one HDF5 file in their
+DF2 layout instead of a folder of mp4s. `faceblur/h5.py` is that stage.
+
+### The command
+
+```
+.venv\Scripts\python.exe -m faceblur.h5 pack CAM1.mp4 CAM2.mp4 [--cameras a,b] [--audio SOUND] --out IN.h5
+.venv\Scripts\python.exe -m faceblur.h5 run IN.h5 --out FOLDER [--spec-layout] [--workers 2] [--mask face,text,plate,screen] [--device auto|gpu|cpu] [--check-output]
+.venv\Scripts\python.exe -m faceblur.h5 verify FOLDER\audit.jsonl
+.venv\Scripts\python.exe -m faceblur.h5 selfcheck [--device auto|gpu|cpu]
+```
+
+- `pack` builds a DF2 file from camera mp4s. Without `--cameras` the files
+  are named in the order the head-worn cameras come in
+  (`rgb_ego_center_left`, `rgb_ego_center_right`, `rgb_ego_side_left`,
+  `rgb_ego_side_right`, then the rest).
+- `run` writes `episode.h5` and `audit.jsonl` into `--out` and never touches
+  the input. By default `episode.h5` is a separate release file, so there
+  are two files in the end, the untouched input and the release;
+  `--spec-layout` instead writes a copy of the input with the de-identified
+  cameras added beside the raw ones, the single-file form the partner's spec
+  describes. `--workers` defaults to 2: each worker holds every model on the
+  GPU, text at 2560 px and the plate model add to that, and the 8 GB card on
+  this PC holds two. `--device` and `--check-output` mean what they mean on
+  the command line above. The output is written under a temporary name and
+  renamed only when every camera finished, so a failed run leaves no
+  `episode.h5` that looks complete.
+- `verify` checks an audit file's hash chain and every line against the
+  schema.
+- `selfcheck` loads every masking model, runs it once on a flat frame and
+  prints the processor each one ran on.
+
+Exit codes: `run` returns 0 when done, 1 when a camera did not finish and 2
+when the input has no camera; `verify` and `selfcheck` return 1 on any
+problem.
+
+In Docker the stage is one command (`docs/privacy_module_report.md`, section
+Docker image, has the build):
+
+```
+docker run --gpus all -v <in>:/in:ro -v <out>:/out faceblur-privacy
+```
+
+It checks the weights against `models/SHA256SUMS` first and stops on a
+mismatch, runs every `/in/*.h5` and `/in/*.hdf5` (one input writes
+`/out/episode.h5`, several write `/out/<stem>/`), then verifies each audit.
+`-e FACEBLUR_WORKERS=N` sets the workers (default 2), `-e FACEBLUR_ARGS="..."`
+adds run flags such as `--spec-layout --mask face`, and
+`-e FACEBLUR_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' faceblur-privacy)`
+names the image in the audit. The container exits 2 when `/in` holds no
+input and 1 when a run failed or an audit did not verify.
+
+### The input layout
+
+The module reads the DF2 tree. Cameras are groups under
+`dataset/observation/image/<camera>/`, with twelve names in the partner's
+order: `rgb_wrist_left`, `rgb_wrist_right`, `rgb_wrist_left_up`,
+`rgb_wrist_left_down`, `rgb_wrist_right_up`, `rgb_wrist_right_down`,
+`rgb_ego_center_left`, `rgb_ego_center_right`, `rgb_ego_side_left`,
+`rgb_ego_side_right`, `ir_ego_left`, `ir_ego_right`. Any group there that
+holds `video` is processed, the known names first and in that order, an
+unknown name after them.
+
+A camera group holds `video`, the encoded H.264 packets exactly as demuxed
+from the camera's mp4, one variable-length uint8 element per packet, so the
+file stays the size of the mp4 and the original can be remuxed bit for bit.
+Beside it are `pts`, `dts`, `keyframe`, `timestamps_ns` (one per packet),
+`intrinsics` (3x3) and `extrinsics` (4x4), and attrs for the codec, width,
+height, fps, time base, pixel format, the avcC extradata and the frame
+count. Audio, when present, is `dataset/observation/audio/pcm`, int16
+[samples, channels], with `sample_rate` and `channels` attrs. Everything
+else in the file (meta, state, env, timeline, IMU, EMG, mocap) is never
+interpreted and is passed through.
+
+The partner's spec gives the group tree but not what sits inside a camera
+group, so the names inside are this project's choice. Every path and name
+lives in one module, `faceblur/df2.py`, which is the only file to change
+when the partner's sample arrives and differs. No partner sample exists yet,
+which is why `pack` exists: the tests and the measurements run on files it
+packed from the four sample mp4s.
+
+### The outputs
+
+`episode.h5`, the default release file, holds the de-identified video of
+every camera the input had, in the same group form, and every other group of
+the input copied through unchanged with its attrs. It holds no audio
+dataset, no raw video and no external links; a test checks all three. Its
+root attrs `faceblur_release`, `faceblur_version` and `faceblur_layout`
+(`two-file` or `spec`) say what wrote it. With `--spec-layout` the file is a
+copy of the input, raw cameras and audio included, with the de-identified
+cameras under `dataset/observation/image_deidentified/`; it is for
+integration tests with the partner, not for release.
+
+What is masked, with the default `--mask face,text,plate,screen`:
+
+- Faces are filled solid. A blurred or pixelated face was still matched by a
+  face recogniser after a deblur attempt and a solid one was not
+  (`docs/privacy_module_report.md`, section Face obfuscation against a
+  deblur attempt).
+- Text and plates are filled solid, because a blurred line keeps its length
+  and its word breaks.
+- Screens follow `mode`, blur by default.
+- The handled zone is never masked, whatever is found inside it.
+
+Speed, on a file packed from the four sample mp4s (1600x1300, 30 fps), two
+workers, DirectML on the RTX 3070:
+
+| Camera | Frames | Time | Per frame | Masked, mean |
+|---|---|---|---|---|
+| rgb_ego_center_left | 2033 | 511 s | 251 ms | 1.80 % |
+| rgb_ego_center_right | 984 | 242 s | 246 ms | 2.00 % |
+| rgb_ego_side_left | 938 | 267 s | 284 ms | 3.52 % |
+| rgb_ego_side_right | 3971 | 1017 s | 256 ms | 2.20 % |
+| all four | 7926 | 2050 s | 259 ms | |
+
+Cameras run one after another, so the times add. At about 260 ms a frame,
+one hour of one 30 fps camera takes about 7.8 hours on this PC, and an hour
+with four cameras about 31 hours. The 575 MB input made a 924 MB
+`episode.h5`: no stretch was copied untouched, because text and faces reach
+nearly every frame, and every re-encoded frame is written at high quality.
+Text detection at two sizes is the costliest detector, 157 ms a frame
+on its own (report, section Text).
+
+### The audit record
+
+`audit.jsonl`, beside `episode.h5`, records what was removed and by what.
+The partner's chain keeps the release and discards the input, so this file
+is the only evidence left. It holds one JSON object per line, written and
+flushed as the run goes. Every line carries `seq`, `prev`, `hash`, `type`
+and `time`, where `hash` is the sha256 of the previous line's hash followed
+by this line in canonical JSON. Changing, removing or reordering a line
+breaks every hash after it, and a run that dies leaves a chain that verifies
+up to where it stopped.
+
+| Line | When | Fields |
+|---|---|---|
+| `header` | first | `input_sha256`, `input_name`, `cameras`, `models`, `settings`, `image_digest`, `tool_version` |
+| `speech` | one per stretch of speech, before any frame | `start_s`, `end_s`, `pad_ms` |
+| `frame` | one per frame per camera | `camera`, `frame`, `pts_ns`, `counts`, `boxes`, optional `quads` |
+| `camera_done` | after each camera | `camera`, `frames`, `seconds`, `record` (the file pipeline's audit record) |
+| `footer` | last, `done` or `failed` | `output_sha256`, `output_name`, `status`, `error` |
+
+`docs/audit_schema.json` describes every field. `python -m faceblur.h5
+verify audit.jsonl` walks the chain and validates each line against the
+schema; it prints `ok: N lines`, or the first problem and exits 1. For one
+938-frame camera the file is 941 lines, about 1 MB, and verifies in under 2
+seconds.
+
+`counts` and `boxes` are every mask the copy was drawn with, of each kind,
+including the boxes the tracker filled into gaps and tails, not only what a
+detector saw on that frame, so two boxes of one track can overlap. `quads`
+gives the rotated outline of text and plates. The `speech` lines say which
+stretches of the removed audio held speech (Silero VAD, padded by `pad_ms`
+each side), so whoever needs the speech knows where to look in the input.
+`models` maps every model the run loaded to the sha256 of its file, under
+the names `yunet`, `centerface`, `ultraface`, `yolox`, `ppocr`, `lpd_yunet`,
+`zone_palm`, `zone_landmark`, `palm`, `hand_landmark` and `silero_vad`,
+whichever the settings used. `image_digest` names the container image, from
+`FACEBLUR_IMAGE_DIGEST` or the file `/etc/faceblur_image_digest`, and is
+null outside a container.
+
 ## Evaluate a new batch
 
 The harness needs a second environment for MediaPipe, which supplies the third
@@ -546,6 +710,9 @@ too.
 | `yolox` | YOLOX-tiny from Megvii | Apache 2.0 | 20 MB | finds screens, when screens are switched on |
 | `palm_detection` | MediaPipe palm detector | Apache 2.0 | 4.6 MB | proposes a hand in the output side check |
 | `hand_landmark` | MediaPipe hand landmark model | Apache 2.0 | 11 MB | confirms it is a hand |
+| `ppocr` | PP-OCRv3 text detection from opencv_zoo | Apache 2.0 | 2.4 MB | finds lines of text, when text is switched on |
+| `lpd_yunet` | LPD-YuNet from opencv_zoo | Apache 2.0 | 4.1 MB | finds licence plates, when plates are switched on |
+| `silero_vad` | Silero VAD v6.2.3 | MIT | 2.3 MB | lists the speech in the audio the HDF5 module removes |
 
 `models/README.md` records where each file came from, its sha256, its input
 layout and how its output decodes. `models/sface.onnx`, the face recogniser, is
@@ -562,6 +729,8 @@ These exact versions passed the tests. `requirements.txt` pins every one.
 | numpy | 2.5.2 |
 | onnx | 1.17.0 |
 | onnxruntime-directml | 1.24.4 |
+| h5py | 3.16.0 |
+| jsonschema | 4.26.0 |
 | imageio-ffmpeg | 0.6.0 (ffmpeg 7.1, with NVENC) |
 | PySide6 | 6.11.2 |
 | pytest | 9.0.2 |

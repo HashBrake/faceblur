@@ -7,6 +7,34 @@ with the setup that produced it, so that the defaults in
 `faceblur/settings.py` can be traced to something. Later tasks append
 sections.
 
+## Summary of the numbers
+
+One line per measurement the module was asked for; the section named at the
+end of each line has the setup and the caveats.
+
+- **Plate recall on pasted plates**: at the default `plate_size` 1280, 16/16
+  plates of 160 and 240 px found on grey and on a real frame, 0/16 of 60 and
+  100 px; no plate-sized false find on 40 real frames. Licence plates.
+- **Text coverage**: on the pasted-text clip, 100 % of the ink pixels are
+  under the solid fill in all 6 frames, and no pixel more than 40 px from
+  the text moves by more than 5.7 levels; the detector costs 157 ms a frame
+  on DirectML at the default sizes, 58 ms at 1920 alone. Text.
+- **Re-ID after a deblur attempt**: a solid face fill leaves 0/60 faces
+  matched under both attacks, against 2/60 for the old blur 6 and 1/60 for
+  pixelate 6, so faces are filled solid. Face obfuscation against a deblur
+  attempt.
+- **Speed per frame per camera**: 246 to 284 ms a frame, 259 ms over 7926
+  frames of four cameras, two workers on the RTX 3070; one hour of one
+  30 fps camera is about 7.8 hours. Speed per frame per camera.
+- **Tracker before and after the forward walk**: recall 60/60 both,
+  continuity 98.43 % to 98.52 %, exposure counts unchanged. Tracker: forward
+  extension.
+- **Docker build and run**: cold build 945 s, rebuild 35 to 45 s; the GPU
+  run on the two-camera test file exits 0 in 18 s with every model on CUDA
+  and an audit that verifies. Docker image.
+- **Voice**: Silero VAD v6.2.3 finds the one spoken sentence of the test
+  sample as (0.0, 2.956) s with the 300 ms pad. Voice.
+
 ## Licence plates
 
 Task T06b. Detector: LPD-YuNet (`models/lpd_yunet_dynamic.onnx`, see
@@ -348,3 +376,122 @@ The audit names no image yet: the entry script warns that neither
 `/etc/faceblur_image_digest` nor `FACEBLUR_IMAGE_DIGEST` is set. Pass
 `-e FACEBLUR_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' faceblur-privacy)`
 to record it.
+
+## Text
+
+Task T11. Detector: PP-OCRv3 text detection
+(`models/text_detection_ppocrv3.onnx`) through `faceblur/text.py`, default
+settings: `text_sizes` (1920, 2560), filled solid whatever `mode` says.
+
+### Coverage on pasted text
+
+The clip `tests/test_text_mask.py` builds and runs, re-created from its own
+helpers (`text_frame`, `run`, `decode_all`, imported from a scratch script):
+three lines of black text ("INVOICE 4471", "JANE DOE", "PAID 12.50",
+OpenCV Hershey simplex at scale 1.2, 3 px stroke) on a light panel on a grey
+wall, 640x480, 6 frames at 10 fps, libx264 crf 12. It goes through
+`batch.run_video` with `mask` text, the zone off, nothing copied, on the CPU,
+and the copy is decoded and compared with the drawn frame.
+
+- **Ink** is every pixel darker than 80 in the drawn frame, grown by 2 px
+  each way: 14817 pixels. **Filled** means within 8 levels of black in the
+  copy.
+- **Far** is every pixel more than 40 px from any ink: 228250 pixels, 74 %
+  of the frame.
+
+| frame | ink filled solid | far, mean change | far, changed by more than 3 | far, largest change |
+|---|---|---|---|---|
+| 0 to 5, each | 100.00 % | 2.67 levels | 0.35 % | 5.7 levels |
+
+Every frame gives the same numbers, because the clip is one still. The
+run's record says `text_lines` 18 and `text_frames` 6, which is the three
+lines found on each of the 6 frames. Text takes 10.5 % of the frame on
+average. The source clip decodes to the drawn frame exactly, so the
+2.67-level shift on far pixels comes from the copy's own re-encode, not the
+mask; no far pixel moves by more than 5.7 levels, and the test's limit is a
+mean of 3.
+
+This shows that clean printed text is found and covered completely. It says
+nothing about text that is small, slanted, handwritten or smeared by motion;
+the T12 field test has to measure that on real footage.
+
+### Speed, ms per frame at 1600x1300
+
+Frame 300 of `footage/ego_AZER76400FE_19700101_004100_camera_left_part0001.mp4`,
+the frame the plate tables use. Mean of 20 calls after 3 warm-up calls, the
+whole `TextDetector.detect` (resize to each size, inference, contours,
+merging across sizes), one process at a time. The frame holds no text the
+detector keeps, so this is the cost of looking, which every frame pays.
+
+| text_sizes | DirectML (RTX 3070) | CPU |
+|---|---|---|
+| (1920, 2560) (default) | 156.6 | 600.1 |
+| (1920,) | 57.5 | 211.3 |
+
+The 2560 pass is 99 ms of the 157 on DirectML, about 63 percent of the text
+cost, and the text detector at the default sizes costs two and a half times
+the plate detector (63 ms) on the same card. It is the first place to look
+for speed (decision D23); what dropping 2560 costs in recall on small text
+has not been measured here.
+
+## Speed per frame per camera
+
+Task T09a, reported here in T11. A DF2 file packed from the four sample
+mp4s, one per head-worn camera (`out/fixture4.h5`, 575 MB, 1600x1300,
+30 fps), through `python -m faceblur.h5 run` with two workers, `mask`
+face,text,plate,screen, the zone on, DirectML on the RTX 3070. Time is wall
+time per camera; cameras run one after another.
+
+| camera | frames | time | ms per frame | face | text | plate | screen | all |
+|---|---|---|---|---|---|---|---|---|
+| rgb_ego_center_left | 2033 | 511 s | 251 | 0.84 % | 0.87 % | 0.08 % | 0.03 % | 1.80 % |
+| rgb_ego_center_right | 984 | 242 s | 246 | 0.57 % | 1.00 % | 0.05 % | 0.43 % | 2.00 % |
+| rgb_ego_side_left | 938 | 267 s | 284 | 2.38 % | 1.15 % | 0.01 % | 0.01 % | 3.52 % |
+| rgb_ego_side_right | 3971 | 1017 s | 256 | 0.73 % | 0.85 % | 0.43 % | 0.28 % | 2.20 % |
+| all four | 7926 | 2050 s | 259 | | | | | |
+
+The kind columns are the mean share of the frame masked for that kind; the
+last is the union. `rgb_ego_side_left` has the most face area and is the
+slowest.
+
+**An hour of footage.** One hour of one 30 fps camera is 108000 frames; at
+259 ms a frame that is about 7.8 hours on this PC. A four-camera hour is
+about 31 hours. The output was 924 MB from the 575 MB input, and
+`frames_copied` was 0: a mask reached every group of pictures, so every
+frame was re-encoded at the pipeline's high quality instead of copied.
+
+**The audit on one camera.** The 004310 file alone (938 frames) ran in
+4 min 35 s and wrote 941 audit lines (header, 938 frames, `camera_done`,
+footer), 1.06 MB, which `faceblur.h5 verify` checked in 1.7 s. Summed over
+its frame lines the counts are face 18218, text 3093, screen 11 and plate 7.
+The face count is every mask drawn, interpolated and tail boxes included,
+from 114 tracks and 7125 raw detections, so it is far above the number of
+faces a viewer would count; boxes that fill a gap can overlap.
+
+## Voice
+
+Task T09b. The release carries no audio (decision D-B); the audit lists
+where the removed audio held speech. Silero VAD v6.2.3
+(`models/silero_vad.onnx`, MIT, sha256 1a153a22...8788e3) through
+`faceblur/vad.py`, on the CPU, threshold 0.5, `vad_pad_ms` 300, minimum
+speech 250 ms, minimum silence 100 ms.
+
+The sample, `tests/data/speech_16k.wav`, is 4.7 s of 16 kHz mono: one
+synthesized sentence, "The quick brown fox jumps over the lazy dog.", voiced
+from about 0.11 s to 2.59 s, then 2 s of digital silence.
+
+| | start | end |
+|---|---|---|
+| voice in the sample | about 0.11 s | about 2.59 s |
+| segment found, 300 ms pad included | 0.0 s | 2.956 s |
+
+One segment. It covers all the speech and ends 0.37 s after the voice: the
+300 ms pad and about two of the model's 32 ms windows. The start is clamped
+at 0 because the pad reaches before the file. Finding it took 0.19 s.
+
+What the audit holds: one `speech` line per segment, `start_s`, `end_s` and
+`pad_ms`, written right after the header and before any frame, so even a run
+that dies during the video records what audio was removed. The `models` map
+names `silero_vad` with its sha256 whenever the input has an audio group.
+The audit says when someone spoke, never what was said or who said it; no
+wearer and bystander split is made (decision D-B).
