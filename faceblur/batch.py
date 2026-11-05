@@ -521,8 +521,12 @@ def run_video(src: Path, dst: Path, settings: Settings,
               on_progress: Optional[ProgressCallback] = None,
               cancel: Optional[threading.Event] = None,
               workers: int = 1,
-              write_sidecar: bool = True) -> AuditRecord:
-    """Blur every confirmed face in `src`, in phases, and write `dst`."""
+              write_sidecar: bool = True,
+              per_frame_out: Optional[list] = None) -> AuditRecord:
+    """Blur every confirmed face in `src`, in phases, and write `dst`.
+
+    `per_frame_out`, when given, receives the masks the copy was written with,
+    one list of detections per frame, so a caller can audit them afterwards."""
     src, dst = Path(src), Path(dst)
     record = AuditRecord(source=src.name, output=dst.name, status=STATUS_FAILED,
                          engine=settings.engine, settings=settings.to_dict())
@@ -1134,6 +1138,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
             out.unlink(missing_ok=True)
 
     record.wall_seconds = round(time.time() - started, 2)
+    if per_frame_out is not None:
+        per_frame_out[:] = per_frame
     if write_sidecar:
         import json
         sidecar_path(dst).write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
