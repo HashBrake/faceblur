@@ -513,3 +513,43 @@ that dies during the video records what audio was removed. The `models` map
 names `silero_vad` with its sha256 whenever the input has an audio group.
 The audit says when someone spoke, never what was said or who said it; no
 wearer and bystander split is made (decision D-B).
+
+## Strides from the pilot
+
+Task T13a, after the field-test pilot (`docs/privacy_module_fieldtest.md`,
+defects 5, 9 and 10). The pilot's single-process stage profile put text at
+160 ms a frame, plates at 112, the zone at 78 and faces at 45, for 242 ms a
+frame end to end at 2 workers. Three changes:
+
+- `text_stride` 2: the text detector runs on every 2nd frame. `text.hold`
+  closes gaps of up to `text_gap` (6) frames, so a line seen on frames 0, 2
+  and 4 is masked on 1 and 3 as well (`tests/test_strides.py`).
+- `plate_stride` 3: the plate detector runs on every 3rd frame, bridged by
+  `plate_gap` (6) the same way.
+- `zone_stride` 2 in `python -m faceblur.h5 run` and `selfcheck` only. The
+  desktop CLI keeps `Settings().zone_stride` 1.
+
+And one precision rule: a plate box taller than `plate_aspect_max` (0.8) of
+its width is dropped. Plates are 2:1 to 5:1 wide; the pilot's false plates
+were 166x282 portrait boxes on bins.
+
+`python -m faceblur.h5 run AM_032259_L.h5 --workers 2`, one 1600x1300 camera,
+4864 frames, on the same PC (RTX 3070, DirectML). Masked shares are mean
+percent of the picture over all frames.
+
+| run | ms/frame | seconds | detect_s | encode_s | mask_face% | mask_text% | mask_plate% | mask_screen% | zone_prevented% | text_lines | plates | plate_frames | tracks |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pilot (strides 1/1/1) | 252 | 1227.5 | 1043.49 | 146.23 | 0.75 | 0.85 | 0.12 | 0.27 | 0.279 | 23681 | 167 | 280 | 93 |
+| T13a (text 2, plate 3, zone 2) | 152 | 741.3 | 583.71 | 126.82 | 0.76 | 0.68 | 0.004 | 0.27 | 0.216 | 11857 | 12 | 7 | 93 |
+
+The run is 40 percent faster: 152 ms a frame against 252, 12.5 minutes of
+wall time against 20.5. Faces and screens are unchanged (the same 93 tracks).
+`text_lines` halves because the detector looks at half the frames; the text
+mask falls from 0.85 to 0.68 percent of the picture, with 4566 of 4864
+frames still carrying a text mask. Which part of that drop is false lines
+that no longer reach `text_min_run` and which part is real lines left
+uncovered on a frame between two detections has not been measured; a
+contact-sheet pass on this output would say. The
+plate mask falls from 0.12 to 0.004 percent and from 280 frames to 7, which is
+the aspect rule removing the bins: 12 plate boxes are left. The audit
+verifies (4867 lines).

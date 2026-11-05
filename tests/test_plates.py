@@ -259,3 +259,43 @@ def test_plates_can_be_asked_for_on_every_surface():
     args = cli.build_parser().parse_args(["x", "--mask", "plate"])
     assert classes.parse(args.mask) == ("plate",)
     assert Settings(mask=("plate",)).wants("plate")
+
+
+# ------------------------------------------------------------- the aspect rule
+
+class _Pool:
+    outputs = ("loc", "conf", "iou")
+
+    def run(self, blob):
+        return (None, None, None)
+
+
+def _found_for(monkeypatch, quad_wh: tuple[float, float]) -> list[Detection]:
+    """What `detect` keeps of one quad of width x height at (300, 300) in a 1600x1300 frame."""
+    import faceblur.plates as plates
+
+    settings = Settings(mask=("plate",))
+    detector = object.__new__(PlateDetector)
+    detector.settings, detector.pool = settings, _Pool()
+    scale = settings.plate_size / 1600
+    w, h = quad_wh
+    corners = np.array([[[300, 300], [300 + w, 300], [300 + w, 300 + h], [300, 300 + h]]],
+                       np.float32) * scale
+    monkeypatch.setattr(plates, "decode",
+                        lambda *a: (np.array([0.95], np.float32), corners))
+    return detector.detect(np.zeros((1300, 1600, 3), np.uint8))
+
+
+def test_a_wide_plate_is_kept(monkeypatch):
+    assert len(_found_for(monkeypatch, (200, 50))) == 1
+
+
+def test_a_portrait_box_is_not_a_plate(monkeypatch):
+    # The pilot's false plates: 166x282 boxes on bins.
+    assert _found_for(monkeypatch, (166, 282)) == []
+
+
+def test_plate_aspect_max_is_a_setting():
+    assert Settings().to_dict()["plate_aspect_max"] == 0.8
+    with pytest.raises(SettingsError):
+        Settings(plate_aspect_max=0)

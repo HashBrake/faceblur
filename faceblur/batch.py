@@ -240,7 +240,7 @@ def _plates(settings: Settings):
 
     key = (settings.plate_device, settings.plate_size, settings.plate_conf,
            settings.plate_nms, settings.plate_min_px, settings.plate_max_frac,
-           settings.plate_pad)
+           settings.plate_pad, settings.plate_aspect_max)
     found = _PLATES.get(key)
     if found is None:
         found = PlateDetector(settings, threads=_THREADS)
@@ -336,14 +336,15 @@ def detect_job(job: dict) -> dict:
             hits = screens.detect(frame)
             if hits:
                 found_screens[i] = hits
-        if texts is not None:
-            # Every stride frame, like screens and before the adaptive skip:
-            # a sign does not move because the faces in the frame stopped.
+        if texts is not None and i % settings.text_stride == 0:
+            # Every text_stride-th stride frame, before the adaptive skip: a
+            # sign does not move because the faces in the frame stopped, and
+            # text.hold fills the frames between.
             lines = texts.detect(frame)
             if lines:
                 found_text[i] = lines
-        if plates is not None:
-            # Every stride frame as well: a parked car stays parked.
+        if plates is not None and i % settings.plate_stride == 0:
+            # Every plate_stride-th frame: a parked car stays parked.
             hits = plates.detect(frame)
             if hits:
                 found_plates[i] = hits

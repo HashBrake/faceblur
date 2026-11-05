@@ -232,3 +232,30 @@ def test_packets_stream_into_a_resizable_dataset(video_long, tmp_path, monkeypat
     want, got = decode_all(video_long), decode_all(remuxed)
     assert len(want) == len(got) == 120
     assert all(np.array_equal(w, g) for w, g in zip(want, got))
+
+
+def test_pack_of_an_unreadable_file_fails_in_one_line_and_leaves_nothing(tmp_path, capsys):
+    import struct
+
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(struct.pack(">I", 24) + b"ftypisom" + struct.pack(">I", 512) + b"isomiso2")
+    assert bad.stat().st_size == 24
+    out = tmp_path / "bad.h5"
+    assert h5_main(["pack", str(bad), "--out", str(out)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and "cannot read" in err and "bad.mp4" in err
+    assert not out.exists()
+    assert not (tmp_path / "bad.h5.part").exists()
+
+
+def test_pack_refuses_a_resource_fork_before_opening_it(tmp_path, capsys, monkeypatch):
+    fork = tmp_path / "._x.mp4"
+    fork.write_bytes(b"\x00\x05\x16\x07")
+    opened = []
+    monkeypatch.setattr(h5io, "write_video_group", lambda *a: opened.append(a))
+    out = tmp_path / "fork.h5"
+    assert h5_main(["pack", str(fork), "--out", str(out)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert len(err.splitlines()) == 1 and "._x.mp4" in err
+    assert opened == []
+    assert not out.exists() and not (tmp_path / "fork.h5.part").exists()

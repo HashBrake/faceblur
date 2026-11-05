@@ -494,6 +494,12 @@ class Settings:
     # a line than the masking did. First guesses, not measured.
     text_gate_min_px: int = 24
     text_gate_min_run: int = 2
+    # Run the text detector on every Nth stride frame. The field-test pilot
+    # (docs/privacy_module_fieldtest.md) profiled text at 160 ms a frame, the
+    # largest stage of 242 ms end to end. A line of text does not move on its
+    # own and `text.hold` closes gaps of up to `text_gap` (6) frames, so a line
+    # seen on every 2nd frame is held over the frames between.
+    text_stride: int = 2
 
     # --- licence plates ------------------------------------------------------
     # LPD-YuNet from OpenCV's zoo (faceblur/plates.py), filled solid like text
@@ -516,6 +522,10 @@ class Settings:
     # them. A real plate wider than a quarter of a 1600 px frame is on a car
     # the wearer is touching.
     plate_max_frac: float = 0.25
+    # A box taller than this share of its width is not a plate: plates are 2:1
+    # to 5:1 wide. The pilot's false plates were 166x282 portrait boxes on
+    # bins (docs/privacy_module_fieldtest.md).
+    plate_aspect_max: float = 0.8
     # The quad grown by this share of its size, as screens are: a rim of
     # plate left by a camera that moved between frames is still the number.
     plate_pad: float = 0.10
@@ -527,6 +537,11 @@ class Settings:
     # The output-side check, on the pattern of the text gate. First guesses.
     plate_gate_min_px: int = 24
     plate_gate_min_run: int = 2
+    # Run the plate detector on every Nth stride frame. The pilot profiled it
+    # at 112 ms a frame, second only to text; a parked car stays parked and
+    # `plates.hold` closes gaps of up to `plate_gap` (6) frames, so every 3rd
+    # frame is bridged.
+    plate_stride: int = 3
     # Where the plate model runs, like zone_device.
     plate_device: str = "auto"
 
@@ -721,6 +736,13 @@ class Settings:
         if self.text_gate_min_run < 1:
             raise SettingsError(
                 f"text_gate_min_run must be at least 1, got {self.text_gate_min_run}")
+        if self.text_stride < 1:
+            raise SettingsError(f"text_stride must be at least 1, got {self.text_stride}")
+        if self.plate_stride < 1:
+            raise SettingsError(f"plate_stride must be at least 1, got {self.plate_stride}")
+        if self.plate_aspect_max <= 0:
+            raise SettingsError(
+                f"plate_aspect_max must be above 0, got {self.plate_aspect_max}")
         if self.plate_size < 64:
             raise SettingsError(f"plate_size must be at least 64, got {self.plate_size}")
         for name in ("plate_conf", "plate_nms", "plate_link_iou", "plate_max_frac"):
@@ -951,8 +973,9 @@ class Settings:
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
-            "text_gate_min_px", "text_gate_min_run",
+            "text_gate_min_px", "text_gate_min_run", "text_stride",
             "plate_size", "plate_conf", "plate_nms", "plate_min_px", "plate_max_frac",
+            "plate_aspect_max", "plate_stride",
             "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
             "plate_gate_min_px", "plate_gate_min_run", "plate_device",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",

@@ -161,8 +161,9 @@ class PlateDetector:
         for i in nms_indices(boxes, scores.astype(np.float32), s.plate_nms):
             x, y, bw, bh = (float(v) for v in boxes[i])
             # Too small to read, or wider than a plate in this frame could be:
-            # a band across a wall or a mirror, not a registration number.
-            if max(bw, bh) < s.plate_min_px or bw > s.plate_max_frac * w:
+            # a band across a wall or a mirror, not a registration number. Or
+            # upright: a plate is wider than it is tall, a bin is not.
+            if max(bw, bh) < s.plate_min_px or bw > s.plate_max_frac * w                     or bh > s.plate_aspect_max * bw:
                 continue
             score = round(float(scores[i]), 4)
             quad = tuple((float(px), float(py)) for px, py in corners[i])

@@ -221,6 +221,22 @@ def test_cli_prints_the_output_path(tmp_path, capsys):
     assert str(out / "episode.h5") in printed
     assert "ms/frame" in printed
     assert (out / "episode.h5").exists()
+    # The HDF5 run puts the hand pass on every 2nd frame (T13a); the desktop
+    # default stays 1.
+    assert audit.read(out / "audit.jsonl")[0]["settings"]["zone_stride"] == 2
+    assert Settings().zone_stride == 1
+
+
+def test_a_camera_group_with_no_attrs_is_refused_in_one_line(tmp_path, capsys):
+    broken = tmp_path / "broken.h5"
+    with h5py.File(broken, "w") as f:
+        group = f.require_group(df2.camera_path("rgb_ego_center_left"))
+        group.create_dataset(df2.VIDEO, (0,), dtype=h5py.vlen_dtype(np.uint8))
+    out = tmp_path / "run"
+    assert h5.main(["run", str(broken), "--out", str(out), "--workers", "1"]) == 2
+    err = capsys.readouterr().err.strip()
+    assert err == "rgb_ego_center_left: camera group has no codec attr"
+    assert not (out / "episode.h5").exists()
 
 
 # --- audit.jsonl ----------------------------------------------------------------

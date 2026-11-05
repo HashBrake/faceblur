@@ -30,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 
+import av
 import h5py
 import numpy as np
 from jsonschema import ValidationError
@@ -45,6 +46,10 @@ AUDIT_NAME = "audit.jsonl"
 OUTPUT_NAME = "episode.h5"
 # Written into the container image at build time; the env var wins over it.
 IMAGE_DIGEST_FILE = Path("/etc/faceblur_image_digest")
+# The hand pass on every 2nd frame in `run` and `selfcheck`: the pilot
+# profiled it at 78 ms a frame and the zone has memory (zone_memory) over the
+# frame between. The desktop CLI keeps Settings' 1.
+H5_ZONE_STRIDE = 2
 
 
 def _dummy_passthrough(f: h5py.File, frames: int) -> None:
@@ -63,35 +68,72 @@ def _dummy_passthrough(f: h5py.File, frames: int) -> None:
         data.attrs["source"] = "faceblur.h5 pack"
 
 
-def pack(mp4s: list[Path], cameras: list[str], audio: Path | None, out: Path) -> list[str]:
-    """Write a DF2 file. Returns the groups written, for the report."""
-    written = []
-    with h5py.File(out, "w") as f:
-        f.attrs["df2_version"] = FIXTURE_VERSION
-        first_timestamps = None
-        for mp4, name in zip(mp4s, cameras):
-            path = df2.camera_path(name)
-            h5io.write_video_group(f.require_group(path), mp4)
-            if first_timestamps is None:
-                first_timestamps = f[path][df2.TIMESTAMPS_NS][:]
-            written.append(path)
-        if audio is not None:
-            h5io.write_audio_group(f, audio)
-            written.append(df2.AUDIO_GROUP)
-        timeline = f.require_group(df2.TIMELINE_GROUP)
-        timeline.create_dataset(df2.TIMELINE_TIMESTAMPS_NS, data=first_timestamps)
-        written.append(df2.TIMELINE_GROUP)
-        _dummy_passthrough(f, len(first_timestamps))
-        written += list(df2.PASSTHROUGH_GROUPS)
-    return written
-
-
 class RunFailed(Exception):
     """A run that cannot finish. `code` is the exit status the CLI returns."""
 
     def __init__(self, message: str, code: int):
         super().__init__(message)
         self.code = code
+
+
+def pack(mp4s: list[Path], cameras: list[str], audio: Path | None, out: Path) -> list[str]:
+    """Write a DF2 file. Returns the groups written, for the report.
+
+    Written to `<out>.part` and renamed when complete, so a file that cannot
+    be read leaves nothing behind. Raises RunFailed (code 1) for a macOS
+    `._` resource fork, refused before it is opened, and for a file the
+    demuxer cannot read.
+    """
+    for mp4 in mp4s:
+        if Path(mp4).name.startswith("._"):
+            raise RunFailed(f"{mp4}: refused: a macOS resource fork, not a video", 1)
+    out = Path(out)
+    part = out.with_name(out.name + ".part")
+    written = []
+    try:
+        with h5py.File(part, "w") as f:
+            f.attrs["df2_version"] = FIXTURE_VERSION
+            first_timestamps = None
+            for mp4, name in zip(mp4s, cameras):
+                path = df2.camera_path(name)
+                _read_or_fail(mp4, h5io.write_video_group, f.require_group(path), mp4)
+                if first_timestamps is None:
+                    first_timestamps = f[path][df2.TIMESTAMPS_NS][:]
+                written.append(path)
+            if audio is not None:
+                _read_or_fail(audio, h5io.write_audio_group, f, audio)
+                written.append(df2.AUDIO_GROUP)
+            timeline = f.require_group(df2.TIMELINE_GROUP)
+            timeline.create_dataset(df2.TIMELINE_TIMESTAMPS_NS, data=first_timestamps)
+            written.append(df2.TIMELINE_GROUP)
+            _dummy_passthrough(f, len(first_timestamps))
+            written += list(df2.PASSTHROUGH_GROUPS)
+        part.replace(out)
+    finally:
+        part.unlink(missing_ok=True)
+    return written
+
+
+def _read_or_fail(source: Path, write, *args) -> None:
+    """`write(*args)`, with a file the demuxer cannot read as one RunFailed line."""
+    try:
+        write(*args)
+    except (av.error.FFmpegError, OSError) as exc:
+        message = getattr(exc, "strerror", None) or str(exc)
+        raise RunFailed(f"{source}: cannot read: {message}", 1) from None
+
+
+# Every attr read_video_group needs to remux a camera group.
+_REQUIRED_ATTRS = (df2.ATTR_CODEC, df2.ATTR_WIDTH, df2.ATTR_HEIGHT,
+                   df2.ATTR_TIME_BASE_NUM, df2.ATTR_TIME_BASE_DEN, df2.ATTR_EXTRADATA)
+
+
+def _check_camera(f: h5py.File, camera: str) -> None:
+    """RunFailed (code 2) for a camera group that lacks an attr the remux needs."""
+    attrs = f[df2.camera_path(camera)].attrs
+    for attr in _REQUIRED_ATTRS:
+        if attr not in attrs:
+            raise RunFailed(f"{camera}: camera group has no {attr} attr", 2)
 
 
 # What write_video_group makes from the blurred mp4. Everything else in an
@@ -246,9 +288,12 @@ def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
     input_path, out_dir = Path(input_path), Path(out_dir)
     with h5py.File(input_path, "r") as f:
         cameras = h5io.camera_groups(f)
-        pcm = vad.read_pcm(f) if cameras else None
-    if not cameras:
-        raise RunFailed(f"{input_path} has no camera group under {df2.IMAGE_GROUP}.", 2)
+        if not cameras:
+            raise RunFailed(f"{input_path} has no camera group under {df2.IMAGE_GROUP}.", 2)
+        # Before any audit line or detector: a broken group fails in one line.
+        for camera in cameras:
+            _check_camera(f, camera)
+        pcm = vad.read_pcm(f)
     work = out_dir / ".work"
     part = out_dir / "episode.h5.part"
     final = out_dir / OUTPUT_NAME
@@ -340,7 +385,7 @@ def selfcheck(device: str) -> int:
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
     try:
         settings = Settings(mask=("face", "text", "plate", "screen"), device=device,
-                            **_side_devices(device))
+                            zone_stride=H5_ZONE_STRIDE, **_side_devices(device))
         for detector in (detect.DetectorBank(settings), screens.ScreenDetector(settings),
                          text.TextDetector(settings), plates.PlateDetector(settings)):
             detector.detect(frame)
@@ -390,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         except UnknownKind as exc:
             ap.error(str(exc))
         settings = Settings(mask=mask, device=args.device, check_output=args.check_output,
-                            **_side_devices(args.device))
+                            zone_stride=H5_ZONE_STRIDE, **_side_devices(args.device))
         try:
             results = run(args.input, args.out, settings, args.workers, args.spec_layout)
         except RunFailed as exc:
@@ -404,7 +449,12 @@ def main(argv: list[str] | None = None) -> int:
     cameras = args.cameras.split(",") if args.cameras else list(df2.PACK_ORDER)
     if len(cameras) < len(args.mp4):
         ap.error(f"{len(args.mp4)} mp4s but only {len(cameras)} camera names")
-    for path in pack(args.mp4, cameras, args.audio, args.out):
+    try:
+        written = pack(args.mp4, cameras, args.audio, args.out)
+    except RunFailed as exc:
+        print(exc, file=sys.stderr)
+        return exc.code
+    for path in written:
         print(path)
     return 0
 
