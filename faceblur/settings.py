@@ -14,6 +14,7 @@ DEVICES = ("auto", "gpu", "cpu")
 ENCODERS = ("auto", "nvenc", "x264")
 CODECS = ("h264", "hevc")
 MODES = ("blur", "pixelate", "solid")
+FACE_FILLS = ("mode", "solid")
 # The progress stage names, which are also the stages the watchdog times.
 WATCHDOG_STAGES = ("detecting", "tracking", "writing", "checking")
 SECOND_CHANCE_SCOPES = ("changed", "all")
@@ -378,6 +379,13 @@ class Settings:
     mode: str = "blur"
     # Blocks across a face after downsampling. 6 leaves nothing to recognise.
     strength: int = 6
+    # How faces are filled: "mode" follows `mode` above, "solid" fills every
+    # face solid whatever the mode says. Solid, because a recogniser still
+    # matched 2 of the 60 largest faces of the 004100 sample to themselves
+    # after blur 6 and a deblur attempt, and 1 after pixelate 6; solid left
+    # none (tests/test_reid_deblur.py, decision D-C,
+    # docs/privacy_module_report.md).
+    face_fill: str = "solid"
 
     # --- output --------------------------------------------------------------
     # Near lossless. Untouched pixels are training data.
@@ -657,6 +665,8 @@ class Settings:
             raise SettingsError(f"engine must be one of {ENGINES}, got {self.engine!r}")
         if self.mode not in MODES:
             raise SettingsError(f"mode must be one of {MODES}, got {self.mode!r}")
+        if self.face_fill not in FACE_FILLS:
+            raise SettingsError(f"face_fill must be one of {FACE_FILLS}, got {self.face_fill!r}")
         if self.device not in DEVICES:
             raise SettingsError(f"device must be one of {DEVICES}, got {self.device!r}")
         if self.encoder not in ENCODERS:
@@ -934,7 +944,7 @@ class Settings:
             "camera_comp", "link_dist", "fast_shift", "max_gap_fast", "tail_before_max",
             "tail_trend",
             "ellipse_w", "ellipse_h", "pad", "feather",
-            "mode", "strength", "crf", "preset", "encoder", "nvenc_cq", "codec", "hevc_cq", "hevc_crf",
+            "mode", "strength", "face_fill", "crf", "preset", "encoder", "nvenc_cq", "codec", "hevc_cq", "hevc_crf",
             "gop", "device", "mask_budget",
             "chunk_seconds", "copy_clean", "min_copy_seconds", "encode_seconds",
             "encode_gop_seconds", "nvenc_sessions", "hwaccel",

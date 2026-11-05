@@ -164,3 +164,94 @@ continuity rose 0.08 points, while the exposure counts did not move. Most
 weak boxes past a track's end were already taken by the velocity-based
 continuation during linking. hand_damage_wearer could not be read: the
 004100 sample has no hands cache, and building one was outside this task.
+
+## Face obfuscation against a deblur attempt
+
+Task T08, decision D-C. The face mask shipped as `mode` "blur" at
+`strength` 6: the region shrunk to about six blocks across the face, scaled
+back up linearly and blurred (`redact._cover_region`). Blur is a linear
+filter and diffusion-era deblurring recovers part of it, so the brief was:
+keep this mask only if a face recogniser still fails after a deblur attempt,
+otherwise fill faces solid.
+
+### Setup
+
+- **Faces.** The 60 largest detector sightings (at least 48 px, landmarks
+  present, not track-filled) of the 004100 sample, picked as
+  `eval.reid.mask_curve` picks them, from its raw cache and the shipped
+  tracker settings. 60 faces of at least 48 px were available, so the size
+  floor was not lowered.
+- **Recogniser.** SFace (`models/sface.onnx`, `eval.reid.Recogniser`), five
+  landmark alignment. Each face is embedded from the source, masked with
+  `redact.redact(frame, [face], settings)` with that face as the only box,
+  attacked, and embedded again with the same landmarks and alignment, so the
+  mask and the attack are the only difference between the two crops.
+- **Threshold.** 0.582, the score 99 percent of stranger pairs on this
+  footage stay below (`threshold_fmr1` in the sample's `reid.json`). The
+  published SFace threshold, 0.363, is reached by 15.5 percent of strangers
+  here and would count noise as matches.
+- **Attacks**, both on the box the mask was drawn in (region bounds plus
+  twice the feather, as `_cover_region` cuts it), written back into a copy of
+  the frame:
+  - *deconvolve*: upsample x2 with `INTER_CUBIC`; unsharp mask, frame + 1.5 x
+    (frame - Gaussian sigma 3); Richardson-Lucy, 10 iterations, float32 with
+    clipping to [0, 1] and an epsilon of 1e-6, `cv2.filter2D`, Gaussian PSF of
+    sigma k/2 in frame pixels where k = max(2, round(2 x block_scale /
+    strength)) is the mask's own block size (sigma k on the x2 grid);
+    downsample back with `INTER_AREA`. The attacker is handed the exact block
+    size.
+  - *sharpen*: upsample x2 cubic, bilateral filter (d 9, colour 40, space 5),
+    the same unsharp mask, downsample back with `INTER_AREA`. No knowledge of
+    the mask.
+- **Pass criterion.** At most 1 percent of the faces still match their source
+  after an attack, which at 60 faces means none, under both attacks.
+
+### Result
+
+    .venv\Scripts\python.exe -m pytest tests/test_reid_deblur.py -s -p no:cacheprovider
+
+| mask | attack | still matched | worst score | passes |
+|---|---|---|---|---|
+| blur 6 | deconvolve | 2/60 | 0.594 | no |
+| blur 6 | sharpen | 2/60 | 0.613 | no |
+| pixelate 6 | deconvolve | 1/60 | 0.607 | no |
+| pixelate 6 | sharpen | 1/60 | 0.631 | no |
+| solid | deconvolve | 0/60 | 0.531 | yes |
+| solid | sharpen | 0/60 | 0.550 | yes |
+
+For reference, without any attack (`mask_curve`, same faces and threshold,
+in the sample's `reid.json`): blur 6 matched 2/60 (worst 0.593), pixelate 6
+1/60 (worst 0.645), solid 0/60 (worst 0.552). Blur 6 already sat on the
+threshold before the attack; the attacks pushed the worst score of each mode
+up by 0.00 to 0.02 for blur and did not move the count.
+
+**How many of the 60 the number is about.** A face counts as identifiable in
+the source when SFace matches it, at the same threshold, to the same track in
+another frame (`eval.reid.verdict`'s self-match, against up to 40 evenly
+sampled other sightings of that track). 45 of the 60 are; the other 15 the
+recogniser cannot place even untouched, so a mask cannot make them less
+identifiable to it. The solid result is 0 of those 45 as well.
+
+Solid is not zero by construction. The aligned SFace crop around a face
+still holds the hair, ears and background outside the ellipse, which the
+mask leaves exact, and those pixels alone carry a face to 0.55 against its
+own source, close to the threshold. That margin is what the ellipse size
+(`ellipse_w`, `ellipse_h`) buys, and it is the next thing to watch if the
+threshold or the recogniser changes.
+
+### Decision: `face_fill` "solid"
+
+Blur 6 fails, so `Settings.face_fill` (new, "mode" or "solid") defaults to
+"solid" and `redact.fill_mode("face", settings)` returns "solid" whatever
+`mode` says. Every face is filled solid on every path that masks through
+`redact`: the command line and the UI today, and the HDF5 module when it
+starts masking, since it is to mask through the same code. `face_fill` "mode"
+gives the old behaviour back for anyone who chooses it, and is recorded in
+the audit settings like every other setting. Pixelate 6 also fails, so it is
+not an alternative. Screens still follow `mode`; text and plates were already
+solid.
+
+`tests/test_reid_deblur.py` asserts that the mask the shipped default selects
+passes both attacks, so a change back to blur or pixelate as the default
+fails the suite while this measurement says what it says. The test skips
+with its reason when the 004100 footage or its raw cache is absent.

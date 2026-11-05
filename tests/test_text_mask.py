@@ -172,7 +172,8 @@ def test_text_is_filled_solid_whatever_the_mode(mode):
 
 
 def test_only_text_and_plates_are_forced_solid():
-    assert fill_mode("face", Settings(mode="blur")) == "blur"
+    # With face_fill "mode"; the shipped "solid" is T08's, tests/test_reid_deblur.py.
+    assert fill_mode("face", Settings(mode="blur", face_fill="mode")) == "blur"
     assert fill_mode("screen", Settings(mode="pixelate")) == "pixelate"
     assert fill_mode("text", Settings(mode="blur")) == "solid"
     assert fill_mode("plate", Settings(mode="pixelate")) == "solid"

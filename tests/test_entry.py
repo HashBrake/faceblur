@@ -95,10 +95,10 @@ def test_roi_blend_matches_a_whole_frame_blend():
     faces = [Detection(100.0, 100.0, 80.0, 90.0, 0.9, LM), Detection(400.0, 300.0, 50.0, 60.0, 0.8, None)]
     out, alpha = redact(frame, faces, s)
 
-    from faceblur.redact import _cover_region
+    from faceblur.redact import _cover_region, fill_mode
     cover = frame.copy()
     for d in faces:
-        _cover_region(frame, cover, ellipse_for(d, s), s.mode, s.strength, s.feather)
+        _cover_region(frame, cover, ellipse_for(d, s), fill_mode(d.kind, s), s.strength, s.feather)
     a = alpha[:, :, None]
     blended = frame.astype(np.float32) * (1.0 - a) + cover.astype(np.float32) * a
     reference = np.where(a > 0, np.clip(blended + 0.5, 0, 255).astype(np.uint8), frame)

@@ -25,6 +25,11 @@ often enough of its shapes to be read back against a guess, and a short
 string such as a plate number is the easiest of all to guess. So the mode is
 chosen per region by `fill_mode`, and only faces (and screens) follow the
 user's choice. The alpha and its feathered edge are the same for every mode.
+
+**Faces are filled solid by default too** (`Settings.face_fill`). Blur and
+pixelation at six blocks across a face both left a recogniser matching some
+faces to themselves after a deblur attempt (tests/test_reid_deblur.py), so a
+face follows `mode` only when `face_fill` is "mode".
 """
 from __future__ import annotations
 
@@ -378,8 +383,11 @@ SOLID_KINDS = ("text", "plate")
 
 def fill_mode(kind: str, settings: Settings) -> str:
     """How a region of this kind is destroyed: "solid" for text and plates,
-    the run's own mode for everything else (decision D-C)."""
-    return "solid" if kind in SOLID_KINDS else settings.mode
+    and for faces when `settings.face_fill` says so, the run's own mode for
+    everything else (decision D-C)."""
+    if kind in SOLID_KINDS or (kind == "face" and settings.face_fill == "solid"):
+        return "solid"
+    return settings.mode
 
 
 def _cover_region(frame: np.ndarray, cover: np.ndarray, e: "Region",
