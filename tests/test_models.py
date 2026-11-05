@@ -213,3 +213,23 @@ def test_the_hand_models_are_in_the_build():
     spec = spec_datas()
     for name in ("palm_detection.onnx", "hand_landmark.onnx"):
         assert name in spec, f"{name} is not in the build"
+
+
+def test_sha256sums_matches_expected():
+    """models/SHA256SUMS, which the privacy image checks at start, names every
+    committed model with the hash this file pins. Regenerate it with
+    `python models/make_sums.py`."""
+    import subprocess
+
+    listed = {}
+    for line in (MODELS / "SHA256SUMS").read_text(encoding="ascii").splitlines():
+        digest, name = line.split("  ", 1)
+        listed[name] = digest
+    for name, digest in listed.items():
+        assert name in EXPECTED, f"{name} is in SHA256SUMS and not pinned here"
+        assert digest == EXPECTED[name][0], name
+    committed = subprocess.run(["git", "ls-files", "*.onnx"], cwd=MODELS, capture_output=True,
+                               text=True, check=True).stdout.split()
+    assert committed, "git lists no models"
+    for name in committed:
+        assert Path(name).name in listed, f"{name} is committed and not in SHA256SUMS"

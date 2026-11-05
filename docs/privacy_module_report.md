@@ -255,3 +255,59 @@ solid.
 passes both attacks, so a change back to blur or pixelate as the default
 fails the suite while this measurement says what it says. The test skips
 with its reason when the 004100 footage or its raw cache is absent.
+
+## Docker image
+
+`cloud/Dockerfile` now builds two images from shared layers. `privacy`, the
+default target, is the de-identification module alone:
+
+    docker build -f cloud/Dockerfile -t faceblur-privacy .
+    docker run --gpus all -v <in>:/in:ro -v <out>:/out faceblur-privacy
+
+`notebook` (`--target notebook`) is the GreenNode image as before, JupyterLab
+and sshd as root.
+
+What the privacy stage does:
+
+- Runs as `faceblur`, uid 10001, which owns `/out` and nothing else. No
+  JupyterLab, no SSH server, no rclone, no exposed port.
+- `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`: every model is in the
+  image and nothing may fetch one at run time.
+- `cloud/privacy_entry.sh` first runs `sha256sum -c models/SHA256SUMS` and
+  stops on any mismatch, so the weights that run are the ones reviewed.
+  `models/make_sums.py` writes that file; `tests/test_models.py` checks it
+  against the hashes pinned there.
+- Every `/in/*.h5` and `/in/*.hdf5` goes through `python -m faceblur.h5 run`.
+  One input writes `/out/episode.h5` and `/out/audit.jsonl`, several write
+  `/out/<stem>/`. `FACEBLUR_WORKERS` (default 2) and `FACEBLUR_ARGS` (e.g.
+  `--spec-layout --mask face`) come in through `docker run -e`. Each audit is
+  then checked with `faceblur.h5 verify`. Exit 2: no input; 1: a run failed or
+  an audit did not verify.
+- `HEALTHCHECK` runs `python -m faceblur.h5 selfcheck` every 5 minutes: every
+  masking model (YuNet, CenterFace, UltraFace, YOLOX, PP-OCR, LPD-YuNet) loads
+  and runs once on a flat 640x480 frame, and the provider each one ran on is
+  printed. On this PC's `.venv`, `selfcheck --device cpu` takes about 4.5 s.
+
+### The build on this PC: not finished
+
+Docker Desktop started (29.5.3, with an `nvidia` runtime listed). The build
+of the privacy target began pulling `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`
+(layers of 2.06 GB and 0.70 GB) and was stopped about 85 s in, at roughly 0.4
+of 2.06 GB, because the PC ran short of memory: the session's watchdog
+stopped the build with free RAM at about 3.5 GB, under the 5 GB this machine
+needs to keep. Docker Desktop was then shut down again, as it was before the
+build, which brought free RAM back to about 6 GB.
+
+So nothing about the image itself is measured yet: no image size, build time,
+container run, GPU provider, `id -u` or `docker inspect` of the healthcheck.
+The notebook target was not built either, on purpose; it only adds time. To
+finish, with Docker Desktop running and a few GB of RAM to spare:
+
+    docker build -f cloud/Dockerfile -t faceblur-privacy .
+    docker run --rm --gpus all -v "<repo>/out/docker_in:/in:ro" -v "<repo>/out/docker_out:/out" faceblur-privacy
+    python -m faceblur.h5 verify out/docker_out/audit.jsonl
+    docker run --rm faceblur-privacy python -m faceblur.h5 selfcheck
+    docker inspect --format '{{.Config.Healthcheck}}' faceblur-privacy
+    docker run --rm faceblur-privacy id -u
+
+`out/docker_in/` already holds a copy of `tests/data/df2_small.h5`.

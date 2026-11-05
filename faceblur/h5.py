@@ -321,6 +321,28 @@ def verify_audit(path: Path) -> tuple[bool, int, str]:
     return True, lines, ""
 
 
+def selfcheck(device: str) -> int:
+    """Every masking model loaded and run once on a flat frame.
+
+    The container's HEALTHCHECK: a model that does not load, or a provider
+    that fails on its first inference, shows here and not an hour into a run.
+    A flat frame finds nothing, which is fine: the point is that it runs.
+    """
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    try:
+        settings = Settings(mask=("face", "text", "plate", "screen"), device=device)
+        for detector in (detect.DetectorBank(settings), screens.ScreenDetector(settings),
+                         text.TextDetector(settings), plates.PlateDetector(settings)):
+            detector.detect(frame)
+            for name, provider in detector.compute.items():
+                print(f"{name}: {provider}")
+    except Exception as exc:  # any failure is the answer the check exists to give
+        print(f"selfcheck failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print("ok")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m faceblur.h5", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -340,7 +362,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--check-output", action="store_true")
     v = sub.add_parser("verify", help="check an audit.jsonl: hash chain and schema")
     v.add_argument("audit", type=Path)
+    c = sub.add_parser("selfcheck", help="load every masking model and run it on one frame")
+    c.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto")
     args = ap.parse_args(argv)
+
+    if args.command == "selfcheck":
+        return selfcheck(args.device)
 
     if args.command == "verify":
         ok, lines, problem = verify_audit(args.audit)

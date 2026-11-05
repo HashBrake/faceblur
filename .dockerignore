@@ -3,6 +3,7 @@
 !models/*.onnx
 !models/*.txt
 !models/README.md
+!models/SHA256SUMS
 !faceblur/*.py
 !cli.py
 !pyproject.toml
@@ -11,3 +12,11 @@
 **/__pycache__
 **/*.mp4
 !tests/data/*.mp4
+# Re-excluded after the allows above: credentials, footage and outputs stay
+# out even when they sit inside an allowed folder.
+**/*.env
+**/footage
+**/out
+**/eval/cache
+**/.venv*
+**/*_blurred*

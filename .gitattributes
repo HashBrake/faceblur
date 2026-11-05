@@ -1,3 +1,5 @@
 # Shell scripts run on Linux: a CRLF checkout breaks them.
 *.sh text eol=lf
 cloud/Dockerfile text eol=lf
+# sha256sum -c reads it inside the Linux image, from this working tree.
+models/SHA256SUMS text eol=lf
