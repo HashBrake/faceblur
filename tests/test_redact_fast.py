@@ -102,11 +102,15 @@ def _reference_redact(frame, dets, settings, zone=None):
     out = frame.copy()
     roi = frame[y0:y1, x0:x1]
     cover = roi.copy()
-    for e in regions:
+    # T05 (decision D-C): text is filled solid whatever the mode, after the
+    # other regions. The one deliberate change to the old code's pixels.
+    paired = sorted(((e, R.fill_mode(det.kind, settings)) for e, det in zip(regions, dets)),
+                    key=lambda pair: pair[1] == "solid")
+    for e, mode in paired:
         shifted = (FaceEllipse(e.cx - x0, e.cy - y0, e.ax, e.ay, e.angle)
                    if isinstance(e, FaceEllipse)
                    else QuadRegion(tuple((px - x0, py - y0) for px, py in e.corners)))
-        _cover_region(roi, cover, shifted, settings.mode, settings.strength, settings.feather)
+        _cover_region(roi, cover, shifted, mode, settings.strength, settings.feather)
     a = alpha[y0:y1, x0:x1, None]
     blended = roi.astype(np.float32) * (1.0 - a) + cover.astype(np.float32) * a
     out[y0:y1, x0:x1] = np.where(a > 0, np.clip(blended + 0.5, 0, 255).astype(np.uint8), roi)

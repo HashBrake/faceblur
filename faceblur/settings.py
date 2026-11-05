@@ -444,8 +444,8 @@ class Settings:
 
     # --- text ----------------------------------------------------------------
     # PP-OCRv3 detection, a DB model: one probability map the size of its
-    # input, and the boxes are contours of it. Package T1 measures what it
-    # finds; nothing masks text yet and `classes.TEXT.ready` still says so.
+    # input, and the boxes are contours of it. Package T1 measured what it
+    # finds; package T05 masks it, always with a solid fill (decision D-C).
     #
     # Two scales. A sign across a room and a label in the wearer's hand are
     # two orders of magnitude apart in pixels and one input size cannot have
@@ -478,6 +478,14 @@ class Settings:
     text_gap: int = 6
     text_tail: int = 3
     text_link_iou: float = 0.3
+    # The output-side check, on the pattern of the screen gate. A line of text
+    # the check finds in the copy has to clear `text_gate_min_px` on its long
+    # side and be seen on `text_gate_min_run` checked frames before it holds
+    # the copy back. The run mirrors `text_min_run`, the rule that decides
+    # what the pipeline masks in the first place, so the gate asks no more of
+    # a line than the masking did. First guesses, not measured.
+    text_gate_min_px: int = 24
+    text_gate_min_run: int = 2
 
     # --- checking the finished copy ------------------------------------------
     # Detect on the output as well: a face found there, on pixels nothing
@@ -662,6 +670,12 @@ class Settings:
             raise SettingsError(f"text_min_run must be at least 1, got {self.text_min_run}")
         if self.text_gap < 0 or self.text_tail < 0:
             raise SettingsError("text_gap and text_tail must be 0 or more")
+        if self.text_gate_min_px < 0:
+            raise SettingsError(
+                f"text_gate_min_px must be 0 or more, got {self.text_gate_min_px}")
+        if self.text_gate_min_run < 1:
+            raise SettingsError(
+                f"text_gate_min_run must be at least 1, got {self.text_gate_min_run}")
         if self.quarantine_min_px < 0:
             raise SettingsError("quarantine_min_px must be 0 or more")
         if not self.hand_windows or any(w < 64 for w in self.hand_windows):
@@ -875,6 +889,7 @@ class Settings:
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
+            "text_gate_min_px", "text_gate_min_run",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "second_chance_scope", "second_chance_margin_seconds",

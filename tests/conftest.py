@@ -135,3 +135,24 @@ def sine_wav(tmp_path_factory) -> Path:
     if result.returncode != 0:
         raise RuntimeError(f"could not build the test wav: {result.stderr[-500:]}")
     return out
+
+
+@pytest.fixture
+def not_ready_text(monkeypatch):
+    """The text kind as it was before T05: known to the build, with no detector.
+
+    Every kind is ready now, so the tests of what happens to a kind that is
+    not need one made for them. `classes.KINDS` and `BY_NAME` are rebuilt
+    because `parse`, `kind` and `Settings.validate` read them, and the window
+    reads `classes.TEXT` when it builds its switches.
+    """
+    from dataclasses import replace
+
+    from faceblur import classes
+
+    text = replace(classes.TEXT, ready=False)
+    kinds = tuple(text if k.name == "text" else k for k in classes.KINDS)
+    monkeypatch.setattr(classes, "TEXT", text)
+    monkeypatch.setattr(classes, "KINDS", kinds)
+    monkeypatch.setattr(classes, "BY_NAME", {k.name: k for k in kinds})
+    return text

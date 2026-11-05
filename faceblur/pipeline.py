@@ -107,6 +107,10 @@ class AuditRecord:
     # one after. Zero unless the run was asked to mask screens.
     screens: int = 0
     screen_frames: int = 0
+    # Lines of text found, before the hold, and the frames a text mask
+    # reached after it. Zero unless the run was asked to mask text.
+    text_lines: int = 0
+    text_frames: int = 0
     # Stretches where the primary detector saw a box nothing confirmed and no
     # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
     unconfirmed_runs: list = field(default_factory=list)
@@ -137,6 +141,13 @@ class AuditRecord:
     residual_screen_frames: int = 0
     residual_screen_max_px: int = 0
     residual_screen_runs: list = field(default_factory=list)
+    # Text the check found in the copy on pixels nothing changed, the same way
+    # and for the same reasons as the screen numbers above. The runs hold only
+    # finds that clear text_gate_min_px, linked the way `text.hold` links them.
+    residual_text: int = 0
+    residual_text_frames: int = 0
+    residual_text_max_px: int = 0
+    residual_text_runs: list = field(default_factory=list)
     residual_list: list = field(default_factory=list)
     # Boxes a mask would barely move, so the ratio decides nothing: a flat
     # wall, a dark corner. flat_boxes is every kind together and flat_by_kind

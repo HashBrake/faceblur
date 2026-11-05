@@ -170,7 +170,11 @@ def _bank(settings: Settings) -> DetectorBank:
     key = (settings.engine, settings.det_sizes, settings.verify, settings.device,
            settings.confirm_on_crops, settings.crop_size, settings.crop_scale,
            settings.max_face_frac, settings.grow_face_frac, settings.third_opinion,
-           settings.nms_detect, settings.nms_yunet)
+           settings.nms_detect, settings.nms_yunet,
+           # A run that does not want faces builds a bank with no face
+           # detectors, and a later run in the same worker that does must not
+           # be handed it.
+           settings.wants("face"))
     bank = _BANKS.get(key)
     if bank is None:
         bank = DetectorBank(settings, threads=_THREADS)
@@ -198,6 +202,28 @@ def _screens(settings: Settings):
         found = ScreenDetector(settings, threads=_THREADS)
         _SCREENS.clear()
         _SCREENS[key] = found
+    return found
+
+
+_TEXTS: dict = {}
+
+
+def _text(settings: Settings):
+    """The worker's cached text detector, built the first time it is asked.
+
+    Its own cache for the reason the screen detector has one: a run that does
+    not mask text never loads the model.
+    """
+    from .text import TextDetector
+
+    key = (settings.device, settings.text_sizes, settings.text_thresh,
+           settings.text_box_thresh, settings.text_unclip, settings.text_min_px,
+           settings.text_nms)
+    found = _TEXTS.get(key)
+    if found is None:
+        found = TextDetector(settings, threads=_THREADS)
+        _TEXTS.clear()
+        _TEXTS[key] = found
     return found
 
 
@@ -252,10 +278,12 @@ def detect_job(job: dict) -> dict:
     start, end = job["start"], job["end"]
     bank = _bank(settings)
     screens = _screens(settings) if settings.wants("screen") else None
+    texts = _text(settings) if settings.wants("text") else None
     # The zone is not a kind and does not depend on what is being masked: it
     # is the region nothing is masked in, so it runs whenever it is on.
     finder = _zone(settings) if settings.zone else None
     strong, weak, shifts, found_screens, found_hands = {}, {}, {}, {}, {}
+    found_text: dict = {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -284,6 +312,12 @@ def detect_job(job: dict) -> dict:
             hits = screens.detect(frame)
             if hits:
                 found_screens[i] = hits
+        if texts is not None:
+            # Every stride frame, like screens and before the adaptive skip:
+            # a sign does not move because the faces in the frame stopped.
+            lines = texts.detect(frame)
+            if lines:
+                found_text[i] = lines
         # Without camera_comp there is no shift, which counts as moving.
         if adaptive.skip(shift_px(shifts.get(i))):
             # Empty, as a frame off the plain stride is (and the tracker
@@ -298,11 +332,14 @@ def detect_job(job: dict) -> dict:
     if screens is not None:
         compute.update(screens.compute)
         hashes.update(screens.model_hashes)
+    if texts is not None:
+        compute.update(texts.compute)
+        hashes.update(texts.model_hashes)
     if finder is not None:
         compute.update(finder.compute)
         hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
-            "screens": found_screens, "hands": found_hands,
+            "screens": found_screens, "text": found_text, "hands": found_hands,
             "skipped_adaptive": adaptive.count,
             "compute": compute, "hashes": hashes}
 
@@ -525,6 +562,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
     weak: list[list[Detection]] = [[] for _ in range(n)]
     screens_found: dict[int, list[Detection]] = {}
     held_screens: dict[int, list[Detection]] = {}
+    text_found: dict[int, list[Detection]] = {}
+    held_text: dict[int, list[Detection]] = {}
     hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
@@ -546,6 +585,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         for i, sh in result.get("shifts", {}).items():
             shifts[i] = sh
         screens_found.update(result.get("screens") or {})
+        text_found.update(result.get("text") or {})
         hands_found.update(result.get("hands") or {})
         record.frames_skipped_adaptive += result.get("skipped_adaptive", 0)
         compute, hashes = result["compute"], result["hashes"]
@@ -584,6 +624,17 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.screens = sum(len(v) for v in screens_found.values())
         record.screen_frames = len(held_screens)
         for i, dets in held_screens.items():
+            if 0 <= i < n:
+                per_frame[i] = list(per_frame[i]) + list(dets)
+    # ---- 2c. text, the same way: a line of text does not move on its own,
+    # so it is linked over time, short gaps closed, and given a tail.
+    if settings.wants("text"):
+        from .text import hold as hold_text
+
+        held_text = hold_text(text_found, settings, n)
+        record.text_lines = sum(len(v) for v in text_found.values())
+        record.text_frames = len(held_text)
+        for i, dets in held_text.items():
             if 0 <= i < n:
                 per_frame[i] = list(per_frame[i]) + list(dets)
     # ---- 2d. the handled zone, built once over the whole timeline because
@@ -886,6 +937,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.residual_screen_frames = got["residual_screen_frames"]
         record.residual_screen_max_px = got["residual_screen_max_px"]
         record.residual_screen_runs = got["residual_screen_runs"]
+        record.residual_text = got["residual_text"]
+        record.residual_text_frames = got["residual_text_frames"]
+        record.residual_text_max_px = got["residual_text_max_px"]
+        record.residual_text_runs = got["residual_text_runs"]
         record.zone_pixels_changed_max = got["zone_pixels_changed_max"]
         record.zone_frames_over = got["zone_frames_over"]
         record.zone_list = got["zone_list"]
@@ -936,6 +991,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
                     # The tracker does not know about screens and the run above
                     # threw away what section 2b put in. Put it back.
                     for i, dets in held_screens.items():
+                        if 0 <= i < n:
+                            per_frame[i] = list(per_frame[i]) + list(dets)
+                if settings.wants("text"):
+                    # And what section 2c put in, for the same reason.
+                    for i, dets in held_text.items():
                         if 0 <= i < n:
                             per_frame[i] = list(per_frame[i]) + list(dets)
                 # A seed the tracker dropped goes back as a mask on its own frame.

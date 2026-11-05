@@ -17,6 +17,14 @@ Either way the pixels inside are replaced from a copy of that region shrunk
 to a few blocks across, so the original cannot be recovered. A plain Gaussian
 blur is a linear filter and can be partly undone, so no mode ships that only
 blurs. Both shapes get the same soft edge.
+
+**Text and plates are always filled solid** (decision D-C), whatever
+`settings.mode` says. A face blurred to a few blocks across has lost who it
+is; a line of text blurred the same way keeps its length, its word breaks and
+often enough of its shapes to be read back against a guess, and a short
+string such as a plate number is the easiest of all to guess. So the mode is
+chosen per region by `fill_mode`, and only faces (and screens) follow the
+user's choice. The alpha and its feathered edge are the same for every mode.
 """
 from __future__ import annotations
 
@@ -363,6 +371,17 @@ def masked_shares(shape: tuple[int, int], dets: Sequence[Detection],
             for name in sorted(kinds)}
 
 
+# The kinds that are filled solid whatever the run's mode. See the module
+# docstring, decision D-C.
+SOLID_KINDS = ("text", "plate")
+
+
+def fill_mode(kind: str, settings: Settings) -> str:
+    """How a region of this kind is destroyed: "solid" for text and plates,
+    the run's own mode for everything else (decision D-C)."""
+    return "solid" if kind in SOLID_KINDS else settings.mode
+
+
 def _cover_region(frame: np.ndarray, cover: np.ndarray, e: "Region",
                   mode: str, strength: int, feather: float) -> None:
     """Fill `cover` inside the region's bounding box with destroyed pixels."""
@@ -454,7 +473,12 @@ def _redact_in(frame: np.ndarray, dets: Sequence[Detection], settings: Settings,
     H, W = frame.shape[:2]
     # Everything happens inside the box around the ellipses. Blending the whole
     # frame in float was most of the cost of the write pass.
-    regions = [region_for(det, settings) for det in dets]
+    # Each region with the mode its kind is filled with. Solid ones go last:
+    # a blurred face's box drawn after a text quad would put a blur of the
+    # text back over the fill where the two boxes overlap.
+    paired = sorted(((region_for(det, settings), fill_mode(det.kind, settings))
+                     for det in dets), key=lambda pair: pair[1] == "solid")
+    regions = [e for e, _ in paired]
     margin = settings.feather * 2 + 2
     x0 = max(0, min(e.bounds(margin)[0] for e in regions))
     y0 = max(0, min(e.bounds(margin)[1] for e in regions))
@@ -466,11 +490,11 @@ def _redact_in(frame: np.ndarray, dets: Sequence[Detection], settings: Settings,
     out = frame.copy()
     roi = frame[y0:y1, x0:x1]
     cover = roi.copy()
-    for e in regions:
+    for e, mode in paired:
         shifted = (FaceEllipse(e.cx - x0, e.cy - y0, e.ax, e.ay, e.angle)
                    if isinstance(e, FaceEllipse)
                    else QuadRegion(tuple((px - x0, py - y0) for px, py in e.corners)))
-        _cover_region(roi, cover, shifted, settings.mode, settings.strength, settings.feather)
+        _cover_region(roi, cover, shifted, mode, settings.strength, settings.feather)
     # The blend box sits inside the mask box: `_crop`'s margin is the wider.
     a = alpha[y0 - cy0:y1 - cy0, x0 - cx0:x1 - cx0]
     # Only the pixels the alpha touches are blended; the rest of the box is

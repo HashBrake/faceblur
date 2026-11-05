@@ -215,15 +215,42 @@ def test_faces_start_ticked_and_unticking_them_stops_the_run(app, source_folder,
         window.close()
 
 
-def test_a_kind_with_no_detector_cannot_be_switched_on(app):
-    """Not by clicking, and not by a stored setting from a later build."""
+def test_a_kind_with_no_detector_cannot_be_switched_on(app, monkeypatch):
+    """Not by clicking, and not by a stored setting from a later build.
+
+    Every kind this build knows has a detector since T05, so the window is
+    built once with text made not ready, the way it was before, and once as
+    it ships, where a ready text kind restores from the store."""
+    from dataclasses import replace
+
+    from faceblur import classes
+
+    ready = classes.TEXT
+    not_ready = replace(ready, ready=False)
+    kinds = tuple(not_ready if k.name == "text" else k for k in classes.KINDS)
+    with monkeypatch.context() as m:
+        m.setattr(classes, "TEXT", not_ready)
+        m.setattr(classes, "KINDS", kinds)
+        m.setattr(classes, "BY_NAME", {k.name: k for k in kinds})
+        window = MainWindow()
+        window.setAttribute(Qt.WA_DontShowOnScreen, True)
+        try:
+            window.settings_store.setValue("mask_text", True)
+            window._restore()
+            assert not window.mask_checks["text"].isEnabled()
+            assert not window.mask_checks["text"].isChecked()
+            assert "text" not in window._mask()
+        finally:
+            window.settings_store.remove("mask_text")
+            window.close()
+    assert ready.ready
     window = MainWindow()
     window.setAttribute(Qt.WA_DontShowOnScreen, True)
     try:
         window.settings_store.setValue("mask_text", True)
         window._restore()
-        assert not window.mask_checks["text"].isChecked()
-        assert "text" not in window._mask()
+        assert window.mask_checks["text"].isChecked()
+        assert "text" in window._mask()
     finally:
         window.settings_store.remove("mask_text")
         window.close()

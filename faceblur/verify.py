@@ -56,9 +56,16 @@ into runs by `screens.runs_in` and only a run of `screen_gate_min_run`
 checked frames decides anything. Faces need no such rule: one frame of a face
 is a face.
 
+Text is asked the same question, for the same reason: the detector finds a
+line on one frame in three as the camera moves, and a tile pattern for one
+frame. Its finds are linked into runs the way `text.hold` links them on the
+source side, and only a run of `text_gate_min_run` checked frames over
+`text_gate_min_px` holds a copy back. Like a screen, a line of text inside the
+wearer's reach is handled and set aside rather than counted.
+
     .venv\\Scripts\\python.exe -m faceblur.verify SOURCE OUTPUT [--stride N]
                                                   [--workers N] [--no-hand-rule]
-                                                  [--mask face,screen] [--no-zone]
+                                                  [--mask face,text,screen] [--no-zone]
 """
 from __future__ import annotations
 
@@ -83,7 +90,7 @@ from .video import VideoError, probe
 # until it is in here: a mask nothing checks is a promise nobody has tested.
 # `tests/test_classes.py` fails if a kind is marked ready and is not named
 # here, so condition 2 of "ready" is enforced by a test and not by memory.
-KINDS_CHECKED: tuple[str, ...] = ("face", "screen")
+KINDS_CHECKED: tuple[str, ...] = ("face", "screen", "text")
 
 # Below this share of the change a mask would make, nothing reached the box.
 MISSED_APPLIED = 0.3
@@ -357,7 +364,7 @@ def residual_job(job: dict) -> dict:
     so the source frame is both sides and the copy is not decoded at all.
     `seconds` is the job's own time, for the record's `overlap_check_seconds`.
     """
-    from .batch import _bank, _hand_rule, _screens, _zone   # the worker's cached models
+    from .batch import _bank, _hand_rule, _screens, _text, _zone   # the worker's cached models
 
     t0 = time.time()
     src = Path(job["src"])
@@ -367,6 +374,7 @@ def residual_job(job: dict) -> dict:
     wanted = kinds_checked(settings)
     bank = _bank(settings) if "face" in wanted else None
     screens = _screens(settings) if "screen" in wanted else None
+    texts = _text(settings) if "text" in wanted else None
     rule = _hand_rule(settings) if bank is not None and settings.hand_rule else None
     # The detection pass already found every source frame's hands with the
     # same models and settings, so they come with the job when it has them
@@ -395,6 +403,7 @@ def residual_job(job: dict) -> dict:
         checked += 1
         faces = bank.detect(after) if bank is not None else []
         glass = screens.detect(after) if screens is not None else []
+        lines = texts.detect(after) if texts is not None else []
         zone_mask = face_zone = None
         # The encoder's noise, once a frame and only when something reads it.
         noise = None
@@ -431,7 +440,7 @@ def residual_job(job: dict) -> dict:
                     if moved:
                         zone_rows.append({"frame": i, "changed": round(moved, 5),
                                           "zone_px": pixels})
-        if not faces and not glass:
+        if not faces and not glass and not lines:
             continue
         if noise is None:
             noise = frame_noise(before, after)
@@ -467,7 +476,9 @@ def residual_job(job: dict) -> dict:
                         row["hand"] = round(cover, 3)
                         hands += 1
                 found.append(row)
-        for det in glass:
+        # Screens and text are asked the same questions: was a mask applied
+        # here, and is it inside the reach of a hand.
+        for det in glass + lines:
             # No hand rule here: nothing mistakes a hand for a television, and
             # a hand over a monitor does not stop it being a monitor. What a
             # screen needs instead is persistence, and that is decided in
@@ -475,9 +486,9 @@ def residual_job(job: dict) -> dict:
             changed, would = applied(before, after, det, settings)
             call = classify(changed, would, noise)
             if call == "flat":
-                flat["screen"] += 1
+                flat[det.kind] += 1
                 counts = flat_frames.setdefault(i, {})
-                counts["screen"] = counts.get("screen", 0) + 1
+                counts[det.kind] = counts.get(det.kind, 0) + 1
             elif call == "missed":
                 row = _row(det, i, changed, would, noise)
                 # The label as well, so that a reader knows the detector said
@@ -545,7 +556,7 @@ def of_kind(rows: list[dict], name: str) -> list[dict]:
     return [row for row in rows if row.get("kind", "face") == name]
 
 
-def screen_runs(rows: list[dict], settings: Settings) -> list[dict]:
+def screen_runs(rows: list[dict], settings: Settings, kind: str = "screen") -> list[dict]:
     """Screen finds grouped into runs: same label, overlapping, close in time.
 
     The same grouping the pipeline uses on the source side, on the same
@@ -566,7 +577,7 @@ def screen_runs(rows: list[dict], settings: Settings) -> list[dict]:
         w, h = float(row.get("w", row["px"])), float(row.get("h", row["px"]))
         per_frame.setdefault(row["frame"], []).append(
             Detection(row["x"] - w / 2, row["y"] - h / 2, w, h, row["score"],
-                      None, row.get("label", "tv"), True, row["score"], "screen"))
+                      None, row.get("label", "tv"), True, row["score"], kind))
     out = []
     for run in runs_in(per_frame, settings):
         frames = [i for i, _ in run.hits]
@@ -577,6 +588,18 @@ def screen_runs(rows: list[dict], settings: Settings) -> list[dict]:
                     "x": round(last.cx), "y": round(last.cy),
                     "w": round(last.w), "h": round(last.h)})
     return sorted(out, key=lambda run: (run["first"], -run["hits"]))
+
+
+def text_runs(rows: list[dict], settings: Settings) -> list[dict]:
+    """Text finds grouped into runs, linked the way `text.hold` links them.
+
+    The same grouping as `screen_runs`, told the text numbers the way
+    `text.hold` tells `screens.hold` them, so a run of text means the same
+    thing on both sides of the file.
+    """
+    return screen_runs(rows, settings.with_changes(
+        track_iou=settings.text_link_iou, screen_gap=settings.text_gap,
+        screen_tail=settings.text_tail, screen_min_run=settings.text_min_run), "text")
 
 
 def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
@@ -596,6 +619,7 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     found.sort(key=lambda row: (row["frame"], -row["px"]))
     faces = not_hands(of_kind(found, "face"))
     glass = [row for row in of_kind(found, "screen") if "zone" not in row]
+    writing = [row for row in of_kind(found, "text") if "zone" not in row]
     checked = sum(r["checked"] for r in results)
     by_size = {"40+ px": 0, "24-40 px": 0, "under 24 px": 0}
     for row in faces:
@@ -613,11 +637,13 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
     # of them. A gate built the other way could be held back by a run of 20 px
     # flickers and one unrelated large find in a single frame.
     big = [row for row in glass if row["px"] >= settings.screen_gate_min_px]
+    long_lines = [row for row in writing if row["px"] >= settings.text_gate_min_px]
     # 200 rows of each kind rather than 200 rows in total. On the table tennis
     # file the check finds 67 faces and 129 screens, and a shared cap would let
     # a file with hundreds of screen finds crowd the faces out of the record
     # that an auditor reads. Every count above is over every row either way.
-    kept = of_kind(found, "face")[:200] + of_kind(found, "screen")[:200]
+    kept = (of_kind(found, "face")[:200] + of_kind(found, "screen")[:200]
+            + of_kind(found, "text")[:200])
     kept.sort(key=lambda row: (row["frame"], -row["px"]))
     # Frame breaks ties, so that results merged out of frame order
     # (`merge_checks`) list the same rows as one pass in order would.
@@ -643,6 +669,10 @@ def summarise(results: list[dict], settings: Optional[Settings] = None) -> dict:
             "residual_screen_frames": len({row["frame"] for row in glass}),
             "residual_screen_max_px": max((row["px"] for row in glass), default=0),
             "residual_screen_runs": screen_runs(big, settings),
+            "residual_text": len(writing),
+            "residual_text_frames": len({row["frame"] for row in writing}),
+            "residual_text_max_px": max((row["px"] for row in writing), default=0),
+            "residual_text_runs": text_runs(long_lines, settings),
             # The precision side. Nothing should have been destroyed inside the
             # handled zone, so these read zero on a clean run.
             "zone_pixels_changed_max": zone_rows[0]["changed"] if zone_rows else 0.0,
@@ -727,7 +757,8 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
     A face holds a copy back on its own, at `quarantine_min_px` and up: one
     frame of a face is a face. A screen has to have been there, which means a
     run of `screen_gate_min_run` checked frames among the finds that clear
-    `screen_gate_min_px`. Hands hold nothing back; they are not in these
+    `screen_gate_min_px`. Text is held the same way, on `text_gate_min_run`
+    and `text_gate_min_px`. Hands hold nothing back; they are not in these
     numbers at all.
 
     `zone` is the precision condition and it is different in kind from the
@@ -742,6 +773,10 @@ def held_for(report: dict, settings: Settings) -> tuple[str, ...]:
     if (settings.wants("face") and report.get("residual_faces")
             and report.get("residual_max_px", 0) >= settings.quarantine_min_px):
         kinds.append("face")
+    if settings.wants("text") and any(
+            run["hits"] >= settings.text_gate_min_run
+            for run in report.get("residual_text_runs") or []):
+        kinds.append("text")
     if settings.wants("screen") and any(
             run["hits"] >= settings.screen_gate_min_run
             for run in report.get("residual_screen_runs") or []):
@@ -798,6 +833,15 @@ def describe(report: dict, settings: Optional[Settings] = None) -> str:
                  f"{report.get('residual_screen_max_px', 0)} px; {len(runs)} runs clear the "
                  f"{settings.screen_gate_min_px} px floor and {len(long_enough)} of those "
                  f"last {settings.screen_gate_min_run} checked frames or more")
+    if settings.wants("text"):
+        runs = report.get("residual_text_runs") or []
+        long_enough = [r for r in runs if r["hits"] >= settings.text_gate_min_run]
+        joiner = ". " if text else ""
+        text += (f"{joiner}{report.get('residual_text', 0)} lines of text still visible "
+                 f"over {report.get('residual_text_frames', 0)} frames, the largest "
+                 f"{report.get('residual_text_max_px', 0)} px; {len(runs)} runs clear the "
+                 f"{settings.text_gate_min_px} px floor and {len(long_enough)} of those "
+                 f"last {settings.text_gate_min_run} checked frames or more")
     if settings.zone:
         worst = report.get("zone_pixels_changed_max", 0.0)
         over = report.get("zone_frames_over", 0)

@@ -64,7 +64,10 @@ TEXT = Kind(
     # masked, whatever it says, and everything else that carries information
     # is, so the line no longer needs a list of what counts as personal.
     summary="writing on anything the wearer is not handling, whatever it says",
-    ready=False,
+    # Ready since package T05: PP-OCRv3 finds the lines (faceblur/text.py),
+    # the pipeline holds them over time and fills them solid (decision D-C),
+    # and the output-side check looks for text left in the copy.
+    ready=True,
 )
 
 SCREEN = Kind(

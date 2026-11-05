@@ -42,9 +42,8 @@ def test_every_kind_is_named_once_and_has_a_shape():
 def test_which_kinds_this_build_can_actually_do():
     """This test changes as each kind lands, on purpose: nothing else in the
     codebase should have to, and a reader wants one place that says it."""
-    assert [k.name for k in classes.available()] == ["face", "screen"]
-    assert FACE.ready and SCREEN.ready
-    assert not TEXT.ready
+    assert [k.name for k in classes.available()] == ["face", "text", "screen"]
+    assert FACE.ready and TEXT.ready and SCREEN.ready
 
 
 def test_every_ready_kind_is_checked_in_the_finished_copy():
@@ -84,9 +83,10 @@ def test_the_flag_reads_a_list_and_puts_it_in_listing_order():
     assert classes.parse(" face , face ") == ("face",)
 
 
-def test_the_flag_refuses_a_kind_with_no_detector_behind_it():
+def test_the_flag_refuses_a_kind_with_no_detector_behind_it(not_ready_text):
     """A switch that masks nothing is worse than no switch, so it is an error
-    rather than a warning, on every surface."""
+    rather than a warning, on every surface. Every kind this build knows is
+    ready since T05, so the test makes one that is not."""
     with pytest.raises(UnknownKind) as exc:
         classes.parse("face,text")
     assert "cannot mask text yet" in str(exc.value)
@@ -115,7 +115,7 @@ def test_screens_can_be_asked_for_on_their_own_or_beside_faces():
     assert classes.parse("screen,face") == ("face", "screen"), "listing order"
 
 
-def test_settings_refuse_a_kind_this_build_cannot_do():
+def test_settings_refuse_a_kind_this_build_cannot_do(not_ready_text):
     for bad in ((), ("plate",), ("text",), ("face", "text")):
         with pytest.raises(SettingsError):
             Settings(mask=bad)

@@ -1,9 +1,8 @@
-"""The text detector: geometry, thresholds, and the promise that it is off.
+"""The text detector: geometry, thresholds, and the promise that it is wired.
 
-Package T1 builds the detector and measures it. Nothing masks text: the kind
-is not ready, the pipeline never calls this module, and the tests at the
-bottom are there to keep that true until package T3 decides otherwise on the
-evidence in report 21.
+Package T1 built the detector and measured it; package T05 wired it into the
+pipeline and the output-side check, and the test at the bottom keeps it
+wired. What masking text does end to end is in `tests/test_text_mask.py`.
 
 The model itself is not tested here. What it finds on real footage is
 measured by `eval/text.py` and audited by eye in
@@ -198,22 +197,25 @@ def test_the_scales_are_the_ones_the_measurement_chose():
     assert Settings().text_sizes == (1920, 2560)
 
 
-# --------------------------------------------------- and it is still not on
+# ------------------------------------------------------------ and it is on
 
-def test_text_is_not_ready_and_the_pipeline_never_calls_it():
-    """T1 measures. Nothing masks text until T3 decides on the evidence, and
-    90 percent of what this detector finds on the sample footage is not text
-    at all."""
+def test_text_is_ready_and_the_pipeline_calls_it():
+    """T05 turned text on: the kind is ready, masked by its quad, and both the
+    detection pass and the output-side check build the detector. A kind marked
+    ready with nothing calling its detector would be a checkbox that masks
+    nothing."""
     import pathlib
 
-    assert TEXT.ready is False
+    assert TEXT.ready is True
     assert TEXT.shape == POLYGON
     root = pathlib.Path(__file__).resolve().parents[1] / "faceblur"
-    for name in ("batch.py", "pipeline.py", "redact.py", "verify.py"):
-        source = (root / name).read_text(encoding="utf-8")
-        assert "text import" not in source and "from .text" not in source, (
-            f"faceblur/{name} imports the text detector. Nothing in the pipeline "
-            f"may call it until package T3 sets TEXT.ready on the evidence")
+    batch = (root / "batch.py").read_text(encoding="utf-8")
+    assert "from .text import TextDetector" in batch, (
+        "faceblur/batch.py does not build the text detector")
+    verify = (root / "verify.py").read_text(encoding="utf-8")
+    assert "_text" in next(line for line in verify.splitlines()
+                           if line.strip().startswith("from .batch import _bank")), (
+        "faceblur/verify.py does not take the worker's cached text detector")
 
 
 def test_the_audit_tables_come_from_the_committed_labels():

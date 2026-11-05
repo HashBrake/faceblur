@@ -152,12 +152,6 @@ NOT_SHIPPED = {
     "ultraface.onnx":
         "the static graph models/make_dynamic.py derives ultraface_dynamic "
         "from. Nothing loads it at run time",
-    "text_detection_ppocrv3.onnx":
-        "package T1 measures text and nothing masks it: classes.TEXT.ready is "
-        "False, so the app cannot select the kind and the model would be 2.4 MB "
-        "of dead weight. Package T3 turns text on and moves this line into the "
-        "spec, and test_a_ready_kind_has_its_model_in_the_build fails until it "
-        "does",
     "silero_vad.onnx":
         "the HDF5 module runs it; the packaged desktop app does not read audio",
 }

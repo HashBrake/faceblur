@@ -13,8 +13,8 @@ import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).resolve().parent
 
-# The three face detectors, the two hand models and the screen detector,
-# with the licences that travel with them. The hand models are what lets the
+# The three face detectors, the two hand models, the screen detector and
+# the text detector, with the licences that travel with them. The hand models are what lets the
 # output-side check tell the wearer's own hand from a face it missed. The
 # face recogniser in models/ is evaluation only and stays out of the build.
 #
@@ -30,11 +30,13 @@ datas = [
     (str(ROOT / "models" / "palm_detection.onnx"), "models"),
     (str(ROOT / "models" / "hand_landmark.onnx"), "models"),
     (str(ROOT / "models" / "yolox_tiny.onnx"), "models"),
+    (str(ROOT / "models" / "text_detection_ppocrv3.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "ultraface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "palm_detection.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "hand_landmark.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "yolox.LICENSE.txt"), "models"),
+    (str(ROOT / "models" / "ppocr.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "README.md"), "models"),
 ]
 
