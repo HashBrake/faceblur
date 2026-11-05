@@ -486,6 +486,25 @@ class Settings:
     text_gap: int = 6
     text_tail: int = 3
     text_link_iou: float = 0.3
+    # Rules against what is not text, applied to each frame's quads after the
+    # scales are merged and before the hold (`text.false_text`, package T13c).
+    # The field-test pilot found most of the text mask on rags, cups, tool
+    # cases and ceiling lights. Measured on 21 hand-labelled pilot frames
+    # (report, "Text false positives"): a quad whose sides are within
+    # `text_min_aspect` of each other with the short one over
+    # `text_square_px` frame pixels is a thing, not a line, unless the map
+    # shows `text_square_bands` stacked lines in it. 0 turns the shape rule
+    # off, and 0 bands turns the stacked-lines exception off.
+    text_min_aspect: float = 1.5
+    text_square_px: int = 40
+    text_square_bands: int = 2
+    # A quad whose mean grey is over this is washed out, a light and not a
+    # label. 255 turns it off.
+    text_bright_max: float = 240.0
+    # A quad with less than this share of ink in the map inside it. Off (0):
+    # on the labelled set every threshold that removed a false box also lost
+    # a real one.
+    text_ink_min: float = 0.0
     # The output-side check, on the pattern of the screen gate. A line of text
     # the check finds in the copy has to clear `text_gate_min_px` on its long
     # side and be seen on `text_gate_min_run` checked frames before it holds
@@ -736,6 +755,18 @@ class Settings:
         if self.text_gate_min_run < 1:
             raise SettingsError(
                 f"text_gate_min_run must be at least 1, got {self.text_gate_min_run}")
+        if self.text_min_aspect < 0:
+            raise SettingsError(f"text_min_aspect must be 0 or more, got {self.text_min_aspect}")
+        if self.text_square_px < 0:
+            raise SettingsError(f"text_square_px must be 0 or more, got {self.text_square_px}")
+        if self.text_square_bands < 0:
+            raise SettingsError(
+                f"text_square_bands must be 0 or more, got {self.text_square_bands}")
+        if not 0.0 <= self.text_bright_max <= 255.0:
+            raise SettingsError(
+                f"text_bright_max must be between 0 and 255, got {self.text_bright_max}")
+        if not 0.0 <= self.text_ink_min <= 1.0:
+            raise SettingsError(f"text_ink_min must be between 0 and 1, got {self.text_ink_min}")
         if self.text_stride < 1:
             raise SettingsError(f"text_stride must be at least 1, got {self.text_stride}")
         if self.plate_stride < 1:
@@ -973,6 +1004,8 @@ class Settings:
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
+            "text_min_aspect", "text_square_px", "text_square_bands",
+            "text_bright_max", "text_ink_min",
             "text_gate_min_px", "text_gate_min_run", "text_stride",
             "plate_size", "plate_conf", "plate_nms", "plate_min_px", "plate_max_frac",
             "plate_aspect_max", "plate_stride",

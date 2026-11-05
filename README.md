@@ -556,7 +556,7 @@ up to where it stopped.
 |---|---|---|
 | `header` | first | `input_sha256`, `input_name`, `cameras`, `models`, `settings`, `image_digest`, `tool_version` |
 | `speech` | one per stretch of speech, before any frame | `start_s`, `end_s`, `pad_ms` |
-| `frame` | one per frame per camera | `camera`, `frame`, `pts_ns`, `counts`, `boxes`, optional `quads` |
+| `frame` | one per frame per camera | `camera`, `frame`, `pts_ns`, `counts`, `boxes`, optional `quads`, optional `zone_kept` |
 | `camera_done` | after each camera | `camera`, `frames`, `seconds`, `record` (the file pipeline's audit record) |
 | `footer` | last, `done` or `failed` | `output_sha256`, `output_name`, `status`, `error` |
 

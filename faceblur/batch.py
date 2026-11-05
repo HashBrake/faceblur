@@ -218,7 +218,8 @@ def _text(settings: Settings):
 
     key = (settings.device, settings.text_sizes, settings.text_thresh,
            settings.text_box_thresh, settings.text_unclip, settings.text_min_px,
-           settings.text_nms)
+           settings.text_nms, settings.text_min_aspect, settings.text_square_px,
+           settings.text_square_bands, settings.text_bright_max, settings.text_ink_min)
     found = _TEXTS.get(key)
     if found is None:
         found = TextDetector(settings, threads=_THREADS)

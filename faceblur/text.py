@@ -179,6 +179,99 @@ def merged(found: list[Detection], settings: Settings) -> list[Detection]:
     return [found[i] for i in nms_indices(boxes, scores, settings.text_nms)]
 
 
+def shrunk(quad: np.ndarray, ratio: float) -> np.ndarray:
+    """The region DB marked, from a quad `unclipped` grew by `ratio`.
+
+    The inverse of `unclipped` for a rectangle: sides W = w + 2d and
+    H = h + 2d with d = w h ratio / (2 (w + h)) is a quadratic in d, and the
+    smaller root is the one that leaves both sides positive. What the map
+    marked is what a rule should look at; the grow is only there so the
+    mask does not cut the letters off, and it takes in the wall around them.
+    """
+    (cx, cy), (big_w, big_h), angle = cv2.minAreaRect(np.asarray(quad, np.float32))
+    total, area = big_w + big_h, big_w * big_h
+    a, b = 8 + 4 * ratio, 2 * total * (1 + ratio)
+    root = max(0.0, b * b - 4 * a * ratio * area)
+    d = (b - np.sqrt(root)) / (2 * a)
+    return cv2.boxPoints(((cx, cy), (max(big_w - 2 * d, 1.0), max(big_h - 2 * d, 1.0)), angle))
+
+
+def _inside(image: np.ndarray, quad: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The pixels of `image` under `quad`: the bounding crop and its mask."""
+    h, w = image.shape[:2]
+    x0 = max(0, min(w - 1, int(np.floor(quad[:, 0].min()))))
+    x1 = max(0, min(w - 1, int(np.ceil(quad[:, 0].max()))))
+    y0 = max(0, min(h - 1, int(np.floor(quad[:, 1].min()))))
+    y1 = max(0, min(h - 1, int(np.ceil(quad[:, 1].max()))))
+    mask = np.zeros((y1 - y0 + 1, x1 - x0 + 1), np.uint8)
+    shifted = quad - np.array([x0, y0], np.float32)
+    cv2.fillPoly(mask, [shifted.round().astype(np.int32)], 1)
+    return image[y0:y1 + 1, x0:x1 + 1], mask.astype(bool)
+
+
+def bands(ink: np.ndarray, mask: np.ndarray) -> int:
+    """Horizontal bands of ink under a quad: separate lines stacked up.
+
+    Each row's share of ink is compared with the fullest row's; a row at
+    half of that or more is a row of a line, and the count is the number of
+    runs of such rows. A block of text that DB found as one region has its
+    lines show as bands with gaps between them, a rag or a cup does not.
+    """
+    rows = mask.sum(axis=1)
+    share = np.where(rows > 0, (ink & mask).sum(axis=1) / np.maximum(rows, 1), 0.0)
+    if share.max() <= 0:
+        return 0
+    on = share >= 0.5 * share.max()
+    return int(np.count_nonzero(on[1:] & ~on[:-1]) + int(on[0]))
+
+
+def false_text(det: Detection, grey: np.ndarray, prob: np.ndarray, scale: float,
+               settings: Settings) -> Optional[str]:
+    """Which rule says this quad is not text, or None to keep it.
+
+    Package T13c, from the field-test pilot: most of what was filled solid
+    was not text. A rag, a cup, a tool case are found as big squarish
+    regions, and a line of writing is long and thin; a ceiling light is
+    washed out to white. A third idea, that a cloth's texture is speckle in
+    the map where a line is solid, did not hold: on the pilot frames the
+    rags are as solid in the map as the words, and the ink rule is off by
+    default. Each rule has its own setting and its own off value, and
+    `docs/privacy_module_report.md` "Text false positives" has what each
+    one removed and cost on a hand-labelled set of pilot frames.
+
+    "shape": the quad's sides (not its upright box, so a tilted line is not
+    called square) are within `text_min_aspect` of each other and the short
+    one is over `text_square_px` frame pixels, unless the map shows
+    `text_square_bands` or more stacked lines inside it.
+    "bright": the mean grey inside is over `text_bright_max`.
+    "ink": under `text_ink_min` of the map inside is ink.
+    "Inside" for the last two is the region the map marked (`shrunk`), not
+    the grown quad, which takes in the wall around a light.
+    """
+    quad = np.asarray(det.quad, np.float32)
+    (_, _), (a, b), _ = cv2.minAreaRect(quad)
+    long_side, short_side = max(a, b), min(a, b)
+    if (short_side > settings.text_square_px
+            and long_side < settings.text_min_aspect * short_side):
+        if settings.text_square_bands <= 0:
+            return "shape"
+        crop, mask = _inside(prob, quad * scale)
+        if bands(crop >= settings.text_thresh, mask) < settings.text_square_bands:
+            return "shape"
+    if settings.text_bright_max >= 255 and settings.text_ink_min <= 0:
+        return None
+    core = shrunk(quad, settings.text_unclip)
+    if settings.text_bright_max < 255:
+        crop, mask = _inside(grey, core)
+        if mask.any() and float(crop[mask].mean()) > settings.text_bright_max:
+            return "bright"
+    if settings.text_ink_min > 0:
+        crop, mask = _inside(prob, core * scale)
+        if mask.any() and float((crop[mask] >= settings.text_thresh).mean()) < settings.text_ink_min:
+            return "ink"
+    return None
+
+
 class TextDetector:
     """PP-OCRv3 detection through onnxruntime, one frame at a time.
 
@@ -222,10 +315,18 @@ class TextDetector:
     def detect(self, frame: np.ndarray) -> list[Detection]:
         shape = frame.shape[:2]
         found: list[Detection] = []
+        maps: dict[int, tuple[np.ndarray, float]] = {}
         for size in self.settings.text_sizes:
             prob, scale = self.map_for(frame, size)
-            found.extend(quads_from(prob, scale, shape, self.settings))
-        return merged(found, self.settings)
+            for det in quads_from(prob, scale, shape, self.settings):
+                found.append(det)
+                maps[id(det)] = (prob, scale)
+        kept = merged(found, self.settings)
+        if not kept:
+            return kept
+        grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return [d for d in kept
+                if false_text(d, grey, *maps[id(d)], self.settings) is None]
 
 
 def hold(per_frame: dict[int, list[Detection]], settings: Settings,

@@ -553,3 +553,138 @@ contact-sheet pass on this output would say. The
 plate mask falls from 0.12 to 0.004 percent and from 280 frames to 7, which is
 the aspect rule removing the bins: 12 plate boxes are left. The audit
 verifies (4867 lines).
+
+## Text false positives
+
+Package T13c, for defect 3 of the field-test pilot
+(`docs/privacy_module_fieldtest.md`): most of the text mask was on things
+rather than writing. `text.false_text` now screens each frame's quads after
+the two scales are merged and before `text.hold`, by rules that each have a
+setting and an off value.
+
+### The labelled set
+
+21 frames decoded from the pilot fixtures (kept outside git, with the
+scripts, under `FaceBlur-work\privacy_fieldtest\t13c\`): FE left 0, 251, 754,
+1005, 1256, 1507, 2009, 2261; FE right 2261, 2512; 9K left 0, 251, 501, 1253,
+1503; AM left 884, 1326, 1768, 2210, 2653, 4421. Every box the shipped
+detector finds on them (72) was drawn and labelled once by eye
+(`labels.json`):
+
+- 14 real text regions: five TOTAL drawer labels and a TOTAL package (FE
+  754), a "2" on the tube in the wearer's hand (FE 2261), the label on the
+  extinguisher bucket (9K 0, 251), the EXIT sign (AM 884), the wearer's
+  watch (AM 1326, 1768, 2210), wall lettering (AM 2210).
+- 49 false boxes: rags (5), cups, bottles and the sink drain (11), metal
+  plates and brackets (8), ceiling lights (3), pegboard holes (9), door
+  glass (4), a tool case, a charger, a phone, a clip, a tape reel and other
+  parts.
+- 7 unsure (printed packages, a bag, a battery sticker, the door glass with
+  lettering on it), counted in neither.
+
+A real region counts as covered when one kept quad's box covers at least
+half of it. A false box counts as removed when no kept quad's box covers
+half of it. Real text the detector never finds (the battery label the
+wearer reads in AM 1326 and 1768, the bin labels in 9K 1253) is out of
+scope for this measurement: no screening rule can bring it back.
+
+### Per frame, each rule alone
+
+The real `quads_from`, `merged` and `false_text` on the frames' cached
+probability maps (`measure.py`, `frame_results.json`):
+
+| rule | real covered | false removed |
+|---|---|---|
+| none (as shipped) | 14/14 | 0/49 |
+| `text_box_thresh` 0.7 | 10/14 | 23/49 |
+| shape 1.5 / 60 px, bands exception | 14/14 | 10/49 |
+| shape 1.5 / 60 px, no exception | 14/14 | 12/49 |
+| shape 1.5 / 50 px, bands exception | 14/14 | 11/49 |
+| shape 1.5 / 45 px, bands exception | 14/14 | 15/49 |
+| **shape 1.5 / 40 px, bands exception** | **14/14** | **16/49** |
+| shape 1.5 / 40 px, no exception | 14/14 | 20/49 |
+| shape 1.5 / 30 px, bands exception | 14/14 | 19/49 |
+| shape 2.0 / 40 px, bands exception | 14/14 | 21/49 |
+| shape 2.0 / 30 px, no exception | 14/14 | 31/49 |
+| brightness 240 | 14/14 | 0/49 |
+| brightness 200 | 14/14 | 2/49 |
+| brightness 180 | 14/14 | 5/49 |
+| brightness 150 | 13/14 | 8/49 |
+| ink 0.26 or lower | 14/14 | 0/49 |
+| ink 0.70 | 12/14 | 13/49 |
+| ink 0.75 | 10/14 | 27/49 |
+| ink 0.80 | 6/14 | 42/49 |
+
+`text_box_thresh` 0.7 loses the "2", the extinguisher label, a watch and
+the wall lettering, all scored 0.60 to 0.69. The ink rule
+(`text_ink_min`, the share of the marked region at or above `text_thresh`)
+does not separate: the rags are as solid in the DB map as the words (0.60
+to 0.84 against 0.67 to 0.85), and every threshold that removes a false
+box loses a real one. Both are off.
+
+The shape rule reads the quad's own sides, not its upright box, so a tilted
+line is not a square. Its thresholds were not taken at the table's
+maximum. The unclip grows both sides by the same distance, which squeezes
+the aspect: a word twice as long as it is tall comes out at 1.48, three
+times as long at 1.9. Aspect 2.0 would drop a three-letter word seen up
+close, and the EXIT sign here is only 2.4 times closer than that. At 1.5
+only one- and two-character marks are at risk. The short-side floor of 40
+px sits 1.7 times above the largest square-ish real quad in the set (the
+"2", 31x23). 30 px removes three more false boxes with a margin of only 1.3.
+The stacked-lines exception keeps 4 false boxes. It is kept on, because a
+label or a page found as one region is the text the rule exists to mask.
+The brightness rule reads the region the map marked (the quad shrunk back
+by the unclip; the grown quad takes in the dark wall around a light). Even
+so, the lights average only 163 to 212 there. The white watch strap is at
+165 to 173, and black print on white paper averages about 195. So 240 stays:
+it removes nothing here and only drops a region too washed out to hold
+dark ink.
+
+### Over time, with the hold
+
+`text_min_run` can only be measured over time. For each labelled frame the
+detector ran on every second frame in a window of 16 frames each side (the
+pipeline's `text_stride` 2), then the rules, then `text.hold`. The held
+quads at the labelled frame were checked (`temporal.py`,
+`temporal_results.json`):
+
+| rules | `text_min_run` | real covered | false removed |
+|---|---|---|---|
+| none | 2 (as shipped) | 12/14 | 10/49 |
+| none | 3 | 11/14 | 11/49 |
+| none | 4 | 11/14 | 13/49 |
+| defaults | **2** | **12/14** | **24/49** |
+| defaults | 3 | 11/14 | 28/49 |
+| defaults | 4 | 10/14 | 31/49 |
+
+The shipped hold already loses the EXIT sign and one watch sighting: each
+is seen once in its window. The rules lose nothing more. A run of 3 loses a
+second watch sighting and a run of 4 also loses the wall lettering, so
+`text_min_run` stays 2. The pasted-text test keeps its 6-frame clip.
+
+### Defaults
+
+`text_min_aspect` 1.5, `text_square_px` 40, `text_square_bands` 2,
+`text_bright_max` 240, `text_ink_min` 0 (off). `text_box_thresh` stays 0.6
+and `text_min_run` stays 2. On the labelled frames this removes 14 more of
+the 49 false boxes than the shipped code at no cost in real text. What
+is left is the pegboard holes (thin rows, aspect 4 to 7), the door glass,
+and small parts. The shape rule cannot see those, and the ink and box
+threshold rules cost real text.
+
+### End to end
+
+`python -m faceblur.h5 run AM_032259_L.h5 --workers 2`, same PC and fixture
+as the T13a row above:
+
+| run | ms/frame | seconds | detect_s | encode_s | mask_face% | mask_text% | mask_plate% | mask_screen% | text_lines | text_frames | frames with a text mask |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| T13a | 152 | 741.3 | 583.71 | 126.82 | 0.76 | 0.68 | 0.004 | 0.27 | 11857 | | 4566 |
+| T13c | 150 | 728.2 | 580.02 | 117.45 | 0.76 | 0.44 | 0.004 | 0.27 | 9880 | 4270 | 3684 |
+
+The text mask falls from 0.68 to 0.44 percent of the picture, down 35
+percent. `text_lines` falls by 17 percent and frames carrying a text mask
+from 4566 to 3684. The rules cost no measurable time (150 ms a frame against
+152). Faces, plates and screens are unchanged. Going by the labelled frames,
+the false text still masked on this camera is mostly pegboard holes and door glass;
+the output has not been checked frame by frame.

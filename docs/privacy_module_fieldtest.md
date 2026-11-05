@@ -235,6 +235,7 @@ audit > speed > cosmetics.
   outside git), or on a synthetic image of crumpled cloth, no text mask over
   60 px square may appear. Count text masks per frame before and after the
   fix.
+- Status: partly fixed in T13c. The shape rule (aspect under 1.5, short side over 40 px, stacked lines excepted) drops the rags, cups, cases and tools; a run of 4 and a box threshold of 0.7 lost real text and were not taken; pegboard holes and door glass remain. See the report, "Text false positives".
 
 ### 4. False mask: objects masked as faces
 
