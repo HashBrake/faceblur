@@ -53,7 +53,8 @@ from .settings import Settings
 # A remembered polygon protects these kinds and no others. A face is never
 # protected by memory: the thing that was handled has been put down, and the
 # person now standing where it was is a person.
-REMEMBERED_PROTECTS: tuple[str, ...] = ("text", "screen")
+# A plate is an object like a sign: one in the wearer's hands is handled.
+REMEMBERED_PROTECTS: tuple[str, ...] = ("text", "screen", "plate")
 
 
 @dataclass(frozen=True)

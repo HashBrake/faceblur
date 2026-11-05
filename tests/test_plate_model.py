@@ -2,21 +2,24 @@
 
 `models/lpd_yunet_dynamic.onnx` is opencv_zoo's LPD-YuNet with its input
 freed by `models/make_plates.py`. The preprocessing and decode here are the
-ones `models/README.md` documents, written out in full so that
-`faceblur/plates.py` can be checked against them: the frame at its own size,
+ones `models/README.md` documents, imported from `faceblur/plates.py` so
+that the app's copy is the one checked against them: the frame at its own size,
 BGR, 0 to 255 as float32, NCHW, no mean and no standard deviation; then a
 score of sqrt(conf[:, 1] * clip(iou, 0, 1)) per prior and four corners from
 loc[:, 4:8] and loc[:, 10:14] against the prior boxes the zoo's
 `lpd_yunet.py` builds.
 """
 import hashlib
-from itertools import product
 from pathlib import Path
 
 import cv2
 import numpy as np
 import onnxruntime as ort
 import pytest
+
+# The priors, the preprocessing and the decode are `faceblur/plates.py`'s,
+# so there is one copy of them and this file checks the one the app runs.
+from faceblur.plates import decode, preprocess, priors
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = ROOT / "models" / "lpd_yunet_dynamic.onnx"
@@ -30,45 +33,6 @@ SIZE = 4143560
 PLATE_XYWH = (136, 411, 182, 64)
 
 THRESHOLD = 0.8     # the zoo's own default
-
-# From the zoo's lpd_yunet.py: anchor sizes per level, the level strides, and
-# the SSD variance the offsets are scaled by.
-MIN_SIZES = [[10, 16, 24], [32, 48], [64, 96], [128, 192, 256]]
-STEPS = [8, 16, 32, 64]
-VARIANCE = 0.1
-
-
-def priors(width: int, height: int) -> np.ndarray:
-    """[N, 4] prior boxes, cx, cy, w, h normalised, in the order the graph's rows are."""
-    h, w = (height + 1) // 2 // 2, (width + 1) // 2 // 2
-    maps = []
-    for _ in STEPS:
-        h, w = h // 2, w // 2
-        maps.append((h, w))
-    rows = []
-    for (fh, fw), sizes, step in zip(maps, MIN_SIZES, STEPS):
-        for i, j in product(range(fh), range(fw)):
-            for size in sizes:
-                rows.append([(j + 0.5) * step / width, (i + 0.5) * step / height,
-                             size / width, size / height])
-    return np.array(rows, np.float32)
-
-
-def preprocess(bgr: np.ndarray) -> np.ndarray:
-    return bgr.astype(np.float32).transpose(2, 0, 1)[None]
-
-
-def decode(loc, conf, iou, width: int, height: int):
-    """Scores [N] and corners [N, 4, 2] in frame pixels.
-
-    The corners come in the order top left, top right, bottom right, bottom
-    left of the plate as written.
-    """
-    scores = np.sqrt(conf[:, 1] * np.clip(iou[:, 0], 0.0, 1.0))
-    p = priors(width, height)
-    corners = np.stack([p[:, 0:2] + loc[:, k:k + 2] * VARIANCE * p[:, 2:4]
-                        for k in (4, 6, 10, 12)], axis=1)
-    return scores, corners * [width, height]
 
 
 def detect(session: ort.InferenceSession, bgr: np.ndarray):

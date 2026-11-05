@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
         know that text and screens are not covered, and a list that grows
         later would hide that today.
         """
-        from faceblur.classes import FACE, SCREEN, TEXT
+        from faceblur.classes import FACE, PLATE, SCREEN, TEXT
 
         box = QWidget()
         layout = QVBoxLayout(box)
@@ -473,6 +473,7 @@ class MainWindow(QMainWindow):
         self.mask_checks: dict[str, QCheckBox] = {}
         for kind, label, help_text in ((FACE, S.MASK_FACES, S.MASK_FACES_HELP),
                                        (TEXT, S.MASK_TEXT, S.MASK_TEXT_HELP),
+                                       (PLATE, PLATE.label, PLATE.summary),
                                        (SCREEN, S.MASK_SCREEN, S.MASK_SCREEN_HELP)):
             check = QCheckBox(label)
             check.setMinimumHeight(CONTROL_HEIGHT - 4)

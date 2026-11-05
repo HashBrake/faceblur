@@ -487,6 +487,41 @@ class Settings:
     text_gate_min_px: int = 24
     text_gate_min_run: int = 2
 
+    # --- licence plates ------------------------------------------------------
+    # LPD-YuNet from OpenCV's zoo (faceblur/plates.py), filled solid like text
+    # (decision D-C). The frame is resized so its long side is `plate_size`:
+    # the camera's 1600x1300 frames go in at 1280x1040. Measured, in
+    # docs/privacy_module_report.md "Licence plates": every pasted plate of
+    # 160 px and over is found, none under about 150 px is, it takes 63 ms a
+    # frame on DirectML against 107 at the raw size, and it is the only size
+    # tried with no plate-sized false find on 40 real frames.
+    plate_size: int = 1280
+    # The zoo's own numbers: score threshold and NMS on the corners' bounding
+    # rectangles. Flat grey frames reach 0.763, so the margin is narrow.
+    plate_conf: float = 0.8
+    plate_nms: float = 0.3
+    # A plate whose long side is under `plate_min_px` has no characters left
+    # to read (a first guess, not measured).
+    plate_min_px: int = 24
+    # Measured: on 40 frames of 004100 every false find was a band over 0.3
+    # of the frame width (the mirror row, a wall), and 0.25 removes all of
+    # them. A real plate wider than a quarter of a 1600 px frame is on a car
+    # the wearer is touching.
+    plate_max_frac: float = 0.25
+    # The quad grown by this share of its size, as screens are: a rim of
+    # plate left by a camera that moved between frames is still the number.
+    plate_pad: float = 0.10
+    # Plates over time, on the pattern of the text rules. First guesses.
+    plate_min_run: int = 2
+    plate_gap: int = 6
+    plate_tail: int = 3
+    plate_link_iou: float = 0.3
+    # The output-side check, on the pattern of the text gate. First guesses.
+    plate_gate_min_px: int = 24
+    plate_gate_min_run: int = 2
+    # Where the plate model runs, like zone_device.
+    plate_device: str = "auto"
+
     # --- checking the finished copy ------------------------------------------
     # Detect on the output as well: a face found there, on pixels nothing
     # changed, is one this run missed, and nothing that reads the source can
@@ -676,6 +711,23 @@ class Settings:
         if self.text_gate_min_run < 1:
             raise SettingsError(
                 f"text_gate_min_run must be at least 1, got {self.text_gate_min_run}")
+        if self.plate_size < 64:
+            raise SettingsError(f"plate_size must be at least 64, got {self.plate_size}")
+        for name in ("plate_conf", "plate_nms", "plate_link_iou", "plate_max_frac"):
+            value = getattr(self, name)
+            if not 0.0 < value <= 1.0:
+                raise SettingsError(f"{name} must be above 0 and at most 1, got {value}")
+        if self.plate_pad < 0:
+            raise SettingsError(f"plate_pad must be 0 or more, got {self.plate_pad}")
+        if self.plate_min_px < 0 or self.plate_gate_min_px < 0:
+            raise SettingsError("plate_min_px and plate_gate_min_px must be 0 or more")
+        if self.plate_min_run < 1 or self.plate_gate_min_run < 1:
+            raise SettingsError("plate_min_run and plate_gate_min_run must be at least 1")
+        if self.plate_gap < 0 or self.plate_tail < 0:
+            raise SettingsError("plate_gap and plate_tail must be 0 or more")
+        if self.plate_device not in DEVICES:
+            raise SettingsError(
+                f"plate_device must be one of {DEVICES}, got {self.plate_device!r}")
         if self.quarantine_min_px < 0:
             raise SettingsError("quarantine_min_px must be 0 or more")
         if not self.hand_windows or any(w < 64 for w in self.hand_windows):
@@ -890,6 +942,9 @@ class Settings:
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
             "text_gap", "text_tail", "text_link_iou",
             "text_gate_min_px", "text_gate_min_run",
+            "plate_size", "plate_conf", "plate_nms", "plate_min_px", "plate_max_frac",
+            "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
+            "plate_gate_min_px", "plate_gate_min_run", "plate_device",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "second_chance_scope", "second_chance_margin_seconds",

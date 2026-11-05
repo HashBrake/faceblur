@@ -205,12 +205,14 @@ def test_the_reach_protects_text_and_screens_and_the_hand_protects_a_face():
 def test_a_remembered_polygon_protects_text_and_screens_only():
     """A person who walks into the space where a card was put down is still a
     person. This is the line the owner's rule draws and the one place the two
-    protections differ."""
+    protections differ. A plate in the wearer's hand is a handled thing, like
+    text, so it is protected the same way."""
     z = ZoneFrame(remembered=(square(400, 400, 100),))
     assert z.for_kind("face") == ()
-    assert set(REMEMBERED_PROTECTS) == {"text", "screen"}
+    assert set(REMEMBERED_PROTECTS) == {"text", "screen", "plate"}
     assert z.for_kind("screen") == z.remembered
     assert z.for_kind("text") == z.remembered
+    assert z.for_kind("plate") == z.remembered
 
 
 # ------------------------------------------------------ applying it to a mask

@@ -111,6 +111,10 @@ class AuditRecord:
     # reached after it. Zero unless the run was asked to mask text.
     text_lines: int = 0
     text_frames: int = 0
+    # Plates found, before the hold, and the frames a plate mask reached
+    # after it. Zero unless the run was asked to mask plates.
+    plates: int = 0
+    plate_frames: int = 0
     # Stretches where the primary detector saw a box nothing confirmed and no
     # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
     unconfirmed_runs: list = field(default_factory=list)
@@ -148,6 +152,13 @@ class AuditRecord:
     residual_text_frames: int = 0
     residual_text_max_px: int = 0
     residual_text_runs: list = field(default_factory=list)
+    # Plates the check found in the copy on pixels nothing changed, the same
+    # way as text. The runs hold only finds that clear plate_gate_min_px,
+    # linked the way `plates.hold` links them.
+    residual_plates: int = 0
+    residual_plate_frames: int = 0
+    residual_plate_max_px: int = 0
+    residual_plate_runs: list = field(default_factory=list)
     residual_list: list = field(default_factory=list)
     # Boxes a mask would barely move, so the ratio decides nothing: a flat
     # wall, a dark corner. flat_boxes is every kind together and flat_by_kind

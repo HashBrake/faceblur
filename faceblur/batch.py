@@ -227,6 +227,28 @@ def _text(settings: Settings):
     return found
 
 
+_PLATES: dict = {}
+
+
+def _plates(settings: Settings):
+    """The worker's cached plate detector, built the first time it is asked.
+
+    Its own cache for the reason the text detector has one: a run that does
+    not mask plates never loads the model.
+    """
+    from .plates import PlateDetector
+
+    key = (settings.plate_device, settings.plate_size, settings.plate_conf,
+           settings.plate_nms, settings.plate_min_px, settings.plate_max_frac,
+           settings.plate_pad)
+    found = _PLATES.get(key)
+    if found is None:
+        found = PlateDetector(settings, threads=_THREADS)
+        _PLATES.clear()
+        _PLATES[key] = found
+    return found
+
+
 _ZONES: dict = {}
 
 
@@ -279,11 +301,13 @@ def detect_job(job: dict) -> dict:
     bank = _bank(settings)
     screens = _screens(settings) if settings.wants("screen") else None
     texts = _text(settings) if settings.wants("text") else None
+    plates = _plates(settings) if settings.wants("plate") else None
     # The zone is not a kind and does not depend on what is being masked: it
     # is the region nothing is masked in, so it runs whenever it is on.
     finder = _zone(settings) if settings.zone else None
     strong, weak, shifts, found_screens, found_hands = {}, {}, {}, {}, {}
     found_text: dict = {}
+    found_plates: dict = {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -318,6 +342,11 @@ def detect_job(job: dict) -> dict:
             lines = texts.detect(frame)
             if lines:
                 found_text[i] = lines
+        if plates is not None:
+            # Every stride frame as well: a parked car stays parked.
+            hits = plates.detect(frame)
+            if hits:
+                found_plates[i] = hits
         # Without camera_comp there is no shift, which counts as moving.
         if adaptive.skip(shift_px(shifts.get(i))):
             # Empty, as a frame off the plain stride is (and the tracker
@@ -335,11 +364,15 @@ def detect_job(job: dict) -> dict:
     if texts is not None:
         compute.update(texts.compute)
         hashes.update(texts.model_hashes)
+    if plates is not None:
+        compute.update(plates.compute)
+        hashes.update(plates.model_hashes)
     if finder is not None:
         compute.update(finder.compute)
         hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
-            "screens": found_screens, "text": found_text, "hands": found_hands,
+            "screens": found_screens, "text": found_text, "plates": found_plates,
+            "hands": found_hands,
             "skipped_adaptive": adaptive.count,
             "compute": compute, "hashes": hashes}
 
@@ -564,6 +597,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
     held_screens: dict[int, list[Detection]] = {}
     text_found: dict[int, list[Detection]] = {}
     held_text: dict[int, list[Detection]] = {}
+    plates_found: dict[int, list[Detection]] = {}
+    held_plates: dict[int, list[Detection]] = {}
     hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
@@ -586,6 +621,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
             shifts[i] = sh
         screens_found.update(result.get("screens") or {})
         text_found.update(result.get("text") or {})
+        plates_found.update(result.get("plates") or {})
         hands_found.update(result.get("hands") or {})
         record.frames_skipped_adaptive += result.get("skipped_adaptive", 0)
         compute, hashes = result["compute"], result["hashes"]
@@ -650,6 +686,16 @@ def run_video(src: Path, dst: Path, settings: Settings,
         mag = np.hypot(*np.asarray(shifts, dtype=np.float64).T) if n else np.zeros(1)
         record.camera_shift_p95 = round(float(np.percentile(mag, 95)), 2)
         record.camera_shift_max = round(float(mag.max()), 2)
+    # ---- 2e. plates, held the way text is: a plate does not move on its own.
+    if settings.wants("plate"):
+        from .plates import hold as hold_plates
+
+        held_plates = hold_plates(plates_found, settings, n)
+        record.plates = sum(len(v) for v in plates_found.values())
+        record.plate_frames = len(held_plates)
+        for i, dets in held_plates.items():
+            if 0 <= i < n:
+                per_frame[i] = list(per_frame[i]) + list(dets)
     record.unconfirmed_runs, record.unconfirmed_frames = unconfirmed_runs(
         weak, per_frame, settings.conf)
     if tracks:
@@ -941,6 +987,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
         record.residual_text_frames = got["residual_text_frames"]
         record.residual_text_max_px = got["residual_text_max_px"]
         record.residual_text_runs = got["residual_text_runs"]
+        record.residual_plates = got["residual_plates"]
+        record.residual_plate_frames = got["residual_plate_frames"]
+        record.residual_plate_max_px = got["residual_plate_max_px"]
+        record.residual_plate_runs = got["residual_plate_runs"]
         record.zone_pixels_changed_max = got["zone_pixels_changed_max"]
         record.zone_frames_over = got["zone_frames_over"]
         record.zone_list = got["zone_list"]
@@ -996,6 +1046,11 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 if settings.wants("text"):
                     # And what section 2c put in, for the same reason.
                     for i, dets in held_text.items():
+                        if 0 <= i < n:
+                            per_frame[i] = list(per_frame[i]) + list(dets)
+                if settings.wants("plate"):
+                    # And section 2e.
+                    for i, dets in held_plates.items():
                         if 0 <= i < n:
                             per_frame[i] = list(per_frame[i]) + list(dets)
                 # A seed the tracker dropped goes back as a mask on its own frame.

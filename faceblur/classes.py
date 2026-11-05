@@ -70,6 +70,18 @@ TEXT = Kind(
     ready=True,
 )
 
+PLATE = Kind(
+    name="plate",
+    label="Licence plates",
+    shape=POLYGON,
+    summary="a vehicle registration plate, filled solid",
+    # Ready since package T06b: LPD-YuNet finds the plates
+    # (faceblur/plates.py), the pipeline holds them over time and fills them
+    # solid (decision D-C), and the output-side check looks for plates left
+    # in the copy.
+    ready=True,
+)
+
 SCREEN = Kind(
     name="screen",
     label="Screens",
@@ -81,7 +93,7 @@ SCREEN = Kind(
 
 # Order matters: it is the order the window lists them in, and faces are the
 # one most runs want.
-KINDS: tuple[Kind, ...] = (FACE, TEXT, SCREEN)
+KINDS: tuple[Kind, ...] = (FACE, TEXT, PLATE, SCREEN)
 BY_NAME: dict[str, Kind] = {k.name: k for k in KINDS}
 
 

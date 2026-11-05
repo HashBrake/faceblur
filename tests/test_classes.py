@@ -42,7 +42,7 @@ def test_every_kind_is_named_once_and_has_a_shape():
 def test_which_kinds_this_build_can_actually_do():
     """This test changes as each kind lands, on purpose: nothing else in the
     codebase should have to, and a reader wants one place that says it."""
-    assert [k.name for k in classes.available()] == ["face", "text", "screen"]
+    assert [k.name for k in classes.available()] == ["face", "text", "plate", "screen"]
     assert FACE.ready and TEXT.ready and SCREEN.ready
 
 
@@ -71,8 +71,8 @@ def test_a_face_is_hidden_by_an_ellipse_and_the_others_by_their_own_corners():
 
 def test_an_unknown_kind_is_refused_by_name():
     with pytest.raises(UnknownKind) as exc:
-        classes.kind("plate")
-    assert "plate" in str(exc.value)
+        classes.kind("tattoo")
+    assert "tattoo" in str(exc.value)
     assert "face" in str(exc.value), "the message has to say what it does know"
 
 
@@ -116,7 +116,7 @@ def test_screens_can_be_asked_for_on_their_own_or_beside_faces():
 
 
 def test_settings_refuse_a_kind_this_build_cannot_do(not_ready_text):
-    for bad in ((), ("plate",), ("text",), ("face", "text")):
+    for bad in ((), ("tattoo",), ("text",), ("face", "text")):
         with pytest.raises(SettingsError):
             Settings(mask=bad)
 
@@ -152,7 +152,7 @@ def test_a_face_gets_an_ellipse_and_text_gets_its_quad():
 def test_an_unknown_kind_is_masked_as_a_polygon_not_skipped():
     """Belt and braces: a box whose kind this build does not recognise is
     still hidden, by the box itself, rather than quietly let through."""
-    assert shape_of(Detection(0, 0, 10, 10, 0.9, kind="plate")) == POLYGON
+    assert shape_of(Detection(0, 0, 10, 10, 0.9, kind="tattoo")) == POLYGON
 
 
 def test_a_box_with_no_corners_falls_back_to_its_rectangle():
