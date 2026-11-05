@@ -123,3 +123,15 @@ def video_with_face(tmp_path_factory, lena) -> Path:
     if result.returncode != 0:
         raise RuntimeError(f"could not build the face clip: {result.stderr[-500:]}")
     return out
+
+
+@pytest.fixture(scope="session")
+def sine_wav(tmp_path_factory) -> Path:
+    """One second of a 440 Hz tone, 16 kHz mono PCM. The audio input for a DF2 pack."""
+    out = tmp_path_factory.mktemp("clips") / "sine.wav"
+    result = run_ffmpeg(["-y", "-loglevel", "error", "-f", "lavfi",
+                         "-i", "sine=frequency=440:sample_rate=16000:duration=1",
+                         "-ac", "1", "-c:a", "pcm_s16le", str(out)])
+    if result.returncode != 0:
+        raise RuntimeError(f"could not build the test wav: {result.stderr[-500:]}")
+    return out
