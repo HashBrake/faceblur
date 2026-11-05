@@ -138,3 +138,31 @@ def test_sha256_file(tmp_path):
 def test_schema_is_valid_draft_2020_12():
     schema = json.loads(audit.SCHEMA_PATH.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
+
+
+def test_zone_kept_is_written_only_when_there_is_something_and_validates(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    with audit.AuditWriter(path) as w:
+        w.header(SHA, "in.h5", ["left"], {"yunet": SHA}, {}, None, "0.2.0")
+        empty = w.frame("left", 0, 0, {}, {}, zone_kept={})
+        kept = w.frame("left", 1, 1, {"text": 1}, {"text": [[1, 2, 3, 4]]},
+                       zone_kept={"face": [[10.04, 20, 30, 40]], "screen": [[0, 0, 5, 5]]})
+    assert "zone_kept" not in empty
+    lines = audit.read(path)
+    assert "zone_kept" not in lines[1]
+    assert lines[2]["zone_kept"] == {"face": [[10.0, 20.0, 30.0, 40.0]],
+                                     "screen": [[0.0, 0.0, 5.0, 5.0]]}
+    assert lines[2]["counts"]["face"] == 0
+    assert kept["hash"] == lines[2]["hash"]
+    assert audit.verify(path) == (True, 3, "")
+    schema = audit.load_schema()
+    for line in lines:
+        audit.validate_line(line, schema)
+    five = copy.deepcopy(lines[2])
+    five["zone_kept"]["face"] = [[1, 2, 3, 4, 5]]
+    with pytest.raises(ValidationError):
+        audit.validate_line(five, schema)
+    unknown = copy.deepcopy(lines[2])
+    unknown["zone_kept"]["hand"] = [[1, 2, 3, 4]]
+    with pytest.raises(ValidationError):
+        audit.validate_line(unknown, schema)

@@ -56,7 +56,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["face", "plate", "screen", "text"],
-          "description": "Number of regions of each class blurred in this frame. Every class is present; 0 means looked for and none found.",
+          "description": "Number of regions of each class blurred (painted) in this frame. Every class is present; 0 means none painted. Regions the handled zone left clear are not counted here; see `zone_kept`.",
           "properties": {
             "face": {"type": "integer", "minimum": 0, "description": "Faces blurred."},
             "plate": {"type": "integer", "minimum": 0, "description": "Licence plates blurred."},
@@ -67,7 +67,7 @@
         "boxes": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Axis-aligned boxes of the blurred regions, per class. A class may be absent when it has none.",
+          "description": "Axis-aligned boxes of the blurred (painted) regions, per class. A class may be absent when it has none.",
           "properties": {
             "face": {"$ref": "#/$defs/boxes", "description": "Face boxes."},
             "plate": {"$ref": "#/$defs/boxes", "description": "Licence plate boxes."},
@@ -84,6 +84,17 @@
             "plate": {"$ref": "#/$defs/quads", "description": "Licence plate outlines."},
             "screen": {"$ref": "#/$defs/quads", "description": "Screen outlines."},
             "text": {"$ref": "#/$defs/quads", "description": "Text outlines."}
+          }
+        },
+        "zone_kept": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional. Regions that were found but left clear because the handled zone (what the wearer is holding or touching) covers them, per class, as [x, y, w, h] boxes. They are not in `counts` or `boxes`, which list only what was painted. Absent when nothing was kept.",
+          "properties": {
+            "face": {"$ref": "#/$defs/boxes", "description": "Face boxes left clear."},
+            "plate": {"$ref": "#/$defs/boxes", "description": "Licence plate boxes left clear."},
+            "screen": {"$ref": "#/$defs/boxes", "description": "Screen boxes left clear."},
+            "text": {"$ref": "#/$defs/boxes", "description": "Text boxes left clear."}
           }
         }
       }

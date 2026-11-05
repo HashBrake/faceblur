@@ -291,6 +291,8 @@ audit > speed > cosmetics.
 
 ### 7. Audit: boxes inside the handled zone are listed as masks
 
+- Fixed in T13b: `boxes` and `counts` now list only what was painted; boxes the zone left clear are under `zone_kept`.
+
 - Evidence: `maskcheck.py` finds that 10-38 % of the audit's text and face
   boxes in each stream have output pixels identical to the source. The crops
   show these are items in the wearer's hand, left clear by the zone as

@@ -566,10 +566,13 @@ schema; it prints `ok: N lines`, or the first problem and exits 1. For one
 938-frame camera the file is 941 lines, about 1 MB, and verifies in under 2
 seconds.
 
-`counts` and `boxes` are every mask the copy was drawn with, of each kind,
+`counts` and `boxes` are the masks painted into the copy, of each kind,
 including the boxes the tracker filled into gaps and tails, not only what a
 detector saw on that frame, so two boxes of one track can overlap. `quads`
-gives the rotated outline of text and plates. The `speech` lines say which
+gives the rotated outline of text and plates. A box at least half inside the
+handled zone (what the wearer holds or touches) is left clear in the copy, so
+it is not in `counts` or `boxes`; the optional `zone_kept` lists those boxes
+per kind, in the same `[x, y, w, h]` form. The `speech` lines say which
 stretches of the removed audio held speech (Silero VAD, padded by `pad_ms`
 each side), so whoever needs the speech knows where to look in the input.
 `models` maps every model the run loaded to the sha256 of its file, under

@@ -96,9 +96,12 @@ class AuditWriter:
 
     def frame(self, camera: str, frame: int, pts_ns: int, counts: dict[str, int],
               boxes: dict[str, list[list[float]]],
-              quads: dict[str, list[list[list[float]]]] | None = None) -> dict:
+              quads: dict[str, list[list[list[float]]]] | None = None,
+              zone_kept: dict[str, list[list[float]]] | None = None) -> dict:
         # Every class is counted, zero included, so a reader never has to guess
         # whether a missing class meant none found or not looked for.
+        # `counts` and `boxes` are what was painted; `zone_kept` lists what was
+        # found but left clear because the handled zone covers it.
         fields = {
             "camera": camera, "frame": int(frame), "pts_ns": int(pts_ns),
             "counts": {c: int(counts.get(c, 0)) for c in CLASSES},
@@ -107,6 +110,8 @@ class AuditWriter:
         if quads is not None:
             fields["quads"] = {c: [[_round(p) for p in q] for q in qs]
                                for c, qs in quads.items()}
+        if zone_kept:
+            fields["zone_kept"] = {c: [_round(b) for b in bs] for c, bs in zone_kept.items()}
         return self.write("frame", **fields)
 
     def speech(self, start_s: float, end_s: float, pad_ms: int) -> dict:

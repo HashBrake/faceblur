@@ -167,16 +167,19 @@ def _blur_camera(f: h5py.File, camera: str, work: Path, settings: Settings,
     group = f[df2.camera_path(camera)]
     h5io.read_video_group(group, raw)
     per_frame: list = []
+    zones: list = []
     started = time.time()
     try:
         record = batch.run_video(raw, blurred, settings, submit, workers=workers,
-                                 write_sidecar=False, per_frame_out=per_frame)
+                                 write_sidecar=False, per_frame_out=per_frame,
+                                 zones_out=zones)
     except batch.WorkerLost as exc:
         record = AuditRecord(source=raw.name, output=blurred.name, status=STATUS_FAILED,
                              error=str(exc))
     if record.status != STATUS_DONE:
         raise RunFailed(f"{camera}: {record.status}: {record.error}", 1)
-    return {"camera": camera, "record": record, "per_frame": per_frame,
+    return {"camera": camera, "record": record, "per_frame": per_frame, "zones": zones,
+            "shape": (int(group.attrs[df2.ATTR_HEIGHT]), int(group.attrs[df2.ATTR_WIDTH])),
             "frames": len(per_frame), "seconds": round(time.time() - started, 2),
             "timestamps_ns": group[df2.TIMESTAMPS_NS][:], "mp4": blurred}
 
@@ -258,19 +261,53 @@ def _json_safe(value):
     return value
 
 
-def _audit_camera(writer: audit.AuditWriter, result: dict) -> None:
-    """One frame line per frame of a finished camera, then its summary line."""
+def _zone_kept(dets, zone, shape: tuple[int, int], settings: Settings) -> list[bool]:
+    """Per detection: did the handled zone leave it clear?
+
+    The output check's test (`verify.covered_by_zone` at `zone_cover`) on the
+    polygons `redact` cuts out for that kind: faces by the hands (or the live
+    reach), text, screens and plates by the live reach and the remembered
+    polygons. One crop per polygon group per frame.
+    """
+    if not zone or not dets:
+        return [False] * len(dets)
+    from .verify import covered_by_zone, zone_crop
+    from .zone import REMEMBERED_PROTECTS
+
+    crops: dict[bool, object] = {}
+    kept = []
+    for d in dets:
+        group = d.kind in REMEMBERED_PROTECTS
+        if group not in crops:
+            crops[group] = zone_crop(shape, zone.for_kind(d.kind, settings.zone_face_needs_hand))
+        kept.append(covered_by_zone(d, crops[group]) >= settings.zone_cover)
+    return kept
+
+
+def _audit_camera(writer: audit.AuditWriter, result: dict, settings: Settings) -> None:
+    """One frame line per frame of a finished camera, then its summary line.
+
+    `counts`, `boxes` and `quads` are the masks painted; a detection the
+    handled zone left clear goes under `zone_kept` instead.
+    """
     camera = result["camera"]
+    zones = result.get("zones") or []
     for i, dets in enumerate(result["per_frame"]):
         counts = {c: 0 for c in audit.CLASSES}
         boxes: dict[str, list] = {}
         quads: dict[str, list] = {}
-        for d in dets:
+        kept: dict[str, list] = {}
+        zone = zones[i] if i < len(zones) else None
+        for d, in_zone in zip(dets, _zone_kept(dets, zone, result["shape"], settings)):
+            if in_zone:
+                kept.setdefault(d.kind, []).append([d.x, d.y, d.w, d.h])
+                continue
             counts[d.kind] += 1
             boxes.setdefault(d.kind, []).append([d.x, d.y, d.w, d.h])
             if d.quad is not None and d.kind in ("text", "plate"):
                 quads.setdefault(d.kind, []).append([list(p) for p in d.quad])
-        writer.frame(camera, i, int(result["timestamps_ns"][i]), counts, boxes, quads or None)
+        writer.frame(camera, i, int(result["timestamps_ns"][i]), counts, boxes, quads or None,
+                     kept or None)
     writer.camera_done(camera, result["frames"], result["seconds"],
                        _json_safe(result["record"].to_dict()))
 
@@ -279,8 +316,9 @@ def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
         spec_layout: bool = False) -> list[dict]:
     """De-identify every camera of `input_path` into `out_dir/episode.h5`.
 
-    Returns one dict per camera: camera, record, per_frame, frames, seconds,
-    timestamps_ns. Raises RunFailed when there is no camera (code 2) or a
+    Returns one dict per camera: camera, record, per_frame, zones, shape, frames, seconds,
+    timestamps_ns. Raises RunFailed when there is no camera or the input holds
+    a soft or external link (code 2, before audit.jsonl is opened) or a
     camera did not finish (code 1); then no episode.h5 is written, and
     `out_dir/audit.jsonl` (written whenever a camera was found) ends with a
     failed footer.
@@ -290,6 +328,12 @@ def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
         cameras = h5io.camera_groups(f)
         if not cameras:
             raise RunFailed(f"{input_path} has no camera group under {df2.IMAGE_GROUP}.", 2)
+        # The pass-through copy would follow a soft or external link and put
+        # what it points at into the release.
+        links = h5io.external_links(f)
+        if links:
+            raise RunFailed(f"{input_path} holds links the release would follow: "
+                            f"{', '.join(links[:5])}", 2)
         # Before any audit line or detector: a broken group fails in one line.
         for camera in cameras:
             _check_camera(f, camera)
@@ -323,7 +367,7 @@ def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
         with h5py.File(input_path, "r") as f:
             for camera in cameras:
                 result = _blur_camera(f, camera, work, settings, submit, workers)
-                _audit_camera(writer, result)
+                _audit_camera(writer, result, settings)
                 results.append(result)
         _write_output(input_path, part, results, spec_layout)
         part.replace(final)

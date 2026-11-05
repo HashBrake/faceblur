@@ -332,6 +332,8 @@ def test_audit_records_the_face_boxes(video_with_face, tmp_path):
         width, height = int(group.attrs[df2.ATTR_WIDTH]), int(group.attrs[df2.ATTR_HEIGHT])
     faces = [line for line in of_type(lines, "frame") if line["counts"]["face"] >= 1]
     assert faces
+    # No hand in the clip, so no zone: nothing was kept, and no line says so.
+    assert all("zone_kept" not in line for line in of_type(lines, "frame"))
     for line in faces:
         for x, y, w, h in line["boxes"]["face"]:
             assert 0 <= x and 0 <= y and w > 0 and h > 0
@@ -390,3 +392,69 @@ def test_device_cpu_puts_every_model_on_the_cpu(tmp_path, capsys):
     for record in records:
         assert "lpd_yunet" in record["compute"], record["compute"]
         assert set(record["compute"].values()) == {"CPUExecutionProvider"}, record["compute"]
+
+
+# --- T13b: the audit lists what was painted; inputs with links are refused -----
+
+def _face_fixture(video_with_face, tmp_path) -> Path:
+    fixture = tmp_path / "face.h5"
+    h5.pack([video_with_face], ["rgb_ego_center_left"], None, fixture)
+    return fixture
+
+
+def test_a_face_inside_a_forced_zone_is_kept_and_listed_apart(video_with_face, tmp_path,
+                                                              monkeypatch):
+    from faceblur import zone
+
+    # One polygon well around the face (240..400 on a 640 frame), as hand,
+    # live reach and memory alike, on every frame.
+    square = ((100.0, 100.0), (540.0, 100.0), (540.0, 540.0), (100.0, 540.0))
+
+    def forced(hands, shifts, settings, frames, fps, shape=None):
+        return [zone.ZoneFrame(live=(square,), remembered=(square,), hands=(square,))
+                for _ in range(frames)]
+
+    monkeypatch.setattr(zone, "build", forced)
+    fixture = _face_fixture(video_with_face, tmp_path)
+    out = tmp_path / "run"
+    h5.run(fixture, out, Settings(mask=("face",)), workers=1)
+    lines = audit_lines(out)
+    assert audit.verify(out / "audit.jsonl")[0]
+    frames = of_type(lines, "frame")
+    schema = audit.load_schema()
+    for line in frames:
+        audit.validate_line(line, schema)
+        assert line["counts"]["face"] == 0
+        assert "face" not in line["boxes"]
+    kept = [line for line in frames if line.get("zone_kept", {}).get("face")]
+    assert kept
+    path = df2.camera_path("rgb_ego_center_left")
+    with h5py.File(fixture, "r") as src, h5py.File(out / "episode.h5", "r") as dst:
+        before = decoded(src[path], tmp_path / "in.mp4")[5].astype(np.int16)
+        after = decoded(dst[path], tmp_path / "out.mp4")[5].astype(np.int16)
+    assert np.abs(before[240:400, 240:400] - after[240:400, 240:400]).mean() < 4
+
+
+def _linked_fixture(tmp_path, link) -> Path:
+    import shutil
+
+    linked = tmp_path / "linked.h5"
+    shutil.copyfile(FIXTURE, linked)
+    with h5py.File(linked, "r+") as f:
+        f[f"{df2.META_GROUP}/scene/linked"] = link
+    return linked
+
+
+@pytest.mark.parametrize("link", [h5py.ExternalLink("elsewhere.h5", "/secret"),
+                                  h5py.SoftLink("/dataset/observation")],
+                         ids=["external", "soft"])
+def test_an_input_with_links_is_refused_in_one_line(tmp_path, capsys, link):
+    linked = _linked_fixture(tmp_path, link)
+    out = tmp_path / "run"
+    assert h5.main(["run", str(linked), "--out", str(out), "--workers", "1"]) == 2
+    err = capsys.readouterr().err.strip()
+    assert "\n" not in err
+    assert "links the release would follow" in err
+    assert f"{df2.META_GROUP}/scene/linked" in err
+    assert not (out / "episode.h5").exists()
+    assert not (out / "audit.jsonl").exists()
