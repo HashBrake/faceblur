@@ -9,12 +9,11 @@ run from the repository root (out/ is gitignored, so the inputs stay out of git)
         -c:v libx264 -preset ultrafast -pix_fmt yuv420p out/df2_fixture/left.mp4
     $FF -y -f lavfi -i testsrc2=size=320x240:rate=10:duration=1.2 \
         -c:v libx264 -preset ultrafast -pix_fmt yuv420p out/df2_fixture/right.mp4
-    $FF -y -f lavfi -i sine=frequency=440:sample_rate=16000:duration=1 \
-        -ac 1 -c:a pcm_s16le out/df2_fixture/sine.wav
     .venv/Scripts/python.exe -m faceblur.h5 pack out/df2_fixture/left.mp4 \
-        out/df2_fixture/right.mp4 --audio out/df2_fixture/sine.wav --out tests/data/df2_small.h5
+        out/df2_fixture/right.mp4 --audio tests/data/speech_16k.wav --out tests/data/df2_small.h5
 
-To re-pack it with a speech sample, swap sine.wav for the speech file.
+Its audio is the committed speech sample (tests/test_vad.py says how that was
+made), 75200 samples of 16 kHz mono, so the VAD has speech to find in it.
 """
 from __future__ import annotations
 

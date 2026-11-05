@@ -51,6 +51,10 @@ EXPECTED = {
         "03f550c6b406fda8bf54bd8327815f6c7e2edd98cea02348c93d879254366587",
         2423490,
     ),
+    "silero_vad.onnx": (
+        "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+        2327524,
+    ),
 }
 
 
@@ -154,6 +158,8 @@ NOT_SHIPPED = {
         "of dead weight. Package T3 turns text on and moves this line into the "
         "spec, and test_a_ready_kind_has_its_model_in_the_build fails until it "
         "does",
+    "silero_vad.onnx":
+        "the HDF5 module runs it; the packaged desktop app does not read audio",
 }
 
 

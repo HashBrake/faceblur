@@ -572,6 +572,17 @@ class Settings:
     # is the watchdog off.
     watchdog_min_seconds: float = 600.0
 
+    # --- speech in the audio -------------------------------------------------
+    # The release carries no audio (decision D-B); these only decide which
+    # stretches of the input audio the audit lists as speech that was removed.
+    # Silero's own defaults for threshold, minimum speech and minimum silence.
+    # The pad is the owner's 300 ms, so a word cut at a window edge is still
+    # inside the stretch the language team is told about.
+    vad_threshold: float = 0.5
+    vad_pad_ms: int = 300
+    vad_min_speech_ms: int = 250
+    vad_min_silence_ms: int = 100
+
     def wants(self, kind: str) -> bool:
         """Is this kind of thing to be masked on this run."""
         return kind in self.mask
@@ -830,6 +841,12 @@ class Settings:
             raise SettingsError(f"hevc_crf must be between 0 and 51, got {self.hevc_crf}")
         if not 1 <= self.gop <= 60:
             raise SettingsError(f"gop must be between 1 and 60, got {self.gop}")
+        if not 0.0 < self.vad_threshold <= 1.0:
+            raise SettingsError(
+                f"vad_threshold must be above 0 and at most 1, got {self.vad_threshold}")
+        if self.vad_pad_ms < 0 or self.vad_min_speech_ms < 0 or self.vad_min_silence_ms < 0:
+            raise SettingsError(
+                "vad_pad_ms, vad_min_speech_ms and vad_min_silence_ms must be 0 or more")
 
     def with_changes(self, **changes) -> "Settings":
         return replace(self, **changes)
@@ -871,7 +888,8 @@ class Settings:
             "zone_edge_frac", "zone_scale", "zone_memory", "zone_gate_changed",
             "zone_cover", "zone_face_needs_hand", "zone_face_scale", "zone_device",
             "nms_detect", "nms_yunet",
-            "watchdog_seconds_per_frame", "watchdog_min_seconds")}
+            "watchdog_seconds_per_frame", "watchdog_min_seconds",
+            "vad_threshold", "vad_pad_ms", "vad_min_speech_ms", "vad_min_silence_ms")}
         # Tuples so that a record read back from JSON compares equal to the
         # one that wrote it.
         d["mask"] = list(self.mask)

@@ -239,3 +239,28 @@ table, from `eval.text --normalisation`.
 Output `4` is one probability map at the size of the input, no batch and no
 channel dimension. `faceblur/text.py` thresholds it, takes contours, fits
 `cv2.minAreaRect` and grows each rectangle by DB's own unclip rule.
+
+## silero_vad.onnx
+
+| Field | Value |
+|---|---|
+| Original name | silero_vad.onnx |
+| Source | snakers4/silero-vad, tag v6.2.3, src/silero_vad/data/silero_vad.onnx |
+| URL | https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx |
+| Licence | MIT, see silero_vad.LICENSE.txt |
+| Size | 2327524 bytes |
+| sha256 | 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3 |
+
+Taken on 2026-11-05, the newest tag then. A voice activity detector: the
+release carries no audio, and `faceblur/vad.py` uses this to list in the audit
+every stretch of the input audio in which somebody spoke. It runs on the CPU
+provider. The HDF5 module runs it and the packaged desktop app does not read
+audio, so it is not in `build/faceblur.spec` (see NOT_SHIPPED in
+`tests/test_models.py`).
+
+Inputs, as onnxruntime reports them: `input` float32 [batch, N], `state`
+float32 [2, batch, 128] and `sr` int64, a scalar (shape []), 16000. At 16 kHz
+N is 576: a 512-sample window with the last 64 samples of the previous window
+in front of it, as the reference code does. The state starts at zeros and the
+returned one goes into the next call. Outputs `output` [batch, 1], the
+probability that the window is speech, and `stateN`, the new state.
