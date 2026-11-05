@@ -8,13 +8,15 @@ clip into a one-camera file of its own.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 
-from faceblur import batch, df2, h5, h5io
+from faceblur import audit, batch, df2, h5, h5io
 from faceblur.pipeline import AuditRecord
 from faceblur.settings import Settings
 
@@ -93,7 +95,10 @@ def decoded(group: h5py.Group, mp4: Path) -> list[np.ndarray]:
 @pytest.fixture(scope="module")
 def two_file(tmp_path_factory):
     out = tmp_path_factory.mktemp("run_default")
-    results = h5.run(FIXTURE, out, Settings(mask=ALL_KINDS), workers=1)
+    # Outside a container: the header's image_digest must come out None.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("FACEBLUR_IMAGE_DIGEST", raising=False)
+        results = h5.run(FIXTURE, out, Settings(mask=ALL_KINDS), workers=1)
     return out / "episode.h5", results
 
 
@@ -216,3 +221,138 @@ def test_cli_prints_the_output_path(tmp_path, capsys):
     assert str(out / "episode.h5") in printed
     assert "ms/frame" in printed
     assert (out / "episode.h5").exists()
+
+
+# --- audit.jsonl ----------------------------------------------------------------
+
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def audit_lines(out: Path) -> list[dict]:
+    return audit.read(out / "audit.jsonl")
+
+
+def of_type(lines: list[dict], kind: str) -> list[dict]:
+    return [line for line in lines if line["type"] == kind]
+
+
+def test_audit_verifies_and_every_line_matches_the_schema(two_file):
+    path, _ = two_file
+    lines = audit_lines(path.parent)
+    assert audit.verify(path.parent / "audit.jsonl") == (True, len(lines), "")
+    schema = audit.load_schema()
+    for line in lines:
+        audit.validate_line(line, schema)
+
+
+def test_audit_header_names_the_input_settings_and_every_model(two_file):
+    path, results = two_file
+    header = audit_lines(path.parent)[0]
+    assert header["type"] == "header"
+    assert header["input_sha256"] == audit.sha256_file(FIXTURE)
+    assert header["input_name"] == FIXTURE.name
+    with h5py.File(FIXTURE, "r") as src:
+        assert header["cameras"] == h5io.camera_groups(src)
+    # Compared in its JSON form: the tuples of Settings come back as lists.
+    expected = json.loads(audit.canonical(Settings(mask=ALL_KINDS).to_dict()))
+    assert header["settings"] == expected
+    models = header["models"]
+    for r in results:
+        assert set(r["record"].model_sha256) <= set(models)
+        for name, digest in r["record"].model_sha256.items():
+            assert models[name] == digest
+    assert "silero_vad" in models
+    assert all(HEX64.match(v) for v in models.values())
+    assert header["image_digest"] is None
+    assert header["tool_version"] == AuditRecord.faceblur_version
+
+
+def test_audit_lists_the_speech_that_was_removed(two_file):
+    path, _ = two_file
+    speech = of_type(audit_lines(path.parent), "speech")
+    assert len(speech) == 1
+    assert speech[0]["start_s"] == 0.0
+    assert 2.9 <= speech[0]["end_s"] <= 3.1
+    assert speech[0]["pad_ms"] == 300
+
+
+def test_audit_has_one_frame_line_per_frame_and_a_summary_per_camera(two_file):
+    path, results = two_file
+    lines = audit_lines(path.parent)
+    frames = of_type(lines, "frame")
+    assert len(frames) == sum(r["frames"] for r in results)
+    for r in results:
+        mine = [line for line in frames if line["camera"] == r["camera"]]
+        assert [line["frame"] for line in mine] == list(range(r["frames"]))
+        assert [line["pts_ns"] for line in mine] == [int(t) for t in r["timestamps_ns"]]
+    for line in frames:
+        assert set(line["counts"]) == set(audit.CLASSES)
+        for kind, boxes in line["boxes"].items():
+            assert len(boxes) == line["counts"][kind]
+    done = of_type(lines, "camera_done")
+    assert [d["camera"] for d in done] == [r["camera"] for r in results]
+    for d, r in zip(done, results):
+        assert d["record"]["status"] == "done"
+        assert d["frames"] == r["frames"]
+    footer = lines[-1]
+    assert footer["type"] == "footer"
+    assert footer["status"] == "done"
+    assert footer["output_name"] == "episode.h5"
+    assert footer["output_sha256"] == audit.sha256_file(path)
+
+
+def test_audit_records_the_face_boxes(video_with_face, tmp_path):
+    fixture = tmp_path / "face.h5"
+    h5.pack([video_with_face], ["rgb_ego_center_left"], None, fixture)
+    out = tmp_path / "run"
+    h5.run(fixture, out, Settings(mask=("face",)), workers=1)
+    lines = audit_lines(out)
+    assert audit.verify(out / "audit.jsonl")[0]
+    # Packed without audio: no speech, and no VAD model in the header.
+    assert of_type(lines, "speech") == []
+    assert "silero_vad" not in lines[0]["models"]
+    with h5py.File(fixture, "r") as src:
+        group = src[df2.camera_path("rgb_ego_center_left")]
+        width, height = int(group.attrs[df2.ATTR_WIDTH]), int(group.attrs[df2.ATTR_HEIGHT])
+    faces = [line for line in of_type(lines, "frame") if line["counts"]["face"] >= 1]
+    assert faces
+    for line in faces:
+        for x, y, w, h in line["boxes"]["face"]:
+            assert 0 <= x and 0 <= y and w > 0 and h > 0
+            assert x + w <= width and y + h <= height
+
+
+def test_a_failed_run_still_leaves_a_verifying_audit(monkeypatch, tmp_path):
+    def failed(src, dst, settings, submit, **kwargs):
+        return AuditRecord(source=Path(src).name, output=Path(dst).name,
+                           status="failed", error="boom")
+
+    monkeypatch.setattr(batch, "run_video", failed)
+    monkeypatch.setenv("FACEBLUR_IMAGE_DIGEST", "sha256:" + "ab" * 32)
+    out = tmp_path / "run"
+    with pytest.raises(h5.RunFailed):
+        h5.run(FIXTURE, out, Settings(mask=ALL_KINDS), workers=1)
+    lines = audit_lines(out)
+    assert audit.verify(out / "audit.jsonl") == (True, len(lines), "")
+    assert lines[0]["image_digest"] == "sha256:" + "ab" * 32
+    assert lines[-1]["type"] == "footer"
+    assert lines[-1]["status"] == "failed"
+    assert "boom" in lines[-1]["error"]
+    assert lines[-1]["output_sha256"] == "0" * 64
+    for line in lines:
+        audit.validate_line(line)
+
+
+def test_verify_command_passes_a_good_audit_and_fails_a_flipped_byte(two_file, tmp_path, capsys):
+    path, _ = two_file
+    good = path.parent / "audit.jsonl"
+    assert h5.main(["verify", str(good)]) == 0
+    assert "ok" in capsys.readouterr().out
+    data = bytearray(good.read_bytes())
+    # A digit inside the first frame line's pts or box, not its hash.
+    at = data.index(b'"pts_ns":') + len(b'"pts_ns":')
+    data[at] = ord("9") if data[at] != ord("9") else ord("8")
+    bad = tmp_path / "audit.jsonl"
+    bad.write_bytes(bytes(data))
+    assert h5.main(["verify", str(bad)]) == 1
+    assert "problem" in capsys.readouterr().out

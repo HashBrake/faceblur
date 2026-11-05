@@ -13,12 +13,18 @@ The default output is a release file with no audio and no raw video; with
 beside the raw ones, the single-file form the partner's spec describes.
 Either way it is written under a temporary name and renamed only when every
 camera finished, so a failed run leaves no episode.h5 that looks complete.
-Later tasks add the `verify` and `selfcheck` subcommands here.
+
+Beside it `run` writes audit.jsonl (faceblur/audit.py), line by line as the
+run goes, so even a run that dies leaves a chain that verifies up to where it
+stopped. `verify` checks such a file: the chain, and every line against
+docs/audit_schema.json.
 """
 from __future__ import annotations
 
 import argparse
+import math
 import multiprocessing
+import os
 import shutil
 import sys
 import time
@@ -26,14 +32,19 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+from jsonschema import ValidationError
 
-from . import batch, df2, h5io
+from . import audit, batch, detect, df2, h5io, hands, plates, screens, text, vad
 from .classes import UnknownKind
 from .classes import parse as parse_mask
 from .pipeline import STATUS_DONE, STATUS_FAILED, AuditRecord
 from .settings import Settings
 
 FIXTURE_VERSION = "fixture-2026-11"
+AUDIT_NAME = "audit.jsonl"
+OUTPUT_NAME = "episode.h5"
+# Written into the container image at build time; the env var wins over it.
+IMAGE_DIGEST_FILE = Path("/etc/faceblur_image_digest")
 
 
 def _dummy_passthrough(f: h5py.File, frames: int) -> None:
@@ -148,24 +159,113 @@ def _write_output(input_path: Path, part: Path, results: list[dict], spec_layout
         out.attrs["faceblur_layout"] = "spec" if spec_layout else "two-file"
 
 
+def _model_files(settings: Settings, audio: bool) -> dict[str, Path]:
+    """Every model file this run will load, by the name its record uses.
+
+    The header is written before any detector is built, so this follows the
+    same conditions the detectors are built under (DetectorBank, detect_job,
+    the output check) instead of asking them.
+    """
+    files: dict[str, Path] = {}
+    if settings.wants("face"):
+        cf = settings.engine in ("centerface", "both") or (
+            settings.engine == "yunet" and settings.verify)
+        if settings.engine in ("yunet", "both"):
+            files["yunet"] = detect.YUNET_DYNAMIC_MODEL
+        if cf:
+            files["centerface"] = detect.CENTERFACE_MODEL
+        if cf and settings.engine == "yunet" and settings.confirm_on_crops \
+                and settings.third_opinion:
+            files["ultraface"] = detect.ULTRAFACE_MODEL
+        if settings.check_output and settings.hand_rule:
+            # The output check's hand rule, under the hand models' own names.
+            files["palm"] = hands.PALM_MODEL
+            files["hand_landmark"] = hands.LANDMARK_MODEL
+    if settings.wants("screen"):
+        files["yolox"] = screens.SCREEN_MODEL
+    if settings.wants("text"):
+        files["ppocr"] = text.TEXT_MODEL
+    if settings.wants("plate"):
+        files["lpd_yunet"] = plates.PLATE_MODEL
+    if settings.zone:
+        files["zone_palm"] = hands.PALM_MODEL
+        files["zone_landmark"] = hands.LANDMARK_MODEL
+    if audio:
+        files["silero_vad"] = vad.VAD_MODEL
+    return files
+
+
+def _image_digest() -> str | None:
+    """The container image the run is in, when the image says so."""
+    digest = os.environ.get("FACEBLUR_IMAGE_DIGEST")
+    if digest:
+        return digest
+    if IMAGE_DIGEST_FILE.is_file():
+        return IMAGE_DIGEST_FILE.read_text(encoding="utf-8").strip()
+    return None
+
+
+def _json_safe(value):
+    """`value` with NaN and infinities as None: the audit's JSON has no form for them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _audit_camera(writer: audit.AuditWriter, result: dict) -> None:
+    """One frame line per frame of a finished camera, then its summary line."""
+    camera = result["camera"]
+    for i, dets in enumerate(result["per_frame"]):
+        counts = {c: 0 for c in audit.CLASSES}
+        boxes: dict[str, list] = {}
+        quads: dict[str, list] = {}
+        for d in dets:
+            counts[d.kind] += 1
+            boxes.setdefault(d.kind, []).append([d.x, d.y, d.w, d.h])
+            if d.quad is not None and d.kind in ("text", "plate"):
+                quads.setdefault(d.kind, []).append([list(p) for p in d.quad])
+        writer.frame(camera, i, int(result["timestamps_ns"][i]), counts, boxes, quads or None)
+    writer.camera_done(camera, result["frames"], result["seconds"],
+                       _json_safe(result["record"].to_dict()))
+
+
 def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
         spec_layout: bool = False) -> list[dict]:
     """De-identify every camera of `input_path` into `out_dir/episode.h5`.
 
     Returns one dict per camera: camera, record, per_frame, frames, seconds,
     timestamps_ns. Raises RunFailed when there is no camera (code 2) or a
-    camera did not finish (code 1); then no episode.h5 is written.
+    camera did not finish (code 1); then no episode.h5 is written, and
+    `out_dir/audit.jsonl` (written whenever a camera was found) ends with a
+    failed footer.
     """
     input_path, out_dir = Path(input_path), Path(out_dir)
     with h5py.File(input_path, "r") as f:
         cameras = h5io.camera_groups(f)
+        pcm = vad.read_pcm(f) if cameras else None
     if not cameras:
         raise RunFailed(f"{input_path} has no camera group under {df2.IMAGE_GROUP}.", 2)
     work = out_dir / ".work"
     part = out_dir / "episode.h5.part"
+    final = out_dir / OUTPUT_NAME
     work.mkdir(parents=True, exist_ok=True)
+    writer = audit.AuditWriter(out_dir / AUDIT_NAME)
     pool = None
     try:
+        models = {name: detect.model_sha256(path)
+                  for name, path in _model_files(settings, pcm is not None).items()}
+        writer.header(audit.sha256_file(input_path), input_path.name, cameras, models,
+                      settings.to_dict(), _image_digest(), AuditRecord.faceblur_version)
+        if pcm is not None:
+            # Audio is quick, and the release drops it (D-B): the record of
+            # what was spoken goes in before the slow part of the run.
+            for start, end in vad.speech_segments(pcm[0], pcm[1], settings):
+                writer.speech(start, end, settings.vad_pad_ms)
+            pcm = None
         if workers == 1:
             submit = batch.serial_submit
         else:
@@ -174,12 +274,21 @@ def run(input_path: Path, out_dir: Path, settings: Settings, workers: int = 2,
             pool = context.Pool(workers, initializer=batch.init_pool_worker,
                                 initargs=(workers,))
             submit = batch.PoolSubmit(pool)
+        results = []
         with h5py.File(input_path, "r") as f:
-            results = [_blur_camera(f, camera, work, settings, submit, workers)
-                       for camera in cameras]
+            for camera in cameras:
+                result = _blur_camera(f, camera, work, settings, submit, workers)
+                _audit_camera(writer, result)
+                results.append(result)
         _write_output(input_path, part, results, spec_layout)
-        part.replace(out_dir / "episode.h5")
+        part.replace(final)
+        writer.footer(audit.sha256_file(final), final.name, "done")
+    except BaseException as exc:
+        # The footer says the run did not finish; there is no output to hash.
+        writer.footer(audit.GENESIS, "", "failed", str(exc) or type(exc).__name__)
+        raise
     finally:
+        writer.close()
         if pool is not None:
             pool.terminate()
             pool.join()
@@ -196,6 +305,20 @@ def _describe(result: dict) -> str:
     ms = 1000 * result["seconds"] / frames if frames else 0.0
     return (f"{result['camera']}: {frames} frames, {result['seconds']:.1f} s, "
             f"{ms:.0f} ms/frame, masked {100 * result['record'].masked_mean:.2f}% of the picture")
+
+
+def verify_audit(path: Path) -> tuple[bool, int, str]:
+    """The chain, then every line against the schema: (ok, lines, the first problem)."""
+    ok, lines, problem = audit.verify(path)
+    if not ok:
+        return ok, lines, problem
+    schema = audit.load_schema()
+    for line in audit.read(path):
+        try:
+            audit.validate_line(line, schema)
+        except ValidationError as exc:
+            return False, lines, f"schema at seq {line.get('seq')}: {exc.message}"
+    return True, lines, ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,7 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--mask", default="face,text,plate,screen")
     r.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto")
     r.add_argument("--check-output", action="store_true")
+    v = sub.add_parser("verify", help="check an audit.jsonl: hash chain and schema")
+    v.add_argument("audit", type=Path)
     args = ap.parse_args(argv)
+
+    if args.command == "verify":
+        ok, lines, problem = verify_audit(args.audit)
+        print(f"ok: {lines} lines" if ok else f"problem: {problem} ({lines} lines verified)")
+        return 0 if ok else 1
 
     if args.command == "run":
         try:
