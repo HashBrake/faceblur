@@ -13,14 +13,17 @@ import imageio_ffmpeg
 
 ROOT = Path(SPECPATH).resolve().parent
 
-# The three face detectors, the two hand models, the screen detector and
-# the text detector, with the licences that travel with them. The hand models are what lets the
-# output-side check tell the wearer's own hand from a face it missed. The
-# face recogniser in models/ is evaluation only and stays out of the build.
+# The three face detectors, the two hand models, the screen detector, the
+# text detector and the licence plate detector, with the licences that travel
+# with them. The hand models are what lets the output-side check tell the
+# wearer's own hand from a face it missed. The face recogniser in models/ is
+# evaluation only and stays out of the build.
 #
 # Only the graphs the code loads travel. models/make_dynamic.py derives the
-# dynamic graphs from centerface.onnx and ultraface.onnx, which are committed
-# for provenance and never opened at run time, so neither is here.
+# dynamic graphs from centerface.onnx and ultraface.onnx, and
+# models/make_plates.py derives the plate detector's from lpd_yunet.onnx. The
+# three static graphs are committed for provenance and never opened at run
+# time, so none is here.
 # tests/test_models.py checks that every other .onnx in models/ is.
 datas = [
     (str(ROOT / "models" / "yunet.onnx"), "models"),
@@ -31,12 +34,14 @@ datas = [
     (str(ROOT / "models" / "hand_landmark.onnx"), "models"),
     (str(ROOT / "models" / "yolox_tiny.onnx"), "models"),
     (str(ROOT / "models" / "text_detection_ppocrv3.onnx"), "models"),
+    (str(ROOT / "models" / "lpd_yunet_dynamic.onnx"), "models"),
     (str(ROOT / "models" / "centerface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "ultraface.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "palm_detection.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "hand_landmark.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "yolox.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "ppocr.LICENSE.txt"), "models"),
+    (str(ROOT / "models" / "lpd_yunet.LICENSE.txt"), "models"),
     (str(ROOT / "models" / "README.md"), "models"),
 ]
 

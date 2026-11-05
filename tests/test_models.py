@@ -55,6 +55,14 @@ EXPECTED = {
         "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
         2327524,
     ),
+    "lpd_yunet.onnx": (
+        "6d4978a7b6d25514d5e24811b82bfb511d166bdd8ca3b03aa63c1623d4d039c7",
+        4146213,
+    ),
+    "lpd_yunet_dynamic.onnx": (
+        "ec61f09928cb61510b7f23ce686cf30969f857817fcb779bec03da608c3121d8",
+        4143560,
+    ),
 }
 
 
@@ -154,6 +162,9 @@ NOT_SHIPPED = {
         "from. Nothing loads it at run time",
     "silero_vad.onnx":
         "the HDF5 module runs it; the packaged desktop app does not read audio",
+    "lpd_yunet.onnx":
+        "the static 320x240 graph models/make_plates.py derives "
+        "lpd_yunet_dynamic from. Nothing loads it at run time",
 }
 
 

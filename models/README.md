@@ -264,3 +264,93 @@ N is 576: a 512-sample window with the last 64 samples of the previous window
 in front of it, as the reference code does. The state starts at zeros and the
 returned one goes into the next call. Outputs `output` [batch, 1], the
 probability that the window is speech, and `stateN`, the new state.
+
+## lpd_yunet.onnx and lpd_yunet_dynamic.onnx
+
+| Field | Value |
+|---|---|
+| Original name | license_plate_detection_lpd_yunet_2023mar.onnx |
+| Source | opencv_zoo, models/license_plate_detection_yunet, commit 48b10fa505aeb51fbd127fc60a5c660040e823b7 (also on the hub as opencv/license_plate_detection_yunet, revision 962e8d8849878106cb84039dab61cf97bb683b31, same bytes) |
+| URL | https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/license_plate_detection_yunet/license_plate_detection_lpd_yunet_2023mar.onnx |
+| Licence | Apache 2.0, Copyright (c) 2022 WATRIX, author Dong Xu, see lpd_yunet.LICENSE.txt |
+| Training data | not named by the zoo: "trained with Chinese license plates", most likely CCPD (MIT) |
+
+| File | sha256 | Size |
+|---|---|---|
+| lpd_yunet.onnx | 6d4978a7b6d25514d5e24811b82bfb511d166bdd8ca3b03aa63c1623d4d039c7 | 4146213 |
+| lpd_yunet_dynamic.onnx | ec61f09928cb61510b7f23ce686cf30969f857817fcb779bec03da608c3121d8 | 4143560 |
+
+Taken on 2026-11-05 by `models/make_plates.py`, for the licence plate class,
+from the zoo `yunet.onnx` and the PP-OCR text model already come from. As
+with `yunet.onnx`, the GitHub raw URL returns a Git LFS pointer and the file
+comes from the LFS media endpoint above. `lpd_yunet.onnx` is the zoo's file
+byte for byte (opset 13, exported by PyTorch) and nothing loads it at run
+time; `lpd_yunet_dynamic.onnx` is what the app runs and the build carries.
+The script needs only the standard library and onnx 1.17.0 from `.venv`, and
+rerunning it gives the same two hashes.
+
+**Why the dynamic copy.** The zoo's graph declares [1, 3, 240, 320] and
+onnxruntime enforces it. At 320x240 the plate in `tests/data/plate_cc0.jpg`
+is about 57x20 pixels: the score drops from 0.999 to 0.949 and the top right
+and bottom left corners collapse onto the middle of the plate. The zoo's own
+demo never runs it at 320x240 either; it calls `setInputSize([w, h])` with the
+image's own size, which OpenCV allows because it ignores the declared shape.
+The graph is convolutions, pools and reshapes to [-1, k], so the copy only
+frees H, W and the row count N and drops the 320x240 intermediate shapes.
+
+Input `input` float32 [1, 3, H, W], **the frame at its own size**, NCHW,
+**BGR**, 0 to 255, **no mean, no standard deviation, no letterbox** (the zoo
+uses `cv.dnn.blobFromImage(image)` with its defaults). Any H and W run.
+
+Outputs, one row per prior box, N rows: `loc` [N, 14], `conf` [N, 2] and
+`iou` [N, 1]. The priors are the zoo's `lpd_yunet.py` `_priorGen`: feature
+maps of H and W halved twice with (x + 1) // 2 // 2, then halved again four
+times, at strides 8, 16, 32, 64 with anchor sizes [10, 16, 24], [32, 48],
+[64, 96], [128, 192, 256]; rows run level by level, then by row i, column j,
+anchor size, and each prior is cx = (j + 0.5) * step / W,
+cy = (i + 0.5) * step / H, w = size / W, h = size / H. Decode:
+
+1. score = sqrt(conf[:, 1] * clip(iou[:, 0], 0, 1)),
+2. the four corners are prior[:, 0:2] + loc[:, k:k+2] * 0.1 * prior[:, 2:4]
+   for k = 4, 6, 10, 12, times (W, H). They come top left, top right, bottom
+   right, bottom left of the plate as written. loc[:, 0:4] is a box and
+   loc[:, 8:10] a fifth point, both unused,
+3. keep scores of at least **0.8**, the zoo's default, then NMS on the
+   corners' bounding rectangles (the zoo's 0.3; its own `lpd_yunet.py`
+   passes x1, y1, x2, y2 where NMSBoxes wants x, y, w, h, opencv_zoo issue
+   275, so do not copy that line).
+
+On `tests/data/plate_cc0.jpg` at 1024x676 the plate scores 0.999 with
+corners [144, 410], [309, 424], [314, 475], [149, 460]: the tilt is in them,
+and their bounding rectangle has IoU 0.91 with the hand-measured box. The
+next row, 0.861, is the same plate again, which is what NMS is for.
+
+**The margin under 0.8 is narrow.** Flat frames score up to 0.763 (grey 64
+at 640x480; 0.338 black, 0.708 white), random noise 0.337,
+`tests/data/lena.jpg` 0.330 and `messi5.jpg` 0.148. Nothing tested crosses
+0.8, but that is one plate photo and a dozen negatives. The zoo does not name
+the training set, likely CCPD, Chinese plates only, and a French plate
+scoring 0.999 is one plate: **T12's field test must measure recall on real
+plates** before this threshold is trusted.
+
+DirectML runs it, dynamic shapes included: the top plate's corners agree
+with the CPU provider to 1e-4 px, in about 34 ms at 1024x676 and 107 ms at
+1920x1080, against 66 ms and 217 ms on the CPU. `tests/test_plate_model.py`
+pins all of the above.
+
+**Why not EgoBlur, why not RT-DETR.** Do not retry either without new facts.
+The plan asked for Meta's EgoBlur plate model (Apache 2.0), and its weights
+cannot be fetched without a form: `projectaria/EgoBlur` on the hub (revision
+f3de09e380b72bd5f1ddabe1dd05183c0ed957fc) holds only a README, there is no
+`facebook/EgoBlur` or `facebook/egoblur`, the GitHub release v2.0.1 of
+facebookresearch/EgoBlur has no assets, the `egoblur` 2.0.1 wheel and sdist
+carry no weights, and https://www.projectaria.com/tools/egoblur/ hands the zip
+out only after an email form. The first fallback tried was
+Topurrra/rtdetr-license-plate-detection-onnx (revision aecb24a7..., RT-DETRv2
+R18 on Open Images plates, Apache 2.0, 80671879 bytes, sha256
+50f9bf9d7eaa97ade59063ba608107203d0575a84c0fb27e0ebf3bab6f594366). It found
+the plate (IoU 0.95) but at a score of 0.126, while flat grey 32 and 224
+frames scored 0.121 on frame-sized boxes: no threshold separates those, and
+80 MB was too much for it. Ultralytics-trained plate YOLOs are AGPL and out
+under D-F; autolane/yolox-s-alpr's training set is private, and
+Rickkosse's RF-DETR was trained on CC BY-NC data.
