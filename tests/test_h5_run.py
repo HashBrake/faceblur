@@ -356,3 +356,21 @@ def test_verify_command_passes_a_good_audit_and_fails_a_flipped_byte(two_file, t
     bad.write_bytes(bytes(data))
     assert h5.main(["verify", str(bad)]) == 1
     assert "problem" in capsys.readouterr().out
+
+
+def test_device_cpu_puts_every_model_on_the_cpu(tmp_path, capsys):
+    # T15: the plate, zone and hand models follow --device too, not only the
+    # face and text models, and the audit's compute says so.
+    assert h5.main(["selfcheck", "--device", "cpu"]) == 0
+    printed = capsys.readouterr().out
+    providers = dict(re.findall(r"(?m)^(\w+): (\w+ExecutionProvider)$", printed))
+    assert {"yunet", "ppocr", "lpd_yunet"} <= set(providers), printed
+    assert set(providers.values()) == {"CPUExecutionProvider"}, printed
+    out = tmp_path / "run"
+    assert h5.main(["run", str(FIXTURE), "--out", str(out), "--device", "cpu",
+                    "--workers", "1"]) == 0
+    records = [line["record"] for line in of_type(audit_lines(out), "camera_done")]
+    assert records
+    for record in records:
+        assert "lpd_yunet" in record["compute"], record["compute"]
+        assert set(record["compute"].values()) == {"CPUExecutionProvider"}, record["compute"]

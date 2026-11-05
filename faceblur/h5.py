@@ -321,6 +321,15 @@ def verify_audit(path: Path) -> tuple[bool, int, str]:
     return True, lines, ""
 
 
+def _side_devices(device: str) -> dict[str, str]:
+    """--device for the plate, zone and hand models too.
+
+    Those follow their own settings (default "auto"), so without this a
+    `--device cpu` run still put the plate model on the GPU.
+    """
+    return {"plate_device": device, "zone_device": device, "hand_device": device}
+
+
 def selfcheck(device: str) -> int:
     """Every masking model loaded and run once on a flat frame.
 
@@ -330,7 +339,8 @@ def selfcheck(device: str) -> int:
     """
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
     try:
-        settings = Settings(mask=("face", "text", "plate", "screen"), device=device)
+        settings = Settings(mask=("face", "text", "plate", "screen"), device=device,
+                            **_side_devices(device))
         for detector in (detect.DetectorBank(settings), screens.ScreenDetector(settings),
                          text.TextDetector(settings), plates.PlateDetector(settings)):
             detector.detect(frame)
@@ -379,7 +389,8 @@ def main(argv: list[str] | None = None) -> int:
             mask = parse_mask(args.mask)
         except UnknownKind as exc:
             ap.error(str(exc))
-        settings = Settings(mask=mask, device=args.device, check_output=args.check_output)
+        settings = Settings(mask=mask, device=args.device, check_output=args.check_output,
+                            **_side_devices(args.device))
         try:
             results = run(args.input, args.out, settings, args.workers, args.spec_layout)
         except RunFailed as exc:

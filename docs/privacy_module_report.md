@@ -372,6 +372,24 @@ pool creates later, so the audit's `compute` can say CUDA for a face model
 that ran on the CPU. In the GPU run above the label was right, because CUDA
 really ran.
 
+Fixed in T14 and T15. `provider` on the three face backends is now a property
+that reads the pool each time, like `TextDetector` and `PlateDetector`
+already did, so `compute` names the session that actually ran. A second
+mislabel turned up beside it: `faceblur.h5 run --device cpu` and
+`selfcheck --device cpu` still ran the plate model on DirectML, because the
+plate, zone and hand models follow `plate_device`, `zone_device` and
+`hand_device` (default "auto"), not `device`. In the HDF5 module `--device`
+now sets all four; the desktop `cli.py` is unchanged. Checked by
+`tests/test_provider.py` (a backend whose pool changes provider after it was
+built reports the new one; a CPU bank reports `CPUExecutionProvider` for
+yunet, centerface and ultraface; on this PC an "auto" bank reports
+`DmlExecutionProvider` after one frame) and by a test in
+`tests/test_h5_run.py`: `selfcheck --device cpu` prints only
+`CPUExecutionProvider`, lpd_yunet included, and every `camera_done` record
+of a `run --device cpu` on `tests/data/df2_small.h5` lists only
+`CPUExecutionProvider` in `compute`. Without the `--device` fix that test
+fails on the plate line.
+
 The audit names no image yet: the entry script warns that neither
 `/etc/faceblur_image_digest` nor `FACEBLUR_IMAGE_DIGEST` is set. Pass
 `-e FACEBLUR_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' faceblur-privacy)`

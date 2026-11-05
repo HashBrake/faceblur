@@ -395,9 +395,14 @@ class YuNetOrtBackend:
         self.nms = nms
         self.top_k = top_k
         self.pool = SessionPool(self.model_path, device, threads, "input", _yunet_output_dims)
-        self.provider = self.pool.provider
         self.outputs = self.pool.outputs
         self._blobs: dict = {}     # (h, w) -> padded NCHW float32 input, reused
+
+    @property
+    def provider(self) -> str:
+        # Read from the pool each time: onnxruntime may fall back to the CPU
+        # when the first GPU session is built, after this backend was made.
+        return self.pool.provider
 
     def blob(self, image: np.ndarray) -> np.ndarray:
         """The model input for a BGR frame: padded to 32, float32, NCHW.
@@ -469,7 +474,12 @@ class CenterFaceBackend:
         self.nms = nms
         self.pool = SessionPool(self.model_path, device, threads, self.input_name,
                                 _centerface_output_dims)
-        self.provider = self.pool.provider
+
+    @property
+    def provider(self) -> str:
+        # Read from the pool each time: onnxruntime may fall back to the CPU
+        # when the first GPU session is built, after this backend was made.
+        return self.pool.provider
 
     def detect_resized(self, image: np.ndarray) -> list[Detection]:
         return self.detect_batch([image])[0]
@@ -541,7 +551,12 @@ class UltraFaceBackend:
         self.nms = nms
         self.pool = SessionPool(self.model_path, device, threads, self.input_name,
                                 _ultraface_output_dims)
-        self.provider = self.pool.provider
+
+    @property
+    def provider(self) -> str:
+        # Read from the pool each time: onnxruntime may fall back to the CPU
+        # when the first GPU session is built, after this backend was made.
+        return self.pool.provider
 
     def canvas(self, image: np.ndarray) -> tuple[np.ndarray, float]:
         """Fit an image into the 320x240 input, top left, and the scale used."""
