@@ -56,6 +56,14 @@ def test_privacy_image_carries_no_notebook_or_login_server():
             assert word not in text, f"{word} in the {name} stage"
 
 
+def test_image_carries_the_audit_schema_verify_needs():
+    """The entry script verifies every audit, and verify reads this file."""
+    from faceblur import audit
+
+    assert audit.SCHEMA_PATH == ROOT / "docs" / "audit_schema.json"
+    assert "COPY docs/audit_schema.json docs/audit_schema.json" in stages()["base"]
+
+
 def test_notebook_stage_keeps_the_greennode_behaviour():
     stage = stages()["notebook"]
     assert stage.startswith("FROM base AS notebook")
@@ -66,9 +74,9 @@ def test_notebook_stage_keeps_the_greennode_behaviour():
 
 def test_dockerignore_keeps_secrets_and_footage_out():
     lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    for allowed in ("!models/SHA256SUMS", "!models/*.txt", "!cloud"):
+    for allowed in ("!models/SHA256SUMS", "!models/*.txt", "!cloud", "!docs/audit_schema.json"):
         assert allowed in lines, allowed
-    for excluded in ("**/*.env", "**/footage", "**/out", "**/eval/cache", "**/.venv*",
+    for excluded in ("**/*.env", "**/cloud/mano", "**/footage", "**/out", "**/eval/cache", "**/.venv*",
                      "**/*_blurred*"):
         assert excluded in lines, excluded
         # After every allow, or an allow later in the file would let it back in.
@@ -101,14 +109,15 @@ def test_entry_script_parses():
 
 
 def test_sums_check_like_sha256sum_c():
-    """What `sha256sum -c models/SHA256SUMS` does in the image, from models/."""
+    """What `sha256sum -c models/SHA256SUMS` does in the image: names are read
+    from the folder it runs in, /app, which is the repo root here."""
     lines = SUMS.read_bytes().decode("ascii").splitlines()
     assert lines
     for line in lines:
-        m = re.fullmatch(r"([0-9a-f]{64})  (\S+)", line)
+        m = re.fullmatch(r"([0-9a-f]{64})  (models/\S+)", line)
         assert m, f"not sha256sum format: {line!r}"
         digest, name = m.groups()
-        assert hashlib.sha256((SUMS.parent / name).read_bytes()).hexdigest() == digest, name
+        assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest, name
 
 
 def test_selfcheck_runs_every_model_on_cpu():

@@ -224,7 +224,7 @@ def test_sha256sums_matches_expected():
     listed = {}
     for line in (MODELS / "SHA256SUMS").read_text(encoding="ascii").splitlines():
         digest, name = line.split("  ", 1)
-        listed[name] = digest
+        listed[Path(name).name] = digest
     for name, digest in listed.items():
         assert name in EXPECTED, f"{name} is in SHA256SUMS and not pinned here"
         assert digest == EXPECTED[name][0], name

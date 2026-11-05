@@ -47,6 +47,8 @@ COPY faceblur faceblur
 COPY cli.py pyproject.toml ./
 COPY tests tests
 COPY cloud cloud
+# `faceblur.h5 verify` checks every audit line against this schema.
+COPY docs/audit_schema.json docs/audit_schema.json
 
 
 FROM base AS notebook

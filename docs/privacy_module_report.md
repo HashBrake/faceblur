@@ -288,26 +288,63 @@ What the privacy stage does:
   and runs once on a flat 640x480 frame, and the provider each one ran on is
   printed. On this PC's `.venv`, `selfcheck --device cpu` takes about 4.5 s.
 
-### The build on this PC: not finished
+### Built and run on this PC
 
-Docker Desktop started (29.5.3, with an `nvidia` runtime listed). The build
-of the privacy target began pulling `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`
-(layers of 2.06 GB and 0.70 GB) and was stopped about 85 s in, at roughly 0.4
-of 2.06 GB, because the PC ran short of memory: the session's watchdog
-stopped the build with free RAM at about 3.5 GB, under the 5 GB this machine
-needs to keep. Docker Desktop was then shut down again, as it was before the
-build, which brought free RAM back to about 6 GB.
+Docker Desktop 29.5.3 on Windows 11 with WSL 2, an RTX 3070 (8 GB), and the
+`nvidia` runtime that Docker Desktop provides.
 
-So nothing about the image itself is measured yet: no image size, build time,
-container run, GPU provider, `id -u` or `docker inspect` of the healthcheck.
-The notebook target was not built either, on purpose; it only adds time. To
-finish, with Docker Desktop running and a few GB of RAM to spare:
+| | |
+|---|---|
+| Build, cold (base image pulled, pip install) | 945 s |
+| Rebuild after a code or config change (cached layers) | 35-45 s |
+| Image size | 9.77 GB on disk, 3.59 GB content (compressed) |
+| `id -u` in the container | 10001 |
+| `docker inspect` healthcheck | `[CMD python -m faceblur.h5 selfcheck] 5m0s 2m0s 1m0s 0s 1` |
+| `selfcheck`, `--gpus all` | exit 0, about 7 s, every model on `CUDAExecutionProvider` |
+| `selfcheck`, no GPU | exit 0, all on the CPU (see below) |
+| `/app/cloud` in the image | no `mano`, no `*.env` |
 
-    docker build -f cloud/Dockerfile -t faceblur-privacy .
-    docker run --rm --gpus all -v "<repo>/out/docker_in:/in:ro" -v "<repo>/out/docker_out:/out" faceblur-privacy
-    python -m faceblur.h5 verify out/docker_out/audit.jsonl
-    docker run --rm faceblur-privacy python -m faceblur.h5 selfcheck
-    docker inspect --format '{{.Config.Healthcheck}}' faceblur-privacy
-    docker run --rm faceblur-privacy id -u
+The `--gpus all` run on `tests/data/df2_small.h5` (2 cameras, 12 frames each)
+exited 0 after 18 s in total, including the sha256 check, container start and
+model load. It wrote `/out/episode.h5` (139 KB) and `/out/audit.jsonl`
+(29 lines), and the audit verified both in the container and on the host
+(`ok: 29 lines`). Per camera: `rgb_ego_center_left` took 433 ms/frame and
+masked nothing; `rgb_ego_center_right` took 416 ms/frame and masked text on
+all 12 frames. Most of that time is the first inference on each session at a
+new shape, so 12 frames say nothing about steady-state speed. Every model the
+`camera_done` records list as `compute` ran on `CUDAExecutionProvider`:
+yunet, centerface, ultraface, yolox, ppocr, lpd_yunet, zone_palm and
+zone_landmark. No model fell back to the CPU, and the log has no onnxruntime
+EP error. The run without `--gpus all` was not needed.
 
-`out/docker_in/` already holds a copy of `tests/data/df2_small.h5`.
+The notebook target was not built. It shares `base` and only adds time.
+
+Errors found by running the image, and fixed before this was committed:
+
+- `sha256sum -c models/SHA256SUMS` reads the names in the file from the
+  folder it runs in, `/app`, not from `models/`. With bare names every model
+  "could not be read" and the container exited 1 before any run.
+  `models/make_sums.py` now writes `models/<file>`, and the test's
+  re-implementation resolves names from the repo root, the way sha256sum does.
+- `faceblur.h5 verify` reads `docs/audit_schema.json`, which the image did not
+  carry. The run had finished, but verify raised FileNotFoundError and the
+  entry script exited 1. `base` now copies the schema, and `.dockerignore`
+  lets it in.
+- `.dockerignore` let `cloud/mano/` (the licensed MANO hand models, which
+  must never ship) in through `!cloud`. It is now excluded again after the
+  allows, like `*.env`.
+
+One finding is left for its own task. Without a GPU, onnxruntime falls back
+from CUDA to the CPU for every model. `selfcheck` still prints
+`CUDAExecutionProvider` for yunet, centerface and ultraface, while yolox,
+ppocr and lpd_yunet correctly say CPU. The face backends copy
+`pool.provider` when they are built (`faceblur/detect.py`, the
+`self.provider = self.pool.provider` lines) and do not see the session the
+pool creates later, so the audit's `compute` can say CUDA for a face model
+that ran on the CPU. In the GPU run above the label was right, because CUDA
+really ran.
+
+The audit names no image yet: the entry script warns that neither
+`/etc/faceblur_image_digest` nor `FACEBLUR_IMAGE_DIGEST` is set. Pass
+`-e FACEBLUR_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' faceblur-privacy)`
+to record it.

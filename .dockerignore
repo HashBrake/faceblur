@@ -9,12 +9,15 @@
 !pyproject.toml
 !tests
 !cloud
+!docs/audit_schema.json
 **/__pycache__
 **/*.mp4
 !tests/data/*.mp4
-# Re-excluded after the allows above: credentials, footage and outputs stay
+# Re-excluded after the allows above: credentials, the licensed MANO hand
+# models (never shipped), footage and outputs stay
 # out even when they sit inside an allowed folder.
 **/*.env
+**/cloud/mano
 **/footage
 **/out
 **/eval/cache
