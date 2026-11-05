@@ -1,5 +1,17 @@
 # STATE, handover notes
 
+**2026-11-05, PTL "raw" is NOT raw (checked):** `D:\Player One - Phase 0 - PTL`
+is old-pipeline faceblur output, a byte-identical copy of
+`D:\Player One Internal videos blurred` (made 2026-09-26..28). The true raw
+is `D:\Player One Internal videos`. Evidence: 09K 000048 left part0001 at
+764.87 s shows a sharp face with glasses in `Internal videos`, but the same
+face is blurred in `Phase 0 - PTL`. The fps also differ: 30.51 in raw,
+30.006 in the copy, because faceblur re-encoded it. Consequences: the "raw"
+PTL in `vs:faceblur/ptl/in` and on the downloads page is pre-blurred, and
+the PTL blurred delivery was blurred twice. There was no privacy leak.
+`Internal videos blurred` is a 159 GB duplicate, but the owner has not yet
+decided whether to delete it. `hands_out` also moved to `FaceBlur-work\`.
+
 **2026-11-05, PC cleanup (owner asked):** scattered work folders moved
 under `D:\Claude Projects\FaceBlur-work\` (`faceblur_ptl`, `faceblur_stage`,
 `faceblur_cmp`, `faceblur_retime_check`, `hands_compare`, `pipeline_demo`;
@@ -1362,7 +1374,7 @@ py -3.12 -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirement
 Run from the worktree root (`-m hands.run` needs it as the current folder). On the shared PC every run goes through the GPU lock, with ABSOLUTE paths inside it (relative paths fail inside the lock script):
 
 ```
-py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120_r2" --part 1 --start 600 --duration 120 --world --mano
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.run "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\FaceBlur-work\hands_out\EV_003108_p1_600_120_r2" --part 1 --start 600 --duration 120 --world --mano
 ```
 
 Flags:
@@ -1397,7 +1409,7 @@ ORB-SLAM3 patches applied by the script:
 **Run the odometry alone** (`hands.run --world` calls it itself when there is no trajectory):
 
 ```
-py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.odometry.run_orbslam3 "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\hands_out\EV_003108_p1_600_120_world" --part 1 --start 600 --duration 120
+py -3.12 "D:/Claude Projects/gpu_lock.py" -- "D:\Claude Projects\faceblur-stereo-hands\.venv\Scripts\python.exe" -m hands.odometry.run_orbslam3 "D:\Player One - Phase 0 full\AZER76400EV\Orbbec_Ego_AZER76400EV_19700105_003108" -o "D:\Claude Projects\FaceBlur-work\hands_out\EV_003108_p1_600_120_world" --part 1 --start 600 --duration 120
 ```
 
 The run writes:
