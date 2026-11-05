@@ -43,33 +43,58 @@ def camera_groups(f: h5py.File) -> list[str]:
     return known + sorted(name for name in present if name not in df2.CAMERAS)
 
 
+# Packets per write and per HDF5 chunk. A one-hour camera is about 8 GB of
+# packets, more than this PC has free, so they go to disk 256 at a time.
+BATCH = 256
+
+
+def _appendable(group: h5py.Group, name: str, dtype) -> h5py.Dataset:
+    """An empty one-dimensional dataset that grows as batches arrive."""
+    return group.create_dataset(name, (0,), maxshape=(None,), chunks=(BATCH,), dtype=dtype)
+
+
+def _append(datasets: list[h5py.Dataset], batches: list[list]) -> None:
+    """Add one batch to each dataset. A vlen batch is written element by element."""
+    for dataset, batch in zip(datasets, batches):
+        start = dataset.shape[0]
+        dataset.resize((start + len(batch),))
+        if h5py.check_vlen_dtype(dataset.dtype) is not None:
+            for i, data in enumerate(batch):
+                dataset[start + i] = data
+        else:
+            dataset[start:] = np.asarray(batch, dtype=dataset.dtype)
+
+
 def write_video_group(group: h5py.Group, mp4: Path) -> int:
     """Store the first video stream of `mp4` in `group` as encoded packets. Returns the packet count."""
+    # No gzip: the packets are already compressed and would only cost time.
+    datasets = [_appendable(group, df2.VIDEO, h5py.vlen_dtype(np.uint8)),
+                _appendable(group, df2.PTS, np.int64),
+                _appendable(group, df2.DTS, np.int64),
+                _appendable(group, df2.KEYFRAME, bool)]
     with av.open(str(mp4)) as container:
         stream = container.streams.video[0]
         ctx = stream.codec_context
-        packets, pts, dts, keyframe = [], [], [], []
+        batches: list[list] = [[], [], [], []]
         for packet in container.demux(stream):
             # The demuxer ends with an empty flush packet; it is not a frame.
             if packet.size == 0 or packet.pts is None:
                 continue
-            packets.append(np.frombuffer(bytes(packet), dtype=np.uint8))
-            pts.append(packet.pts)
-            dts.append(packet.dts if packet.dts is not None else packet.pts)
-            keyframe.append(packet.is_keyframe)
+            batches[0].append(np.frombuffer(bytes(packet), dtype=np.uint8))
+            batches[1].append(packet.pts)
+            batches[2].append(packet.dts if packet.dts is not None else packet.pts)
+            batches[3].append(packet.is_keyframe)
+            if len(batches[0]) == BATCH:
+                _append(datasets, batches)
+                batches = [[], [], [], []]
+        _append(datasets, batches)
         time_base = stream.time_base
         rate = stream.average_rate or stream.guessed_rate
         codec, width, height, pix_fmt = ctx.name, ctx.width, ctx.height, ctx.pix_fmt
         extradata = bytes(ctx.extradata or b"")
 
-    # No gzip: the packets are already compressed and would only cost time.
-    video = group.create_dataset(df2.VIDEO, (len(packets),), dtype=h5py.vlen_dtype(np.uint8))
-    for i, data in enumerate(packets):
-        video[i] = data
-    pts_arr = np.asarray(pts, dtype=np.int64)
-    group.create_dataset(df2.PTS, data=pts_arr)
-    group.create_dataset(df2.DTS, data=np.asarray(dts, dtype=np.int64))
-    group.create_dataset(df2.KEYFRAME, data=np.asarray(keyframe, dtype=bool))
+    count = datasets[0].shape[0]
+    pts_arr = datasets[1][:]  # 8 bytes a packet, small enough to hold whole
     # Integer arithmetic so a 90 kHz clock lands on the exact nanosecond.
     ns = pts_arr * time_base.numerator * 1_000_000_000 // time_base.denominator
     group.create_dataset(df2.TIMESTAMPS_NS, data=ns.astype(np.int64))
@@ -86,8 +111,8 @@ def write_video_group(group: h5py.Group, mp4: Path) -> int:
     group.attrs[df2.ATTR_PIX_FMT] = pix_fmt
     group.attrs[df2.ATTR_EXTRADATA] = np.frombuffer(extradata, dtype=np.uint8)
     # The camera files report no frame count, and there is one packet per frame.
-    group.attrs[df2.ATTR_FRAME_COUNT] = len(packets)
-    return len(packets)
+    group.attrs[df2.ATTR_FRAME_COUNT] = count
+    return count
 
 
 def _avcc_parameter_sets(avcc: bytes) -> bytes:

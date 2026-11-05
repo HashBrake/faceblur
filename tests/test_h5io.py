@@ -215,3 +215,21 @@ def test_pack_runs_as_a_module(video_silent, tmp_path):
     assert result.returncode == 0, result.stderr
     assert LEFT in result.stdout
     assert out.is_file()
+
+
+def test_packets_stream_into_a_resizable_dataset(video_long, tmp_path, monkeypatch):
+    # 120 packets in batches of 50: two full batches and a partial last one.
+    monkeypatch.setattr(h5io, "BATCH", 50)
+    h5_path = tmp_path / "long.h5"
+    assert h5_main(["pack", str(video_long), "--out", str(h5_path)]) == 0
+    remuxed = tmp_path / "long.mp4"
+    with h5py.File(h5_path, "r") as f:
+        group = f[LEFT]
+        for name in (df2.VIDEO, df2.PTS, df2.DTS, df2.KEYFRAME):
+            assert group[name].chunks is not None, name
+            assert group[name].maxshape == (None,), name
+        assert int(group.attrs[df2.ATTR_FRAME_COUNT]) == len(group[df2.VIDEO]) == len(group[df2.TIMESTAMPS_NS])
+        h5io.read_video_group(group, remuxed)
+    want, got = decode_all(video_long), decode_all(remuxed)
+    assert len(want) == len(got) == 120
+    assert all(np.array_equal(w, g) for w, g in zip(want, got))
