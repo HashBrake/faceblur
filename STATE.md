@@ -9,11 +9,12 @@ absolute paths in their scripts and in this file rewritten). Repo-root
 `-robustness` and `-stereo-hands` removed (branches kept; their result data
 is in `FaceBlur-work\worktree_outputs\`). Kept: `faceblur-hot-storage` and its
 data folder (1 unmerged commit), and `.claude\worktrees\agent-a516…`, which
-has 8 staged, uncommitted changes. Footage was left alone, but these checks
-are open for the owner:
-`D:\Player One - Phase 0 - 1` is an exact subset of `Phase 0 full` (279 GB);
-`D:\Archive\Desktop\Player One Internal videos` is a subset of
-`D:\Player One Internal videos` (1.9 GB). **`D:\Player One - Phase 0 - PTL`
+has 8 staged, uncommitted changes. Footage: the owner approved deleting the
+two verified duplicates, and both were deleted on 2026-11-05 (D: free went
+from 508 GB to 771 GB):
+`D:\Player One - Phase 0 - 1` (exact subset of `Phase 0 full`, 279 GB) and
+`D:\Archive\Desktop\Player One Internal videos` (subset of
+`D:\Player One Internal videos`, 1.9 GB). Still open: **`D:\Player One - Phase 0 - PTL`
 (the "raw" PTL set) is byte-identical to `D:\Player One Internal videos
 blurred`** (432 shared files, sha256 checked on samples), whose
 `_faceblur_report.json` says it is faceblur output made 2026-09-26..28. So
