@@ -9,8 +9,15 @@ face is blurred in `Phase 0 - PTL`. The fps also differ: 30.51 in raw,
 30.006 in the copy, because faceblur re-encoded it. Consequences: the "raw"
 PTL in `vs:faceblur/ptl/in` and on the downloads page is pre-blurred, and
 the PTL blurred delivery was blurred twice. There was no privacy leak.
-`Internal videos blurred` is a 159 GB duplicate, but the owner has not yet
-decided whether to delete it. `hands_out` also moved to `FaceBlur-work\`.
+The owner chose to keep the downloads page as it is (no raw re-upload)
+and not to re-run PTL. `D:\Player One Internal videos blurred` was deleted
+on 2026-11-05 at the owner's request; D: free space is now 961 GB. Its 432
+files shared with `Phase 0 - PTL` are byte-identical there, and its 10 extra
+files (session FE `ego_..._015632`) are in
+`FaceBlur-work\internal_videos_blurred_extras\`. Its 6 MB
+`_faceblur_report.json` was lost by mistake: the move missed it, and the
+delete still ran. The only other copy is a 201-byte stub from Desktop, now
+in the same folder. `hands_out` also moved to `FaceBlur-work\`.
 
 **2026-11-05, PC cleanup (owner asked):** scattered work folders moved
 under `D:\Claude Projects\FaceBlur-work\` (`faceblur_ptl`, `faceblur_stage`,
