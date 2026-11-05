@@ -295,6 +295,7 @@ class Tracker:
         kept = [t for t in tracks if t.confirmed >= self.min_track]
         self._fill_gaps(kept, per_frame, weak)
         self._extend_backwards(kept, per_frame, weak, tracks)
+        self._extend_forwards(kept, per_frame, weak)
         return kept
 
     def _fill_gaps(self, kept, per_frame, weak) -> None:
@@ -472,6 +473,44 @@ class Tracker:
                     claimed.add((frame, id(best)))
                     anchor, anchor_frame = best, frame
                 frame -= 1
+
+    def _extend_forwards(self, kept, per_frame, weak) -> None:
+        """Walk each confirmed track forward in time over boxes nothing else owns.
+
+        The mirror of `_extend_backwards`. During linking a track continues on
+        weak boxes only through `_match`, which predicts from the track's own
+        velocity; a face that slows or turns as it leaves the picture misses
+        that prediction and the track ends early. Here, with every track known,
+        the walk steps from the last box it stood on, moved by the camera, over
+        boxes no kept track owns. It runs after the backward walk so the boxes
+        that walk claimed stay where they are.
+
+        Unlike the backward walk it stops weak_run frames past the last
+        confirmed detection (`_may_continue`): the wearer's hand, confirmed once
+        as a face, must not be followed for fifty frames, and weak_run is what
+        was measured to stop that.
+        """
+        claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
+        claimed |= {(i, id(d)) for t in kept for i, ds in t.extras.items() for d in ds}
+        for t in sorted(kept, key=lambda t: t.last):
+            if t.confirmed < self.established_after or not self._sure(t):
+                continue
+            anchor_frame = t.last
+            anchor = t.dets[anchor_frame]
+            frame = t.last + 1
+            floor = self.conf_weak_long
+            while frame < len(per_frame) and self._gap_ok(anchor_frame, frame)                     and self._may_continue(t, frame):
+                pool = list(per_frame[frame]) + (
+                    [d for d in weak[frame] if d.score >= floor] if weak is not None else [])
+                pool = [d for d in pool if (frame, id(d)) not in claimed]
+                cx, cy = self._camera(anchor_frame, frame)
+                pred = _moved(anchor, cx, cy)
+                best = max(pool, key=lambda d: self._affinity(pred, d), default=None)
+                if best is not None and self._affinity(pred, best) > 0:
+                    t.dets[frame] = replace(best, source="continued")
+                    claimed.add((frame, id(best)))
+                    anchor, anchor_frame = best, frame
+                frame += 1
 
     def _match(self, tracks: list[Track], frame: int, dets: list[Detection],
                used_t: set, weak_boxes: bool) -> set:

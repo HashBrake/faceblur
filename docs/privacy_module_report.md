@@ -102,3 +102,65 @@ have been filled solid. 0.25 (400 px here) removes all of them. A real plate
 wider than a quarter of a 1600 px frame is on a car the wearer is touching.
 The pasted plates up to 240 px (0.15 of the width) are unaffected, so the
 recall table holds at 0.25.
+
+## Tracker: forward extension
+
+### What changed
+
+`Tracker._extend_forwards` (faceblur/track.py) is the mirror of
+`_extend_backwards`. After linking, gap filling and the backward walk, each
+established and sure track walks on from its last detection over boxes no
+kept track owns: confirmed boxes, and weak boxes down to `conf_weak_long`.
+The prediction is the last box it stood on moved by the camera, the match is
+`_affinity`, the reach is `_gap_ok` from the last box taken. Unlike the
+backward walk it also stops `weak_run` frames after the last confirmed
+detection, so a hand confirmed once as a face is not followed for fifty
+frames. During linking a track already continues on weak boxes, but through
+the velocity prediction of `_match`; the walk adds the boxes that prediction
+missed, typically a face that slows or turns as it leaves the picture.
+Tails still start after the extended last frame.
+
+### Measurement, 004100 sample
+
+`.venv/Scripts/python.exe -m eval.measure footage/ego_AZER76400FE_19700101_004100_camera_left_part0001.mp4`,
+default settings, the same raw-detection cache for both (the cache key does
+not cover track.py). "Before" is commit d41a155. The full-precision numbers
+come from `eval.measure.evaluate` on the same inputs with and without the
+walk; the printed lines match them.
+
+Printed line, before:
+
+    recall 100.0%  off-face mean 0.22% max 5.78% (strict 0.34%, detections 0.04%)  exposed 40+ 85 fr, 24-40 55 fr  hands n/a  continuity 98.4%  masked mean 0.56% p95 1.72% max 5.78%  tracks 30  [large 64+: 24/24  medium 32-63: 28/28  small <32: 8/8]
+
+Printed line, after:
+
+    recall 100.0%  off-face mean 0.23% max 5.78% (strict 0.35%, detections 0.04%)  exposed 40+ 85 fr, 24-40 55 fr  hands n/a  continuity 98.5%  masked mean 0.56% p95 1.72% max 5.78%  tracks 30  [large 64+: 24/24  medium 32-63: 28/28  small <32: 8/8]
+
+| number | before | after | change |
+|---|---|---|---|
+| recall | 1.0000 (60/60) | 1.0000 (60/60) | 0 |
+| off_face mean | 0.0022407 | 0.0022519 | +0.0000113 |
+| off_face max | 0.057755 | 0.057755 | 0 |
+| off_face_strict mean | 0.0034499 | 0.0034664 | +0.0000166 |
+| off_face_detections mean | 0.00044630 | 0.00044636 | +0.00000006 |
+| hand_damage_wearer | n/a (no hands cache) | n/a (no hands cache) | |
+| exposed_40 | 85 | 85 | 0 |
+| exposed_24_40 | 55 | 55 | 0 |
+| continuity | 0.98433 | 0.98517 | +0.00084 |
+| masked mean | 0.0055597 | 0.0055824 | +0.0000226 |
+| masked p95 | 0.017175 | 0.017175 | 0 |
+| masked max | 0.057755 | 0.057755 | 0 |
+| tracks | 30 | 30 | 0 |
+| track length mean | 42.77 | 43.43 | +0.67 |
+| recall by size | 24/24, 28/28, 8/8 | 24/24, 28/28, 8/8 | 0 |
+
+Acceptance: recall and continuity are not lower, exposed_40 and
+exposed_24_40 are not higher, off_face rose by 0.0000113 (limit 0.001) and
+masked mean by 0.0000226 (limit 0.002). The first variant passed, so no
+stricter variant was tried and the walk is on with no new setting.
+
+The gain on this clip is small: tracks grew by 20 frames in all and
+continuity rose 0.08 points, while the exposure counts did not move. Most
+weak boxes past a track's end were already taken by the velocity-based
+continuation during linking. hand_damage_wearer could not be read: the
+004100 sample has no hands cache, and building one was outside this task.
