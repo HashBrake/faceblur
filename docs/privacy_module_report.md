@@ -284,6 +284,8 @@ passes both attacks, so a change back to blur or pixelate as the default
 fails the suite while this measurement says what it says. The test skips
 with its reason when the 004100 footage or its raw cache is absent.
 
+Re-run at 02c2e36 on 2026-11-06 after the cache was rebuilt: same numbers.
+
 ## Docker image
 
 `cloud/Dockerfile` now builds two images from shared layers. `privacy`, the

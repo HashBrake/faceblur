@@ -199,7 +199,7 @@ def measurement():
         pytest.skip(f"needs the 004100 sample at {SAMPLE}")
     if not cache_path(SAMPLE).is_file():
         pytest.skip(f"needs the raw detection cache {cache_path(SAMPLE).name}; "
-                    f"build it with eval.common.build_cache (an hour of GPU)")
+                    f"build it with eval.common.build_cache (about a minute of GPU for the 004100 sample)")
     cache = build_cache(SAMPLE)
     rec = Recogniser()
     settings = Settings()
