@@ -845,3 +845,90 @@ padded edge bands (defect 1, fixes b and c), not a person box.
   often have the head outside the top strip.
 - A person YOLOX does not see is not helped at all: the 9K seated profile.
 - The wearer's own arm reaching up from the bottom corner still gets a mask.
+
+## Page rule
+
+T13e, defect 2 of docs/privacy_module_fieldtest.md: an A4 notice on the
+pegboard (AM 032259 frames 1768, 2210, 2653, 3095, 4421) and a whiteboard of
+handwritten tables (AM frame 4863) are never masked. The pilot's hypothesis
+was that their lines are DB candidates that `text_box_thresh` drops, so that
+a page rule (A: one detection over a bright, flat quadrilateral holding two
+or more candidates between `text_page_cand_thresh` 0.35 and the box
+threshold) or a board rule (B: `text_box_thresh` lowered to 0.45 inside such
+regions) would bring them back. The measurement says it does not, and no
+rule ships. Scripts and frames are kept outside git under
+`FaceBlur-work\privacy_fieldtest\t13e\`.
+
+### What the model sees
+
+The cached PP-OCRv3 probability maps (both `text_sizes`, as the pipeline
+runs them) are exactly 0 over the notice in frame 2210 and over the
+whiteboard in frame 4863: no pixel reaches even 0.05, let alone
+`text_thresh` 0.3. There are no candidates for either rule to collect. The
+model was also run on the crops alone, upscaled to 640, 960, 1280 and 1920
+on the long side, plain, contrast-stretched (2nd to 98th percentile) and
+with CLAHE (`probe.py`). On the notice it finds one peg hole and nothing on
+the print; on the whiteboard it finds at most a few stray marks at a box
+score under 0.6, none on the rows of numbers. At this resolution the print is a
+blur of grey bands and the marker digits are about 8 px tall. PP-OCRv3
+does not respond to either.
+
+The pages are also not as bright as the brief assumed. In these dim frames the
+notice's paper reads 110 to 125 grey and the whiteboard 140 to 156, against
+`text_page_bright` 170.
+
+### Per frame, on the cached maps
+
+`measure.py`, `results.json`. Coverage is the share of a hand-drawn box
+around the notice or the board that lies under kept text quads, which has to
+reach 0.8. The T13c columns use T13c's labelled set and its `covered` rule.
+At this per-frame stage the T13c defaults leave 33 of the 49 false boxes. The
+25 in the T13c tables is after the hold.
+
+| variant | notice 1768 / 2210 / 2653 / 3095 / 4421 | board 4863 | T13c real covered | T13c false kept | new false pages (21 T13c frames) |
+|---|---|---|---|---|---|
+| baseline (T13c defaults) | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 0 |
+| A, bright 170, cand 0.35 (brief) | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 0 |
+| A, bright 120 | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 0 |
+| A, bright 100 | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 1 (FE left 1256, 1045x963 at 0,0) |
+| A, bright 100, cand 0.30 | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 1 (the same) |
+| B, board 0.45, bright 170 (brief) | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 0 |
+| B, board 0.45, bright 100 | 0 / 0 / 0 / 0 / 0 | 0 | 14/14 | 33 | 1 (FE left 1256, 17x16 at 46,401) |
+
+No variant covers any part of the notice or the board. When the brightness
+is lowered far enough to include the paper, the only new detections are false ones.
+
+### A page test without the model
+
+A test that does not use the model was tried briefly (`explore2.py`). It looks for
+light, convex regions of a median-blurred frame at grey 100, 120, 140 and 170, then
+counts dark strokes (morphological black-hat) inside them. It does not hold:
+
+- In every frame the notice merges with the bright ceiling above it through
+  the white pipe at every grey level, so it never forms a region of its own.
+- The whiteboard does form a region at grey 140, with 100 strokes. But
+  cluttered regions on the T13c frames reach 383 strokes (AM 2653), 157 (AM
+  4421) and 147 (FE 1256) at grey 100. A stroke floor that keeps the board
+  and drops those would be fitted to one example.
+
+### End to end
+
+The brief asked for a run of `AM_032259_L.h5` with the rule. Since no rule
+ships, the detector at HEAD is the T13c detector (T13d changed only heads),
+and the T13c row above stands: 0.44 % text, 9880 `text_lines`. Crops of
+frames 2210 (150,100,500,400) and 4863 (0,150,450,650), input next to the
+T13c output, are under `t13e\crops\`. Neither the notice nor the board is
+masked in the output.
+
+### Decision
+
+Nothing ships. The page and board rules as specified cannot reach the
+pilot's defect, because the defect is not a thresholding problem: the text
+model gives no response at all on this print and handwriting. No settings
+were added, and the T13c text defaults are unchanged. Covering these
+needs something that finds pages without PP-OCR. One option is a document or
+whiteboard detector. Another is a model-free page test, measured on more than
+one notice and one board and with a way to separate a notice from the
+ceiling behind it. A third is a policy that masks every bright, flat
+quadrilateral on a wall, accepting the false pages. That choice belongs to
+the owner, not to a text threshold.

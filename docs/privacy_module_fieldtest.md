@@ -204,6 +204,7 @@ audit > speed > cosmetics.
 - Test: a synthetic frame with a white board carrying a grid of 14 px
   handwritten-style digits at 30 % contrast. The output must fill the whole
   board.
+- Status: not fixed (T13e). The text model gives no response at all on the notice or the whiteboard (the probability map is 0 there, also on 4x upscaled and contrast-stretched crops), so neither the page rule nor the lowered board threshold covers any part of them. No rule ships. A fix needs a page or board finder that does not rely on PP-OCR. See the report, "Page rule".
 
 ### 3. False mask: surface texture masked as text, in squares up to 220 px
 
