@@ -1,5 +1,61 @@
 # STATE, handover notes
 
+**2026-11-06 ~21:50, PauliVina day 1 upload, buckets renamed, GreenNode
+network ticket:**
+
+- **New batch:** factory PauliVina, day 1 of the collection (recorded
+  2026-11-05), raw, from `E:\Ngày 5-11-2026`: 1,520 files, 526 GiB, 13 device
+  folders (`EGO-001/003/004/009 lỗi/011/013/019`,
+  `ego-005/006/007/008/010/016`). `EGO-009 lỗi` is real data (119 files,
+  39 GB): 6 sessions with healthy videos, 2 with a 0-byte mp4 (`100324`,
+  `141011`), 3 tiny. rclone upload to `vs:player-one/pauli_vina/day1`
+  (private) started 2026-11-06 ~18:16; at ~14:42 UTC it was 18.9% done at
+  ~11.7 MB/s (ETA about 11 h from then). **Not finished** when this was
+  written. When it finishes: run `finish_check_links.sh` (rclone check, then
+  signed 7-day links via `cloud/links.py`), then add the entry
+  "PauliVina - Day 1 (2026-11-05), raw" to the password-locked downloads
+  page (`FaceBlur-work\faceblur_ptl\hub\build_hub.py` + `add_entry.py`),
+  republish artifact https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T and
+  run `put_public.py`. The scripts came from the 2026-11-06 session
+  scratchpad; copies of `finish_check_links.sh`, `add_entry.py`,
+  `dash_refresh\refresh.py` + `PUSH.md` and `bucket_migration.md` are in
+  `D:\Claude Projects\FaceBlur-work\pauli_vina_day1\` (outside the repo).
+- **Buckets renamed to the project name** (S3 cannot rename, so they were
+  migrated): `faceblur` -> `player-one` (7,289 objects, 3.948 TiB, rclone
+  check 0 differences) and `faceblur-blurred` -> `player-one-blurred` (1,152
+  objects, 1.198 TiB, 0 differences, all public-read, listing 403). New
+  permanent public link:
+  https://hcm04.vstorage.vngcloud.vn/player-one-blurred/_download/index.html
+  (page rebuilt with `links.py`, 1,150 files listed). `player-one` stays
+  private (checked: 403). The OLD buckets, the old public link and the
+  current downloads-page entries were not changed. **Owner decides the
+  cut-over:** the old public link and the downloads-page links still point to
+  the old buckets; link users must be told; the old buckets must be deleted
+  later (storage is doubled now, ~5.2 TiB extra at ~28 VND/GB/day). The old
+  raw links on the downloads page expire 2026-11-09..11.
+- **Upload speed:** 4-5 MB/s at first, because rclone's connections were
+  pinned to a phone hotspot Wi-Fi left over from a 4G test. After it was
+  disconnected: ~11-12 MB/s on the wired FPT line. Lesson: after a change of
+  network path, restart rclone or check its connections
+  (`Get-NetTCPConnection` by `LocalAddress`). Hotspot profile "ALZ" is now
+  manual-connect.
+- **GreenNode support** (Teams 'GreenNode-Physical Things Lab', Support 247):
+  they say vStorage HCM04 has 10 Gbps shared ingress and no per-account or
+  per-IP cap. Our public IP is 1.53.255.144 (FPT Telecom, AS18403; an earlier
+  VNPT 14.187.170.221 reading was the office Wi-Fi). Wired route: 9-17% ping
+  loss to 42.1.110.200, while gateway 172.25.16.1 and hops up to 1.52.160.161
+  are clean (pathping stops at hop 5). 4G hotspot: 0% loss but 1.6 MB/s
+  (phone-limited). At 8:56 PM Support 247 forwarded it all to their network
+  team, who will update us. **Open, being monitored** (reply in writing only
+  to questions or test requests; Like the rest). The "share wired + 4G
+  speeds" promise is done.
+- **Upload dashboard** (snapshot-based):
+  https://claude.ai/artifact/ETPs41Z42mwxvYuYHe5JKm, refreshed with
+  `refresh.py` + the `PUSH.md` steps (a session cron every 10 min while the
+  session lives).
+- **Next steps:** finish the upload; add the day 1 link to the downloads
+  page; owner decides the bucket cut-over; wait for GreenNode's network team.
+
 **2026-11-05, PTL "raw" is NOT raw (checked):** `D:\Player One - Phase 0 - PTL`
 is old-pipeline faceblur output, a byte-identical copy of
 `D:\Player One Internal videos blurred` (made 2026-09-26..28). The true raw
