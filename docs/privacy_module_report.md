@@ -934,3 +934,8 @@ one notice and one board and with a way to separate a notice from the
 ceiling behind it. A third is a policy that masks every bright, flat
 quadrilateral on a wall, accepting the false pages. That choice belongs to
 the owner, not to a text threshold.
+
+## Robustness: single-keyframe last GOP
+
+Failed: an Orbbec camera file whose last frame (37,590 of 37,591) is a keyframe failed whole with "Could not read this video": `frame_times` gives millisecond timestamps that sit up to 0.5 ms past the real ones, so the tail probe's seek to the last frame aimed just after it, ffmpeg dropped it as before the seek, and with no later frame nothing came out.
+Changed: `segments._first_frame_after_seek` now reports "no frame after the seek" on a clean read as a landing past the end, so `decode_range` retries one frame earlier as it already does for late landings; the real file's tail now decodes to 1 frame, and `tests/test_last_keyframe.py` covers a synthetic clip through `decode_range`, `run_video` and the HDF5 runner (T18).

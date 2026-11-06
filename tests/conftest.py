@@ -96,6 +96,30 @@ def video_long(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="session")
+def video_last_keyframe(tmp_path_factory) -> Path:
+    """Two seconds, 10 fps, 320x240, whose last frame (19) is a keyframe, so
+    the last group of pictures is that one frame.
+
+    Every frame after the first sits 54/90000 s (0.6 ms) past its tenth of a
+    second, so the millisecond timestamps frame_times reads round up past the
+    real ones, as on the Orbbec camera files: a seek to the last frame's time
+    aims just after it.
+    """
+    out = tmp_path_factory.mktemp("clips") / "last_keyframe.mp4"
+    if out.exists():
+        return out
+    result = run_ffmpeg(["-y", "-loglevel", "error",
+                         "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=2",
+                         "-vf", r"settb=1/90000,setpts=if(eq(N\,0)\,0\,PTS+54)",
+                         "-fps_mode", "passthrough", "-video_track_timescale", "90000",
+                         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                         "-force_key_frames", "expr:eq(n,19)", str(out)])
+    if result.returncode != 0:
+        raise RuntimeError(f"could not build the last keyframe clip: {result.stderr[-500:]}")
+    return out
+
+
+@pytest.fixture(scope="session")
 def messi() -> Path:
     return DATA / "messi5.jpg"
 

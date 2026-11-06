@@ -192,6 +192,14 @@ def _first_frame_after_seek(src: Path, seek: float, times: Sequence[float]) -> i
               "-frames:v", "1", "-vf", "showinfo", "-f", "null", "-"])
     text = r.stderr.decode(errors="replace")
     m = re.search(r"pts_time:\s*([0-9.]+)", text)
+    if not m and r.returncode == 0:
+        # `times` come in whole milliseconds, so a seek can aim just past a
+        # frame whose real timestamp sits below the rounded value. ffmpeg then
+        # drops that frame as before the seek. Mid-stream the next frame comes
+        # out and the caller sees a late landing; on the last frame nothing
+        # comes out at all. Report that as a landing past the end, so the
+        # caller seeks one frame earlier as for any late landing.
+        return len(times)
     if not m:
         raise VideoError("Could not read this video. Check that the file is not open in "
                          "another program.")
