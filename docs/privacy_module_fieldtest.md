@@ -413,3 +413,499 @@ is 9,024 s (2.51 h) of camera time, about 270,700 frames.
 - Long sweeps need checkpoints, and the driver already provides them: each
   entry has its own `out\<name>\episode.h5`, and a rerun skips finished
   entries.
+
+## Long run (T12b, GreenNode)
+
+The long run processed the selection above in the cloud, with the fixes made
+since the pilot. The material is in
+`D:\Claude Projects\FaceBlur-work\privacy_fieldtest\cloud\`: `summary.md`,
+`out\<entry>\audit.jsonl`, `sheets\` (42 sheets), `maskcheck\`, `logs\` and
+`progress.log`. The analysis scripts and the full-resolution crops are in
+`cloud\analysis\`: `audit_stats.py`, `audit_stats2.py`, `lookup.py` and
+`crop_src.py`. None of the footage is in git.
+
+- What ran: code `02c2e36`, which adds the strides, the plate aspect rule,
+  the text false-positive rules, the head backstop for edge persons only,
+  and the `zone_kept` split in the audit. The run used default settings and
+  `--mask face,text,plate,screen`. Image
+  `vcr.vngcloud.vn/110156-faceblur/faceblur-privacy:field`, digest
+  `sha256:6b3249056453d935aee28b58077936b322a17ad711150a583ddaeb83e131d64d`.
+- Where: VM `faceblur-field-1` (g7-standard-24x64-1rtx5090, HCM03-1B), one
+  RTX 5090 on CUDA, `--workers 5`.
+- When: created 2026-11-06 11:33, deleted 17:10. Deletion was confirmed at
+  17:11.
+- Cost: 5.62 h at $0.90, about $5.05. Storage of about 59 GB costs about
+  1,660 VND a day.
+- Volume: 6 entries, 7 camera streams, 270,760 frames, 9,025 s of camera
+  time at 30 fps. `progress.log` reports 308,760 frames, which is a
+  summing error; the audits add up to 270,760.
+- Results: every entry exited 0 and every audit verifies (18,695 to 75,178
+  lines).
+- Speed: 52-70 ms a frame end to end per stream, 62.5 ms over the whole run
+  (16,925 s of run time). One camera-hour takes about 1.9 hours, against
+  7.3 hours in the pilot. The GPU averaged 37 % utilisation (peak 79 %),
+  23 GB of memory (peak 29 GB) and 152 W.
+- Storage: 24.24 GB in and 35.17 GB out, in `vs:faceblur/fieldtest/`. The
+  outputs are 1.45 times the input size, as in the pilot.
+- Rerun: the left camera of `9K_000048_LR` was rerun one frame short (37,590
+  frames against 37,591 in the source). The cause is the
+  single-keyframe-last-GOP defect, which is being fixed as T18.
+
+### Results per camera
+
+| run | camera | frames | ms/frame | mask_face% | mask_text% | mask_plate% | mask_screen% | masked_mean% | zone_share% | heads | head_frames | text_lines | plates | screens | max f/t/p/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| FE_124120_L | left | 18692 | 52 | 0.05 | 0.53 | 0.00 | 1.19 | 1.76 | 1.2 | 58 | 73 | 23033 | 13 | 4028 | 6/11/1/4 |
+| 9K_024425_L | left | 32861 | 58 | 0.71 | 0.36 | 0.03 | 0.55 | 1.63 | 20.7 | 2614 | 3220 | 23890 | 462 | 4690 | 26/9/2/5 |
+| 9K_000048_LR | left | 37590 | 70 | 0.29 | 0.39 | 0.04 | 1.99 | 2.69 | 22.0 | 1535 | 1816 | 41433 | 474 | 11170 | 11/47/2/7 |
+| 9K_000048_LR | right | 37584 | 62 | 0.43 | 0.44 | 0.12 | 2.76 | 3.72 | 21.2 | 1613 | 1916 | 61432 | 975 | 13306 | 9/61/2/8 |
+| FE_234012_L | left | 39096 | 63 | 1.52 | 0.29 | 0.10 | 1.62 | 3.51 | 12.1 | 9305 | 4267 | 24593 | 1505 | 9862 | 19/10/2/5 |
+| AM_041646_L | left | 50163 | 63 | 0.74 | 0.47 | 0.03 | 0.41 | 1.63 | 11.7 | 2952 | 2851 | 75429 | 923 | 4792 | 24/14/2/5 |
+| AM_033011_L | left | 54774 | 62 | 0.21 | 0.48 | 0.02 | 1.10 | 1.80 | 7.1 | 953 | 874 | 63975 | 768 | 8598 | 11/40/2/5 |
+
+DirectML and CUDA give the same output. Entries 1 and 2 were also run on the
+office PC (RTX 3070, DirectML) at 121 and 174 ms a frame, against 52 and 58
+ms on the 5090. On both entries the masked shares agree within 0.02
+percentage points, and the head, plate and screen counts within 0.3 %.
+
+**Mask check.** `maskcheck.py` sampled 30 frames that have detections in each
+stream. Source and output line up: offset 0 on 29 or 30 of the 30 frames,
+and the odd one is off by 1. The share of painted audit boxes whose pixels
+visibly changed in the output was:
+
+- text: 31/42 to 77/78
+- face: 9/13 to 114/115
+- screen: 1/1, but 2/5, 3/13 and 6/18 in three streams
+
+Since T13b, `boxes` lists only what was painted, so the expected share is
+100 %. The check counts a box as unchanged when it is mostly flat or dark,
+because a black fill on a black shirt or a blur over a dark monitor changes
+nothing visible. It also counts boxes clipped to zero area at the frame
+edge as unchanged, which causes the `Mean of empty slice` warnings in three
+of the files. The check therefore understates the masking. The low screen
+counts are mostly blurred, switched-off monitors. The check found no frame
+where a painted box was missing from the output.
+
+### Audit statistics
+
+These come from `analysis\audit_stats.py` and `audit_stats2.py`, run over
+every frame line. Sizes are the long side in source pixels; frames are
+1600x1300. "Backstop-shaped" counts frames that hold a face box of 100 px or
+more that is square within 6 % and touches the left, right or top edge. It
+is a lower bound for the backstop: the record's `head_frames` is the true
+count.
+
+Faces and zone:
+
+| stream | frames with a face | face boxes <24 / 24-40 / 40-80 / 80+ | frames with >=8 faces | frames with text | zone_kept non-empty | head_frames (record) | backstop-shaped frames |
+|---|---|---|---|---|---|---|---|
+| FE_124120 L | 975 (5.2 %) | 307 / 227 / 460 / 610 | 0 | 16026 (85.7 %) | 717 (3.8 %) | 73 | 62 |
+| 9K_024425 L | 15200 (46.3 %) | 38416 / 20259 / 6588 / 5107 | 3278 | 20072 (61.1 %) | 9184 (27.9 %) | 3220 | 1424 |
+| 9K_000048 L | 15080 (40.1 %) | 5343 / 5912 / 5153 / 6754 | 10 | 27747 (73.8 %) | 14798 (39.4 %) | 1816 | 580 |
+| 9K_000048 R | 13654 (36.3 %) | 5160 / 5044 / 4479 / 5262 | 4 | 31196 (83.0 %) | 16503 (43.9 %) | 1916 | 1038 |
+| FE_234012 L | 28900 (73.9 %) | 9406 / 22576 / 24274 / 30980 | 1499 | 23353 (59.7 %) | 8694 (22.2 %) | 4267 | 2650 |
+| AM_041646 L | 42139 (84.0 %) | 56664 / 65642 / 42235 / 14281 | 5034 | 36992 (73.7 %) | 16501 (32.9 %) | 2851 | 1047 |
+| AM_033011 L | 15451 (28.2 %) | 5125 / 7551 / 10719 / 7702 | 102 | 45993 (84.0 %) | 10458 (19.1 %) | 874 | 317 |
+
+Plates and screens:
+
+| stream | plate boxes <80 / 80-150 / 150-300 / 300+ | mean plate box | frames with a screen | screen area, mean over all frames | screen area when present, median / p90 / max | frames with a screen under zone_kept |
+|---|---|---|---|---|---|---|
+| FE_124120 L | 0 / 31 / 0 / 7 | 20,183 px2 | 4193 (22.4 %) | 1.10 % | 3.6 / 10.0 / 13.5 % | 85 |
+| 9K_024425 L | 10 / 62 / 167 / 561 | 69,800 px2 | 4162 (12.7 %) | 0.50 % | 2.3 / 11.7 / 17.2 % | 1627 |
+| 9K_000048 L | 13 / 73 / 215 / 398 | 55,158 px2 | 8060 (21.4 %) | 2.02 % | 8.0 / 18.3 / 41.1 % | 3297 |
+| 9K_000048 R | 1 / 166 / 494 / 1584 | 61,681 px2 | 9117 (24.3 %) | 2.86 % | 11.0 / 23.7 / 47.1 % | 2928 |
+| FE_234012 L | 0 / 331 / 2943 / 565 | 36,469 px2 | 10121 (25.9 %) | 1.67 % | 6.4 / 11.1 / 25.2 % | 1606 |
+| AM_041646 L | 330 / 374 / 875 / 430 | 29,013 px2 | 5674 (11.3 %) | 0.39 % | 2.1 / 8.0 / 18.8 % | 2651 |
+| AM_033011 L | 8 / 499 / 998 / 137 | 24,398 px2 | 10915 (19.9 %) | 1.07 % | 4.5 / 10.8 / 39.6 % | 170 |
+
+What the numbers say:
+
+- **Plates.** All the footage is indoors, and no sheet shows a real licence
+  plate. Every plate box is therefore false. They are large (mean 20,000 to
+  70,000 px2, mostly 150-300+ px), so each one is a big black fill. The
+  aspect rule leaves 0-228 axis-aligned boxes per stream taller than 0.8 of
+  their width, because the rule applies to the rotated quad, not to the
+  box.
+- **Screens.** The 1-2.9 % mean screen share is realistic only for the 9K
+  office scenes. There the sheets show real monitors and laptops in most
+  screen boxes, with only one false box out of every 8-11. Over all 42
+  sheets I counted about 16 false screen boxes out of about 47. The false
+  ones were the CNC bed, chair backs, a jacket, a freezer, a sink, a clock,
+  a keyboard area, a gate, a pegboard and whiteboards. FE_124120 and
+  FE_234012 are a workshop and a lab, so their 1.1-1.7 % is mostly false
+  boxes. The per-frame sum reaches 41-47 % on 9K_000048, because overlapping
+  boxes are summed. Per 2-minute block, screen share swings from 0.0 % to
+  13.6 % as the wearer turns towards the desks.
+- **Screens kept by the zone.** In 9K_000048 L, 3,297 of the 8,060 frames
+  with a screen also have a screen box under `zone_kept`. Defect 2 explains
+  why that matters.
+- **False face bursts.** In 9K_024425, 3,278 frames have 8 or more face
+  boxes, while the sheets show at most 3-4 real people. These frames are
+  defect 7.
+
+### Defects found by eye
+
+I looked at all 42 sheets: 30 regular sheets and 12 flicker sheets. Frame
+numbers are audit indices. Sizes are in source pixels. A sheet halves the
+source, and a flicker tile shrinks it 2.67 times.
+
+The outputs are not stored locally, so a crop at full resolution shows the
+source with the audit's painted boxes drawn on it. Only FE_124120 and
+9K_024425 have local fixtures. Each finding is marked:
+
+- **[full-res]**: confirmed on a full-resolution crop in
+  `cloud\analysis\crops\`.
+- **[audit]**: confirmed from the audit lines with `lookup.py`.
+- **[sheet]**: rests on the sheet alone.
+
+Defects are ranked as in the pilot: privacy leak > wrong mask inside the
+zone > false mask > flicker > audit > speed.
+
+#### 1. Leak: faces turned sideways at the fisheye rim are still not masked
+
+- Evidence:
+  - **[full-res]** `9K_024425_L_left_00.jpg`, frame 8962
+    (`crops\9K_024425_L_8962_0_940.jpg`). Two colleagues at the left rim are
+    turned about 90 degrees by the lens: one seated face of about 45 px at
+    x 0-50, y 960-1010, and a man in a green shirt bending over, face of
+    about 70 px cut by the left edge at y 1230-1300. The frame has no face
+    box at all.
+  - **[full-res]** Frame 0 of the same stream (`crops\9K_024425_L_0_0_700.jpg`):
+    the seated person, about 40 px, rotated, unmasked. The same desk is in
+    view in many frames of the stream.
+  - **[sheet]** `9K_000048_LR_left_02.jpg`, frame 23132: a colleague's face
+    cut by the bottom-left edge, about 120x140 px, eye and hair visible. The
+    only face box in the frame is on a tape roll (`lookup.py`).
+  - **[sheet]** `9K_000048_LR_left_03.jpg` frame 34698 and
+    `9K_000048_LR_right_03.jpg` frame 34692: people seated at the top rim,
+    heads of about 40-50 px, f0.
+  - **[sheet]** `AM_033011_L_left_00.jpg`, frame 8648: far seated people of
+    about 20 px, f0.
+- Likely cause: unchanged from the pilot. YuNet and CenterFace miss faces
+  rotated 60-90 degrees. The T13d backstop only fires when YOLOX finds the
+  `person`, and YOLOX also misses rotated, cut-off people. Where it does find
+  them, it works: AM_041646 frame 47375 and FE_234012 frame 24058 have
+  their rim persons masked.
+- Proposed fix: pilot fix (b), running the face detectors on the left and
+  right 25 % bands rotated by +-90 degrees, with the hits mapped back. This
+  costs about 2 x 45 ms single-process on the bands. If that is too slow,
+  try fix (c), the reflected border.
+- Test: a fixture frame with a face rotated 90 degrees and half outside the
+  left edge of a 1600x1300 frame. The output must change the face pixels.
+  An upright face in the same frame must still be masked once.
+
+#### 2. Leak: real screens left readable, kept by the zone or not detected
+
+- Evidence:
+  - **[full-res]** `FE_124120_L_left_02.jpg`, frame 18691
+    (`crops\FE_124120_L_18691_550_200.jpg`): a MacBook showing CAD work,
+    about 220x235 px, sits under `zone_kept` (`[1083, 396, 218, 235]`) and
+    is not blurred. The wearer's right hand is near it but is handling an
+    insole, not the laptop.
+  - **[audit]** Frames that have a screen box under `zone_kept`: 3,297 in
+    9K_000048 L, 2,928 in 9K_000048 R, 2,651 in AM_041646, 1,627 in
+    9K_024425 and 1,606 in FE_234012.
+  - **[audit]** In `9K_000048_LR_right_flick_00.jpg`, frames 31234 -> 31236,
+    the same screen box moves from `boxes` to `zone_kept`. Defect 9 covers
+    this blink.
+  - **[sheet]** In `9K_000048_LR_left_02.jpg` frames 28915 and 31806,
+    `9K_000048_LR_right_02.jpg` frames 28910 and 31801, and
+    `9K_000048_LR_right_flick_01.jpg` frames 31845-31847, a large curved
+    monitor shows a datasheet with tables, at about 500x450 px. It is never
+    in a screen box. On the laptop next to it, the PCB layout is also
+    unblurred in frames 31806 and 31801. The same monitor is detected and
+    blurred in frames 37589 and 37583, where it is further away.
+  - **[sheet]** `9K_000048_LR_left_01.jpg` frame 20240 and `_right_01.jpg`
+    frame 20237: a monitor at the left rim showing a picture, not boxed.
+  - **[full-res]** 9K_024425 frame 25248
+    (`crops\9K_024425_L_25248_0_300.jpg`): of two monitors side by side,
+    the second one, about 90x90 px and showing a white page, is not boxed.
+- Likely causes:
+  - (a) The zone is applied to screens like any other kind. `zone_scale`
+    1.5 around a hand that rests near a laptop covers the laptop's screen.
+  - (b) Close monitors are probably dropped by `screen_max_area` 0.12, or
+    missed because YOLOX sees them at a steep fisheye angle.
+- Proposed fixes:
+  - Keep a screen under the zone only when a hand box overlaps the screen
+    box itself. A zone grown around the hand is not enough.
+  - Measure the dropped YOLOX `tv` and `laptop` boxes on frame 31806 before
+    changing `screen_max_area`.
+- Test: a fixture with a hand box next to, but not on, a screen box. The
+  screen must be painted and must not be listed in `zone_kept`. A hand
+  overlapping the screen keeps it clear.
+
+#### 3. Leak: labels, whiteboards and signs are left readable (pilot defect 2)
+
+- Evidence, all **[sheet]**:
+  - `AM_033011_L_left_02.jpg` frame 25945: two shipping labels on cartons,
+    "Carton # 7 / Made in China / Reference / Size / Quantity", at about
+    280x260 px. They are readable on the sheet and not masked.
+  - `AM_033011_L_left_03.jpg` frame 40359: a whiteboard at the top left
+    with handwritten tables of numbers, legible on the sheet and not
+    masked.
+  - `AM_041646_L_left_04.jpg` frames 44588 and 47375: two whiteboards with
+    diagrams, about 360x240 px each, not masked.
+  - `AM_033011_L_left_00.jpg` frame 0 and `_02.jpg` frame 31711: "PT LAB"
+    wall lettering.
+  - `FE_124120_L_left_02.jpg` frame 16992: large wall letters.
+- Likely cause: unchanged from the pilot (T13e). PP-OCR gives no response on
+  the notice or the board. Large wall letters are above the text detector's
+  scale.
+- Proposed fix: a page and board finder that does not depend on PP-OCR, for
+  example a bright quadrilateral with ink strokes. Before building it, ask
+  the owner whether whiteboards and room signage must be masked; see the
+  Recommendation.
+- Test: as in pilot defect 2.
+
+#### 4. Leak, partial: close faces are under-masked
+
+- Evidence:
+  - **[sheet]** `FE_234012_L_left_00.jpg`, frame 3007: a colleague in a
+    headset, turned down, about 200x250 px. The face box is
+    `[237, 460, 172, 206]` **[audit]**, and the ellipse covers the glasses,
+    nose and mouth. The cheek, ear and glasses arm at x 50-230 stay visible.
+  - **[full-res]** In 9K_024425 frame 25248 the face box (47x74) covers only
+    the front half of a profile. The painted ellipse is grown by 0.35, which
+    probably covers it.
+- Likely cause: the face box covers only the frontal landmarks. For a
+  tilted or profile head the ellipse misses the side of the head.
+- Proposed fix: for faces of 150 px or more, grow the ellipse to the YOLOX
+  head (the top of the `person` box) when one overlaps the face.
+- Test: a fixture with a 200 px profile face and a person box; the output
+  must change the ear region.
+
+#### 5. Wrong mask inside the zone: items in the wearer's hands get masked, and the zone barely works with gloves in the dark
+
+- Evidence:
+  - **[full-res]** `FE_124120_L_left_01.jpg`, frame 6797
+    (`crops\FE_124120_L_6797_500_450.jpg`): the gloved left hand holds a red
+    and green insole. A text box of 140x142 px on it is painted black, and
+    there is no text on it. `zone_kept` is empty.
+  - **[sheet]** Also `FE_124120_L_left_00.jpg` frames 0, 1699 and 13593:
+    small masks on the tool in the hands.
+  - **[sheet]** `AM_033011_L_left_04.jpg` frame 49007: a face box of 90x110
+    px on the dustpan the wearer is holding, a black circle.
+  - **[sheet]** `AM_033011_L_left_01.jpg` frame 17297: the tray in hand.
+  - **[sheet]** `9K_000048_LR_right_00.jpg` frame 2891: the pin header of the
+    PCB being held.
+  - **[sheet]** `AM_041646_L_left_04.jpg` frame 50162: a 435x460 screen blur
+    over the gate the wearer is moving.
+  - **[audit]** FE_124120 has `zone_share` 1.2 % and `zone_kept` in 3.8 % of
+    frames, against 16-18 % for the FE pilot. The wearer works in white
+    gloves under a single bright lamp.
+- Likely cause: the palm and landmark models find gloved, overexposed hands
+  poorly, so there is often no zone. Plain detector false positives on the
+  object then get painted.
+- Proposed fix: measure HandFinder recall on 50 FE_124120 frames with gloved
+  hands. If recall is low, add a fallback zone from the wearer's forearms
+  entering the bottom of the frame. Separately, the shape rule from T13c
+  should also drop a text quad of 140x142 that holds no stacked lines.
+  Check why it passed here.
+- Test: frame 6797 as a fixture, kept outside git: no mask on the insole.
+
+#### 6. False mask: the head backstop paints large squares on torsos, legs and the wearer's own hands
+
+- Evidence:
+  - **[sheet + audit]** `AM_033011_L_left_03.jpg`, frame 34593: a face box
+    of 441x441 at the top-left corner covers a standing person's trousers
+    and a chair. The head is out of frame.
+  - **[sheet + audit]** `FE_234012_L_left_02.jpg`, frame 30073: a 364x362
+    box covers a colleague's striped torso. The head is above the frame.
+  - **[sheet + audit]** The wearer's own hand or arm, close to the lens:
+    - `9K_000048_LR_left_flick_00.jpg` frames 27562-27564: 433-446 px.
+    - `AM_033011_L_left_04.jpg` frame 54773: 412 px over the right hand.
+    - `FE_234012_L_left_03.jpg` frame 39095: 290 px.
+  - **[audit]** In 9K_000048 L frames 2653-2655, a 158x170 box at the right
+    edge sits on the wearer's hand holding the soldering iron. It alternates
+    `boxes` -> `zone_kept` -> `boxes`.
+  - The backstop-shaped boxes are mostly over 300 px: 1,594 of 2,684 in
+    FE_234012 and 805 of 1,064 in 9K_000048 R.
+- Likely cause: a person box cut by the top or side edge has its "head" band
+  taken from the top of the visible part, which is a torso or legs when the
+  head is outside the frame. YOLOX also labels the wearer's own forearm
+  near the lens as `person`. The `head_wearer_*` exclusion only covers the
+  bottom-centre region.
+- Proposed fixes:
+  - Fire the backstop only when the person box is cut by the side edge and
+    its top edge lies inside the frame, so the head is visible.
+  - Drop person boxes that overlap a hand or arm the zone sees.
+  - Cap the backstop box at the `head_width_frac` of the person's width, as
+    measured below the cut.
+- Test: a fixture where a person box starts at y=0 (cut at the top). No head
+  mask may appear. A person box cut at the left edge with its top inside the
+  frame still gets one.
+
+#### 7. False mask: bursts of false faces on pegboards, clutter and motion blur
+
+- Evidence:
+  - **[full-res]** 9K_024425 frame 23898
+    (`crops\9K_024425_L_23898_300_100.jpg`): 14 face boxes. Three are real
+    (two seated people and a man with a raised arm); 11 are tools and parts
+    on the pegboard, 40-60 px each, painted as black circles.
+  - **[audit]** 3,278 frames of this stream have 8 or more face boxes.
+  - **[full-res]** Frame 11949 (`crops\9K_024425_L_11949_1200_120.jpg`): a
+    227x238 face box on a power strip and pegboard at the right edge. There
+    is no person.
+  - **[sheet]** False faces also appear on:
+    - a tape roll: `9K_000048_LR_left_02.jpg` frame 23132, 96x108 px
+    - a mug: `AM_033011_L_left_01.jpg` frame 20180, 88x103 px
+    - a bench grinder: `FE_234012_L_left_03.jpg` frame 36088
+    - the wearer's own forearm: `AM_041646_L_left_02.jpg` frames 22294 and
+      27868
+    - six blobs in a motion-blurred frame: `AM_041646_L_left_02.jpg` frame
+      27868
+- Likely cause: pilot defect 4 is not fixed, and is worse on cluttered
+  pegboards and blurred frames.
+- Proposed fix: pilot defect 4's fix, a higher confirmation score for a
+  candidate with no landmark layout and no person box around it. Also
+  suppress new face tracks in frames whose global motion exceeds
+  `fast_shift`.
+- Test: frames 23898 and 11949 as fixtures, kept outside git. At most the 3
+  real faces may be masked in 23898, and none in 11949.
+
+#### 8. False mask: non-screens blurred as screens, and plates that are never real
+
+- Evidence, screens:
+  - **[full-res]** 9K_024425 frame 20911
+    (`crops\9K_024425_L_20911_700_0.jpg`): an 822x290 screen box over the
+    pegboard.
+  - **[sheet]**
+    - the CNC bed: `FE_234012_L_left_00.jpg` frames 0 and 6015
+    - chair backs: `FE_124120_L_left_01.jpg` frames 8496 and 10195
+    - a jacket: `9K_000048_LR_left_03.jpg` frame 34698
+    - a freezer: `AM_033011_L_left_00.jpg` frame 2883
+    - a sink and a clock: `AM_041646_L_left_01.jpg` frames 11147 and 13934
+    - a keyboard area: `9K_000048_LR_right_02.jpg` frame 31801, 390x521
+- Evidence, plates:
+  - **[sheet]** `9K_000048_LR_right_01.jpg` frame 11564: a 347x246 plate box
+    on the pegboard at the top edge, filled black.
+  - **[sheet]** `AM_033011_L_left_02.jpg` frame 23062: a plate box on the
+    wearer's own shirt print.
+  - **[sheet]** `FE_234012_L_left_flick_00.jpg` frame 25247: a 318x168 plate
+    box on the yellow fence.
+  - **[audit]** The plate table above: every plate box is false, they are
+    large, and 0-228 per stream are portrait-shaped.
+- Likely cause:
+  - Screens: YOLOX `tv` fires on large dark rectangles at the rim (pilot
+    defect 6).
+  - Plates: the LPD model fires on printed patterns and dark panels. The
+    aspect rule checks the quad, but the painted box is the quad's
+    bounding box.
+- Proposed fixes:
+  - Plates: apply `plate_aspect_max` to the axis-aligned box as well, and
+    reject plate boxes over 300 px long.
+  - Screens: require a screen box to contain a bright or textured inner
+    rectangle, or an edge-to-interior contrast step (pilot defect 6). A
+    flat-dark test would drop switched-off monitors, which is acceptable.
+- Test: a unit test giving the plate filter a quad whose bounding box is
+  portrait; it is dropped. A fixture with the pegboard frame 20911: no
+  screen mask.
+
+#### 9. Flicker: masks blink when the zone toggles
+
+- Evidence:
+  - **[audit]** 9K_000048 L frames 2653 -> 2654 -> 2655: a head mask shows,
+    then disappears, then shows again, because the box moves into
+    `zone_kept` for one frame (defect 6).
+  - **[audit]** 9K_000048 R frames 31234 -> 31236: a 303x412 screen blur
+    disappears in the same way.
+  - **[sheet]** `9K_000048_LR_left_flick_00.jpg` frames 16968-16970 and
+    25247-25249: small text masks on the bench and on the wearer's shirt
+    print come and go.
+  - **[sheet]** `9K_024425_L_left_flick_00.jpg` frames 27562 -> 27563: a
+    small blurred patch appears at the bottom in a frame where the audit
+    counts are all 0. I could not check this without the output, so it is
+    not verified.
+  - No real face blinked in any flicker sheet. Close faces in FE_234012
+    2653-2655 and 16968-16970 and AM_041646 16968-16970 stay masked in all
+    three frames.
+- Likely cause: the zone runs every 2nd frame (`zone_stride` 2), and its
+  decision is applied per frame without hysteresis.
+- Proposed fix: hold a zone decision for `zone_memory` in both directions,
+  so that a box kept clear, or painted, changes state only after 2
+  consecutive frames.
+- Test: a fixture where the zone covers a box on frames 0, 2 and 4 but not
+  on 1 and 3. The box's state must not alternate.
+
+#### 10. Audit and run records
+
+- **[audit]** `progress.log` reports 308,760 frames. The audits add up to
+  270,760.
+- **[audit]** `maskcheck` warns `Mean of empty slice` on boxes clipped to
+  zero area at the edge. The audit can carry such boxes for clipped person
+  heads. Clamp them, or drop zero-area boxes before writing the audit.
+
+#### 11. Speed and cost
+
+- **[audit]** 62.5 ms a frame end to end with 5 workers on one RTX 5090. One
+  camera-hour costs about 1.9 GPU-hours, about $1.70 at $0.90/h.
+- The GPU averaged 37 % utilisation, so the run is limited by the CPU or by
+  the pipeline, not by the GPU.
+- More workers or a 2-GPU flavour are the next lever; this was not measured
+  here.
+
+#### Cosmetics
+
+- No colour shift or frame offset was seen. Frame counts match, except the
+  T18 frame noted above.
+- Text masks on the wearer's own shirt print and watch are painted, mostly
+  invisibly (black on black). See `AM_033011` and `AM_041646`. These are
+  harmless, but they add to the text counts.
+
+### What improved since the pilot
+
+- **Speed.** 242 ms a frame in the pilot. Locally the strides gave 121-174
+  ms, and the cloud gave 52-70 ms a frame. The long run needed 4.7 h of
+  run time, against the 11.7 h estimated for the PC.
+- **Text false positives (pilot 3), reduced.** The mean text mask fell from
+  0.85-1.29 % of the frame to 0.29-0.53 %. The rags, cups and tool cases are
+  gone from the sheets. False text squares of 150-230 px remain on parts
+  bins (`9K_024425_L_left_00.jpg` frame 5975, `_02.jpg` frame 29873), on
+  cardboard, on a plant, on chair legs, and on held items (defect 5).
+- **Plates (pilot 5), reduced.** The mean plate mask fell from 0.04-0.32 %
+  to 0.00-0.12 %. False plates remain (defect 8).
+- **Edge faces (pilot 1), partly fixed.** The backstop masks real rim
+  persons in AM_041646 frame 47375 and FE_234012 frame 24058. Rotated rim
+  faces are still missed (defect 1), and the backstop adds defect 6.
+- **Audit (pilot 7), fixed.** `boxes` lists only what was painted, and
+  `zone_kept` lists what the zone kept clear. Every finding above could be
+  checked against it.
+- **Flicker (pilot 8), mostly gone.** No real face blinked. The remaining
+  blinks come from the zone (defect 9).
+- **Robustness (pilot 10).** No input in this run was corrupt. Seven
+  streams of 10-30 minutes each ran without a failure.
+- **Not improved:** whiteboards and notices (pilot 2, now defect 3), objects
+  masked as faces (pilot 4, now defect 7), and walls masked as screens
+  (pilot 6, now defect 8).
+
+### Recommendation
+
+Fix before the partner integration, in this order:
+
+1. **Defect 2 (a): stop the zone keeping screens unless a hand touches the
+   screen box.** This is a small change with a clear test, and it closes a
+   leak verified at full resolution.
+2. **Defect 1: rotated band face detection at the left and right rims.** It
+   costs speed, but it is the leak seen most often. Measure the cost on
+   the 9K_024425 fixture, which is local.
+3. **Defect 6: limit the backstop to person boxes whose top is in the
+   frame, and exclude the wearer's arms.** It removes the largest false
+   masks, up to 441x441 px.
+4. **Defect 9: zone hysteresis.**
+5. **Defect 8, plates:** check the plate box shape, and cap plate box size.
+6. **Defect 5:** check zone recall with gloves before changing anything.
+
+Defects 7 and 8 (screens) are false masks. They cost picture area, but they
+do not leak anything. Do them after the items above.
+
+Questions for the owner:
+
+- Must whiteboards, carton labels and room signage ("PT LAB") be masked?
+  PP-OCR does not see them, so this needs a new page and board finder.
+- Should the wearer's own clothing print (for example "GO EVERYWHERE WITH
+  WHEREVER ATELIER", "GREEN") and their watch face be kept or masked? This
+  run masked them as text.
+- Is a blurred switched-off monitor or TV acceptable? This run blurred them.
+- Does the partner need faster than about 1.9 GPU-hours per camera-hour? If
+  so, measure a 2-GPU flavour or more workers next. The GPU sat at 37 %.
