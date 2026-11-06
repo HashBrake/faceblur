@@ -634,6 +634,7 @@ zone > false mask > flicker > audit > speed.
 - Test: a fixture with a hand box next to, but not on, a screen box. The
   screen must be painted and must not be listed in `zone_kept`. A hand
   overlapping the screen keeps it clear.
+- Status: (a) fixed in T19 (`zone_screen_needs_hand`): screens kept by the zone on FE_015252 fell from 396 to 196 (L) and 211 to 174 (R), see `docs/privacy_module_report.md`, "Zone and backstop fixes from the long run". (b) is open.
 
 #### 3. Leak: labels, whiteboards and signs are left readable (pilot defect 2)
 
@@ -735,6 +736,7 @@ zone > false mask > flicker > audit > speed.
 - Test: a fixture where a person box starts at y=0 (cut at the top). No head
   mask may appear. A person box cut at the left edge with its top inside the
   frame still gets one.
+- Status: fixed in T20 (`head_top_margin`, `head_hand_iou`), covered by unit tests. The size cap is not done. FE_015252 has no such case (heads unchanged), so a long-run rerun is still needed to measure it.
 
 #### 7. False mask: bursts of false faces on pegboards, clutter and motion blur
 
@@ -827,6 +829,7 @@ zone > false mask > flicker > audit > speed.
   consecutive frames.
 - Test: a fixture where the zone covers a box on frames 0, 2 and 4 but not
   on 1 and 3. The box's state must not alternate.
+- Status: the stride gap is fixed in T21 (hands carried over skipped frames): on FE_015252 R, screen flips fell from 37 to 12, and face flips fell from 9 to 6 or 7. L screen flips stayed at 35. Those come from the hand detector changing between looked-at frames, and hysteresis is not added.
 
 #### 10. Audit and run records
 

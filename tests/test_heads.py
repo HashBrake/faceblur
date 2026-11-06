@@ -83,6 +83,50 @@ def test_the_wearer_is_left_out_at_the_edge_too():
     assert heads.regions([arm], (1300, 1600), Settings()) == []
 
 
+def test_a_box_starting_at_the_top_edge_has_no_head_in_view():
+    """Long-run defect 6: a person box cut at the top is a torso or legs."""
+    shape = (1000, 1600)
+    assert Settings().head_top_margin == pytest.approx(0.01)
+    assert heads.regions([person(0, 0, 500, 700)], shape, Settings()) == []
+    assert heads.regions([person(0, 9, 500, 700)], shape, Settings()) == []
+    found = heads.regions([person(0, 40, 500, 700)], shape, Settings())
+    assert len(found) == 1 and found[0].y == pytest.approx(40)
+
+
+def square(cx, cy, half):
+    return ((cx - half, cy - half), (cx + half, cy - half),
+            (cx + half, cy + half), (cx - half, cy + half))
+
+
+def test_a_box_over_one_of_the_wearers_hands_has_no_head():
+    """Long-run defect 6: the wearer's own forearm near the lens."""
+    shape = (1000, 1600)
+    arm = person(1300, 200, 300, 400)                  # cut by the right edge
+    assert len(heads.regions([arm], shape, Settings())) == 1, "no hands: kept"
+    assert len(heads.regions([arm], shape, Settings(), ())) == 1
+    # The head region's centre is inside the hand quad.
+    head = heads.head_region(arm, Settings(), shape)
+    on_head = (square(head.cx, head.cy, 40),)
+    assert heads.regions([arm], shape, Settings(), on_head) == []
+    # A hand quad over the box, IoU 0.33 with it, away from the head region.
+    over = (square(1450, 500, 100),)
+    assert heads.regions([arm], shape, Settings(), over) == []
+    # A small hand elsewhere in the box: IoU below 0.1, centre outside.
+    small = (square(1450, 550, 30),)
+    assert len(heads.regions([arm], shape, Settings(), small)) == 1
+    # A hand far away.
+    assert len(heads.regions([arm], shape, Settings(), (square(200, 800, 100),))) == 1
+
+
+def test_the_new_head_settings_are_validated_and_recorded():
+    for bad in (dict(head_top_margin=-0.1), dict(head_top_margin=1.0),
+                dict(head_hand_iou=0.0), dict(head_hand_iou=1.5)):
+        with pytest.raises(SettingsError):
+            Settings(**bad)
+    recorded = Settings().to_dict()
+    assert recorded["head_top_margin"] == 0.01 and recorded["head_hand_iou"] == 0.1
+
+
 def test_a_wide_box_on_the_bottom_edge_is_the_wearer():
     s = Settings(head_edge_only=False)
     wearer = person(200, 400, 600, 600)        # 0.6 of the width, bottom at 1000

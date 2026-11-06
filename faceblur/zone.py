@@ -57,6 +57,19 @@ from .settings import Settings
 REMEMBERED_PROTECTS: tuple[str, ...] = ("text", "screen", "plate")
 
 
+def reach_protects(settings: Settings) -> tuple[str, ...]:
+    """The kinds the grown reach and the remembered polygons protect.
+
+    `REMEMBERED_PROTECTS`, less "screen" when `zone_screen_needs_hand` is on:
+    a screen is then protected like a face, only by the hand quads. The long
+    field-test run found a laptop left clear because the wearer's hand, busy
+    with something beside it, had its reach over the screen (defect 2a).
+    """
+    if settings.zone_screen_needs_hand:
+        return tuple(k for k in REMEMBERED_PROTECTS if k != "screen")
+    return REMEMBERED_PROTECTS
+
+
 @dataclass(frozen=True)
 class ZoneFrame:
     """The protected polygons of one frame, split by what they protect."""
@@ -73,9 +86,14 @@ class ZoneFrame:
     def __bool__(self) -> bool:
         return bool(self.live or self.remembered or self.hands)
 
-    def for_kind(self, kind: str, face_needs_hand: bool = True) -> tuple:
-        """The polygons that protect this kind on this frame."""
-        if kind in REMEMBERED_PROTECTS:
+    def for_kind(self, kind: str, face_needs_hand: bool = True,
+                 protects: Sequence[str] = REMEMBERED_PROTECTS) -> tuple:
+        """The polygons that protect this kind on this frame.
+
+        `protects` is the kinds the reach protects, `reach_protects(settings)`;
+        every other kind is protected by the hands, as a face is.
+        """
+        if kind in protects:
             return tuple(self.live) + tuple(self.remembered)
         if face_needs_hand:
             return tuple(self.hands)
@@ -319,8 +337,15 @@ def build(hands: dict[int, list[Hand]], shifts: Optional[Sequence[tuple[float, f
         return [ZoneFrame() for _ in range(frames)]
     shape = shape or (0, 0)
     memory = max(0, int(round(settings.zone_memory * max(1e-6, fps))))
+    stride = max(1, settings.zone_stride)
     out: list[ZoneFrame] = []
     kept: list[_Remembered] = []
+    # The last looked-at frame's hands, carried over the frames the stride
+    # skips so that a face or screen under a hand is not painted on every
+    # other frame (long run, defect 9). `carried` counts the frames so far.
+    last_live: list = []
+    last_bare: list = []
+    carried = 0
     for i in range(frames):
         dx, dy = (shifts[i] if shifts is not None and i < len(shifts) else (0.0, 0.0))
         if dx or dy:
@@ -336,6 +361,16 @@ def build(hands: dict[int, list[Hand]], shifts: Optional[Sequence[tuple[float, f
             live.append(polygon_for(hand, settings, shape) if shape[0]
                         else tuple(hand.grown(hand_scale(settings)).quad))
             bare.append(tuple(hand.grown(settings.zone_face_scale).quad))
+        if hands.get(i) or i % stride == 0:
+            # Looked at: what was found is the truth, hands or none.
+            last_live, last_bare, carried = live, bare, 0
+        elif carried < stride - 1 and (last_live or last_bare):
+            # Not looked at: the previous frame's hands, moved with the camera.
+            live = [moved(p, dx, dy) for p in last_live]
+            bare = [moved(p, dx, dy) for p in last_bare]
+            last_live, last_bare, carried = live, bare, carried + 1
+        else:
+            last_live, last_bare = [], []
         # A hand back on a thing it put down refreshes that memory rather than
         # stacking a second polygon on the same object.
         for poly in live:

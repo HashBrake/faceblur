@@ -520,7 +520,7 @@ What is masked, with the default `--mask face,text,plate,screen`:
 - Text and plates are filled solid, because a blurred line keeps its length
   and its word breaks.
 - Screens follow `mode`, blur by default.
-- The handled zone is never masked, whatever is found inside it.
+- The handled zone is never masked. Faces and screens are kept only under a hand, not anywhere in its reach.
 
 Speed, on a file packed from the four sample mp4s (1600x1300, 30 fps), two
 workers, DirectML on the RTX 3070:

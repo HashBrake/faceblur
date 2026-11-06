@@ -300,7 +300,7 @@ class _Masks:
 
     def zoned(self, dets: Sequence[Detection]) -> np.ndarray:
         """`alpha_with_zone` over the box; the reasons are written there."""
-        from .zone import REMEMBERED_PROTECTS
+        from .zone import reach_protects
 
         zone, settings = self.zone, self.settings
         if not zone or not dets:
@@ -309,8 +309,11 @@ class _Masks:
         on_faces = tuple(zone.hands) if settings.zone_face_needs_hand else tuple(zone.live)
         if not reach and not on_faces:
             return self.plain(dets)
-        by_reach = [d for d in dets if d.kind in REMEMBERED_PROTECTS]
-        by_hand = [d for d in dets if d.kind not in REMEMBERED_PROTECTS]
+        # With `zone_screen_needs_hand` a screen is cut as a face is: only by
+        # the hands, never by the reach or memory (long run, defect 2a).
+        protects = reach_protects(settings)
+        by_reach = [d for d in dets if d.kind in protects]
+        by_hand = [d for d in dets if d.kind not in protects]
         if not by_reach:
             return self._cut(self.plain(dets), "faces", on_faces)
         if not by_hand:
@@ -341,7 +344,8 @@ def alpha_with_zone(shape: tuple[int, int], dets: Sequence[Detection],
     is reaching over protects text and screens: that is the thing in their
     hand. A face is protected only where a hand is actually on it, because a
     face inside somebody's reach is usually their own face. See
-    `zone_face_needs_hand` and report section 17.
+    `zone_face_needs_hand` and report section 17. A screen is protected as a
+    face is under `zone_screen_needs_hand` (`zone.reach_protects`).
     """
     return _Masks(shape, (0, 0, shape[1], shape[0]), settings, zone).zoned(dets)
 

@@ -315,7 +315,7 @@ def detect_job(job: dict) -> dict:
     strong, weak, shifts, found_screens, found_hands = {}, {}, {}, {}, {}
     found_text: dict = {}
     found_plates: dict = {}
-    found_heads: dict = {}
+    found_people: dict = {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -346,11 +346,14 @@ def detect_job(job: dict) -> dict:
                 if hits:
                     found_screens[i] = hits
             if want_people:
-                from .heads import regions
+                # The person boxes that can give a head. The head regions
+                # themselves are made in section 2f, where the zone's hands
+                # are known for every frame (heads.regions).
+                from .heads import candidates
 
-                heads = regions(screens.detect_people(frame), shape, settings)
-                if heads:
-                    found_heads[i] = heads
+                people = candidates(screens.detect_people(frame), shape, settings)
+                if people:
+                    found_people[i] = people
         if texts is not None and i % settings.text_stride == 0:
             # Every text_stride-th stride frame, before the adaptive skip: a
             # sign does not move because the faces in the frame stopped, and
@@ -388,7 +391,7 @@ def detect_job(job: dict) -> dict:
         hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
             "screens": found_screens, "text": found_text, "plates": found_plates,
-            "heads": found_heads, "hands": found_hands,
+            "people": found_people, "hands": found_hands,
             "skipped_adaptive": adaptive.count,
             "compute": compute, "hashes": hashes}
 
@@ -622,7 +625,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
     held_text: dict[int, list[Detection]] = {}
     plates_found: dict[int, list[Detection]] = {}
     held_plates: dict[int, list[Detection]] = {}
-    heads_found: dict[int, list[Detection]] = {}
+    people_found: dict[int, list[Detection]] = {}
     held_heads: dict[int, list[Detection]] = {}
     hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
@@ -647,7 +650,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         screens_found.update(result.get("screens") or {})
         text_found.update(result.get("text") or {})
         plates_found.update(result.get("plates") or {})
-        heads_found.update(result.get("heads") or {})
+        people_found.update(result.get("people") or {})
         hands_found.update(result.get("hands") or {})
         record.frames_skipped_adaptive += result.get("skipped_adaptive", 0)
         compute, hashes = result["compute"], result["hashes"]
@@ -725,10 +728,18 @@ def run_video(src: Path, dst: Path, settings: Settings,
     # ---- 2f. the head backstop: the head of every person the face detectors
     # missed, held the way plates are. After the tracker, so that a head a
     # tracked face already covers is dropped against the final face masks.
+    # After the zone (2d) too: a person box over one of the frame's hands is
+    # the wearer's forearm, and gives no head.
     want_heads = settings.head_backstop and settings.wants("face")
     if want_heads:
-        from .heads import hold as hold_heads, uncovered
+        from .heads import hold as hold_heads, regions as head_regions, uncovered
 
+        heads_found: dict[int, list[Detection]] = {}
+        for i, people in people_found.items():
+            hands_here = zones[i].hands if 0 <= i < len(zones) else ()
+            found = head_regions(people, (info.height, info.width), settings, hands_here)
+            if found:
+                heads_found[i] = found
         held_heads = uncovered(hold_heads(heads_found, settings, n), per_frame)
         record.heads = sum(len(v) for v in heads_found.values())
         record.head_frames = len(held_heads)

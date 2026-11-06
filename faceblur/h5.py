@@ -267,21 +267,24 @@ def _zone_kept(dets, zone, shape: tuple[int, int], settings: Settings) -> list[b
     """Per detection: did the handled zone leave it clear?
 
     The output check's test (`verify.covered_by_zone` at `zone_cover`) on the
-    polygons `redact` cuts out for that kind: faces by the hands (or the live
-    reach), text, screens and plates by the live reach and the remembered
-    polygons. One crop per polygon group per frame.
+    polygons `redact` cuts out for that kind: faces (and screens, with
+    `zone_screen_needs_hand`) by the hands (or the live reach), text, plates
+    and otherwise screens by the live reach and the remembered polygons.
+    One crop per polygon group per frame.
     """
     if not zone or not dets:
         return [False] * len(dets)
     from .verify import covered_by_zone, zone_crop
-    from .zone import REMEMBERED_PROTECTS
+    from .zone import reach_protects
 
+    protects = reach_protects(settings)
     crops: dict[bool, object] = {}
     kept = []
     for d in dets:
-        group = d.kind in REMEMBERED_PROTECTS
+        group = d.kind in protects
         if group not in crops:
-            crops[group] = zone_crop(shape, zone.for_kind(d.kind, settings.zone_face_needs_hand))
+            crops[group] = zone_crop(shape, zone.for_kind(d.kind, settings.zone_face_needs_hand,
+                                                          protects))
         kept.append(covered_by_zone(d, crops[group]) >= settings.zone_cover)
     return kept
 

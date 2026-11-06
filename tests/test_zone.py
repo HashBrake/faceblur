@@ -23,7 +23,8 @@ from faceblur.redact import alpha_with_zone, build_alpha, redact
 from faceblur.settings import Settings, SettingsError
 from faceblur.zone import (REMEMBERED_PROTECTS, ZoneFrame, alpha_for, build,
                            describe, hand_scale, inside_frame, moved, overlaps,
-                           polygon_area, polygon_for, qualifies, share, windows)
+                           polygon_area, polygon_for, qualifies, reach_protects,
+                           share, windows)
 
 SHAPE = (600, 800)          # a small frame, so the tests are quick
 
@@ -215,6 +216,50 @@ def test_a_remembered_polygon_protects_text_and_screens_only():
     assert z.for_kind("plate") == z.remembered
 
 
+def test_with_screen_needs_hand_the_reach_protects_text_and_plates_only():
+    """T19, long-run defect 2a: a laptop under the reach of a hand busy with
+    something else was left clear. The constant stays; the setting decides."""
+    assert set(reach_protects(Settings())) == {"text", "plate"}
+    assert Settings().zone_screen_needs_hand is True
+    assert set(reach_protects(Settings(zone_screen_needs_hand=False))) == {
+        "text", "screen", "plate"}
+    z = ZoneFrame(live=(square(400, 400, 150),), remembered=(square(100, 100, 50),),
+                  hands=(square(400, 400, 60),))
+    protects = reach_protects(Settings())
+    assert z.for_kind("screen", True, protects) == z.hands
+    assert z.for_kind("text", True, protects) == z.live + z.remembered
+    assert z.for_kind("face", True, protects) == z.hands
+
+
+def test_a_screen_under_the_reach_only_is_painted_and_under_a_hand_is_left_clear():
+    s = Settings(mask=("face", "screen"))
+    sc = screen(350, 350, 120, 100)
+    reach_only = ZoneFrame(live=(square(410, 410, 250),), hands=())
+    frame = np.full((*SHAPE, 3), 128, np.uint8)
+    frame[350:450, 350:470] = np.random.default_rng(3).integers(
+        0, 256, (100, 120, 3), dtype=np.uint8)
+    out, _ = redact(frame, [sc], s, zone=reach_only)
+    inside = (out[350:450, 350:470] != frame[350:450, 350:470]).any(axis=2)
+    assert inside.all(), "every pixel of the screen is changed"
+    remembered = ZoneFrame(remembered=(square(410, 410, 250),))
+    assert (alpha_with_zone(SHAPE, [sc], s, remembered) >= 0.5).any(),         "memory no longer protects a screen"
+    under_hand = ZoneFrame(live=(square(410, 410, 250),), hands=(square(410, 400, 120),))
+    assert not (alpha_with_zone(SHAPE, [sc], s, under_hand) >= 0.5).any()
+    old = Settings(mask=("face", "screen"), zone_screen_needs_hand=False)
+    assert not (alpha_with_zone(SHAPE, [sc], old, reach_only) >= 0.5).any()
+
+
+def test_a_text_line_and_a_screen_under_one_reach_get_different_answers():
+    s = Settings(mask=("text", "screen"))
+    line = Detection(360, 360, 80, 30, 0.9, None, "text", True, 0.9, "text",
+                     ((360, 360), (440, 360), (440, 390), (360, 390)))
+    sc = screen(480, 480, 120, 100)
+    z = ZoneFrame(live=(square(450, 450, 250),))
+    alpha = alpha_with_zone(SHAPE, [line, sc], s, z) >= 0.5
+    assert not alpha[int(line.cy), int(line.cx)], "the text is in the reach"
+    assert alpha[int(sc.cy), int(sc.cx)], "the screen needs a hand"
+
+
 # ------------------------------------------------------ applying it to a mask
 
 def test_a_face_under_the_wearers_hand_is_not_masked():
@@ -236,8 +281,9 @@ def test_a_face_inside_the_reach_but_not_under_a_hand_is_masked():
 
 
 def test_a_screen_inside_the_reach_is_still_protected():
-    """The other half: what the hand is reaching over is what it is holding."""
-    s = Settings(mask=("face", "screen"))
+    """The other half: what the hand is reaching over is what it is holding.
+    Only with `zone_screen_needs_hand` off since T19; text keeps this."""
+    s = Settings(mask=("face", "screen"), zone_screen_needs_hand=False)
     sc = screen(350, 350, 120, 100)
     z = ZoneFrame(live=(square(410, 410, 250),), hands=(square(410, 600, 60),))
     assert build_alpha(SHAPE, [sc], s).any()
@@ -252,7 +298,7 @@ def test_a_face_inside_a_remembered_polygon_is_masked():
 
 
 def test_a_screen_inside_a_remembered_polygon_is_not_masked():
-    s = Settings(mask=("face", "screen"))
+    s = Settings(mask=("face", "screen"), zone_screen_needs_hand=False)
     sc = screen(350, 350, 120, 100)
     z = ZoneFrame(remembered=(square(410, 410, 200),))
     assert build_alpha(SHAPE, [sc], s).any()
@@ -261,8 +307,9 @@ def test_a_screen_inside_a_remembered_polygon_is_not_masked():
 
 def test_a_face_and_a_screen_in_one_remembered_polygon_get_different_answers():
     """The case the two canvases exist for: on one frame, the same polygon
-    protects the screen and not the face."""
-    s = Settings(mask=("face", "screen"))
+    protects the screen and not the face (the screen with
+    `zone_screen_needs_hand` off; a text line takes its place since T19)."""
+    s = Settings(mask=("face", "screen"), zone_screen_needs_hand=False)
     f = face(360, 360, 60)
     sc = screen(500, 500, 120, 100)
     z = ZoneFrame(remembered=(square(450, 450, 250),))

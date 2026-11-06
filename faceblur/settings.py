@@ -168,6 +168,13 @@ class Settings:
     # which is what this costs. Set False to go back to the reach.
     # Report section 17, docs/audits/zone_hands_004310.csv.
     zone_face_needs_hand: bool = True
+    # A screen is protected the same way, only where a hand is on it. The long
+    # field-test run found a laptop showing CAD left clear for thousands of
+    # frames because the wearer's hand, busy with something else beside it,
+    # had its grown reach over the screen (docs/privacy_module_fieldtest.md,
+    # long run, defect 2a). Text and plates keep the reach and the memory.
+    # Set False to go back to the reach.
+    zone_screen_needs_hand: bool = True
     # How far the face protecting region reaches, as a multiple of the palm
     # box. MediaPipe's own hand rectangle is 2.6 palm boxes, which is the crop
     # its landmark model wants rather than the hand's silhouette, and at 2.6 a
@@ -592,6 +599,14 @@ class Settings:
     head_wearer_frac: float = 0.5
     head_wearer_top: float = 0.5
     head_wearer_bottom: float = 0.85
+    # A person box whose top is within this share of the frame height of the
+    # top edge has its head out of the picture: its top strip is a torso or
+    # legs (long run, defect 6).
+    head_top_margin: float = 0.01
+    # A person box over one of the wearer's hands is the wearer's own forearm
+    # near the lens: IoU of the box with a hand quad's bounding box at this or
+    # more, or the head region's centre inside a hand quad, gives no head.
+    head_hand_iou: float = 0.1
     # Heads over time, on the pattern of the plate rules.
     head_min_run: int = 2
     head_gap: int = 6
@@ -827,6 +842,12 @@ class Settings:
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise SettingsError(f"{name} must be above 0 and at most 1, got {value}")
+        if not 0.0 <= self.head_top_margin < 1.0:
+            raise SettingsError(
+                f"head_top_margin must be 0 or more and below 1, got {self.head_top_margin}")
+        if not 0.0 < self.head_hand_iou <= 1.0:
+            raise SettingsError(
+                f"head_hand_iou must be above 0 and at most 1, got {self.head_hand_iou}")
         if not isinstance(self.head_edge_only, bool):
             raise SettingsError(f"head_edge_only must be true or false, got {self.head_edge_only!r}")
         if self.head_min_run < 1:
@@ -1057,7 +1078,7 @@ class Settings:
             "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
             "plate_gate_min_px", "plate_gate_min_run", "plate_device",
             "head_backstop", "head_edge_only", "head_conf", "head_frac", "head_width_frac",
-            "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_min_run", "head_gap", "head_tail", "head_link_iou",
+            "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_top_margin", "head_hand_iou", "head_min_run", "head_gap", "head_tail", "head_link_iou",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "second_chance_scope", "second_chance_margin_seconds",
@@ -1069,7 +1090,8 @@ class Settings:
             "zone", "zone_window", "zone_stride", "zone_nms", "zone_top_frac",
             "zone_min_hand_px",
             "zone_edge_frac", "zone_scale", "zone_memory", "zone_gate_changed",
-            "zone_cover", "zone_face_needs_hand", "zone_face_scale", "zone_device",
+            "zone_cover", "zone_face_needs_hand", "zone_screen_needs_hand", "zone_face_scale",
+            "zone_device",
             "nms_detect", "nms_yunet",
             "watchdog_seconds_per_frame", "watchdog_min_seconds",
             "vad_threshold", "vad_pad_ms", "vad_min_speech_ms", "vad_min_silence_ms")}

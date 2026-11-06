@@ -939,3 +939,32 @@ the owner, not to a text threshold.
 
 Failed: an Orbbec camera file whose last frame (37,590 of 37,591) is a keyframe failed whole with "Could not read this video": `frame_times` gives millisecond timestamps that sit up to 0.5 ms past the real ones, so the tail probe's seek to the last frame aimed just after it, ffmpeg dropped it as before the seek, and with no later frame nothing came out.
 Changed: `segments._first_frame_after_seek` now reports "no frame after the seek" on a clean read as a landing past the end, so `decode_range` retries one frame earlier as it already does for late landings; the real file's tail now decodes to 1 frame, and `tests/test_last_keyframe.py` covers a synthetic clip through `decode_range`, `run_video` and the HDF5 runner (T18).
+
+## Zone and backstop fixes from the long run
+
+Three fixes for long-run defects 2a, 6 and 9 (`docs/privacy_module_fieldtest.md`, section "Long run"), T19-T21:
+
+- **Screens need a hand (T19, defect 2a).** New setting `zone_screen_needs_hand`, on by default. A screen is now protected the way a face is: only by the hand quads (`ZoneFrame.hands`, `zone_face_scale` times the palm box). The grown reach and the remembered polygons no longer protect a screen. `zone.reach_protects(settings)` gives the kinds the reach still protects (text and plates). `redact`, the output check (`verify.residual_job`) and the audit split (`h5._zone_kept`) all use it. Set the setting to False to get the old behaviour.
+- **The backstop needs a visible head and no hand (T20, defect 6).** A person box whose top is within `head_top_margin` (1 % of the frame height) of the top edge gives no head region. A person box over one of the frame's hand quads gives no head region either: IoU of the box with a quad's bounding box at `head_hand_iou` (0.1) or more, or the head region's centre inside a quad. The person boxes are kept from detection, and the head regions are now made in `batch` section 2f, after the zone is built.
+- **The zone does not blink across the stride gap (T21, defect 9).** With `zone_stride` 2, the hands were found only on even frames, so an odd frame had no hand quads and no live reach. `zone.build` now carries the last looked-at frame's qualified hands, moved by the camera shift, over the frames the stride skips, for up to `zone_stride - 1` frames. A looked-at frame with no hands stays empty.
+
+No face-detection threshold changed, and the text numbers are unchanged.
+
+### Measured on FE_015252_LR
+
+Method: two HDF5 runs of `FE_015252_LR.h5` (2,764 frames per camera, `--workers 2`). "Before" is HEAD `c184e1b` (T18), run from an exported copy of the code. "After" is this change, written to `out/t19_fe`. The pilot's own audit has no `zone_kept` and no head backstop. Its screen boxes (590 L, 499 R, all painted) equal before's painted plus kept, so the screen detector did not change between them.
+
+"Flips" counts the face or screen boxes whose state changes between two consecutive frames: a box in `boxes` (painted) on one frame, matched at IoU 0.3 or more to a box in `zone_kept` on the next, or the other way round.
+
+| Camera | Screens painted | Screens kept | Screen flips | Face boxes painted | Faces kept | Face flips | Heads / head frames |
+|---|---|---|---|---|---|---|---|
+| L before | 194 | 396 | 36 | 1,368 | 6 | 9 | 49 / 67 |
+| L after | 394 | 196 | 35 | 1,363 | 11 | 6 | 49 / 67 |
+| R before | 288 | 211 | 37 | 1,432 | 5 | 9 | 33 / 58 |
+| R after | 325 | 174 | 12 | 1,426 | 11 | 7 | 33 / 58 |
+
+- **Screens.** Kept clear by the zone went from 396 to 196 (L) and from 211 to 174 (R). Those 237 boxes are now painted. Every screen still kept has a hand quad on at least half of it. These are small: the median long side is 125 px (L) and 143 px (R), and 354 of the 370 are 200 px or less. None was checked by eye.
+- **Flicker.** Screen flips went from 37 to 12 on R and faces from 9 to 7 and from 9 to 6. On L, screen flips went only from 36 to 35. Most of the L boxes that still flip are 40-60 px wide and 100-190 px tall, the shape of a phone held in the hand (not checked by eye). 24 of the 35 flips start on an odd (carried) frame, so they flip at the next looked-at frame. The likely cause is the hand detector itself: it finds the hand on one looked-at frame and loses it, or moves it, on the next. That is not the stride gap that T21 fixes. Hysteresis across looked-at frames, which defect 9 also proposed, was not added.
+- **Faces kept.** Faces kept went from 6 to 11 and from 5 to 11, because a face under the hand on an odd frame is now kept as it is on the even frames around it. The face boxes painted went down by the same amount (5 L, 6 R).
+- **Heads.** No change on this file: 49/67 and 33/58 before and after. So no head region on this file came from a box at the top edge or over a hand quad. The defect 6 cases were on other long-run files: AM_033011, FE_234012 and 9K_000048. They are covered by unit tests (`tests/test_heads.py`) and still need a long-run rerun to measure.
+- Speed: 142 and 139 ms a frame before, 155 and 141 after, on a shared machine. The change adds no inference.

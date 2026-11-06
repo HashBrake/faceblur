@@ -25,10 +25,14 @@ puts its top strip on a back, a shoulder or the wall above a seated person
 about half the time, and the face consensus already finds most of those
 faces.
 
-Three things are not masked:
+Five things are not masked:
 
 - the wearer's own body: a person box in the bottom band of the frame that
   is wide or starts in the lower half (`is_wearer`) has no head in view;
+- a box whose top is at the top edge of the frame (`head_top_margin`): the
+  head is out of the picture and the top strip is a torso or legs;
+- a box over one of the wearer's hands (`head_hand_iou`, `ZoneFrame.hands`):
+  the wearer's own forearm near the lens;
 - a region a tracked face already covers, on that frame: the face mask hides
   it, and a second mask over it only adds area;
 - a region inside the handled zone, which `redact` leaves clear as it does
@@ -38,6 +42,11 @@ Regions are held over time the way plates are (`screens.hold` under the
 `head_*` settings), so a person seen once is not masked.
 """
 from __future__ import annotations
+
+from typing import Sequence
+
+import cv2
+import numpy as np
 
 from .detect import Detection, iou
 from .settings import Settings
@@ -91,13 +100,51 @@ def at_side_edge(person: Detection, shape: tuple[int, int]) -> bool:
     return person.x <= W * EDGE_SLACK or person.x + person.w >= W * (1 - EDGE_SLACK)
 
 
-def regions(people: list[Detection], shape: tuple[int, int],
-            settings: Settings) -> list[Detection]:
-    """Head regions of one frame's people, the wearer left out, and with
-    `head_edge_only` only from boxes cut by a side edge."""
-    return [head_region(p, settings, shape) for p in people
+def at_top_edge(person: Detection, shape: tuple[int, int], settings: Settings) -> bool:
+    """Does this box start within `head_top_margin` of the top of the frame:
+    its head is above the picture and its top strip is a torso or legs."""
+    return person.y <= shape[0] * settings.head_top_margin
+
+
+def on_hand(person: Detection, head: Detection, hands: Sequence,
+            settings: Settings) -> bool:
+    """Is this box over one of the wearer's hands (`ZoneFrame.hands`): IoU
+    with a hand quad's bounding box at `head_hand_iou` or more, or the head
+    region's centre inside a hand quad. That box is the wearer's own forearm
+    near the lens (long run, defect 6)."""
+    for quad in hands:
+        xs = [p[0] for p in quad]
+        ys = [p[1] for p in quad]
+        box = (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if iou(person, box) >= settings.head_hand_iou:
+            return True
+        if cv2.pointPolygonTest(np.asarray(quad, np.float32),
+                                (float(head.cx), float(head.cy)), False) >= 0:
+            return True
+    return False
+
+
+def candidates(people: list[Detection], shape: tuple[int, int],
+               settings: Settings) -> list[Detection]:
+    """The person boxes that can give a head: the wearer left out, a box whose
+    top is at the top edge left out, and with `head_edge_only` only boxes cut
+    by a side edge. Needs nothing but the frame, so it runs in detection."""
+    return [p for p in people
             if not is_wearer(p, shape, settings)
+            and not at_top_edge(p, shape, settings)
             and (not settings.head_edge_only or at_side_edge(p, shape))]
+
+
+def regions(people: list[Detection], shape: tuple[int, int],
+            settings: Settings, hands: Sequence = ()) -> list[Detection]:
+    """Head regions of one frame's people: `candidates`, less any box over one
+    of that frame's hand quads (`ZoneFrame.hands`)."""
+    out = []
+    for p in candidates(people, shape, settings):
+        head = head_region(p, settings, shape)
+        if not on_hand(p, head, hands, settings):
+            out.append(head)
+    return out
 
 
 def covered(head: Detection, faces: list[Detection]) -> bool:

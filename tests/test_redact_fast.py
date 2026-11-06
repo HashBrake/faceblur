@@ -49,7 +49,7 @@ def _reference_build_alpha(shape, dets, settings):
 
 
 def _reference_alpha_with_zone(shape, dets, settings, zone=None):
-    from faceblur.zone import REMEMBERED_PROTECTS, alpha_for
+    from faceblur.zone import alpha_for, reach_protects
 
     if not zone or not dets:
         return _reference_build_alpha(shape, dets, settings)
@@ -63,8 +63,10 @@ def _reference_alpha_with_zone(shape, dets, settings, zone=None):
             return mask
         return mask * (1.0 - alpha_for(shape, polygons, settings.feather))
 
-    by_reach = [d for d in dets if d.kind in REMEMBERED_PROTECTS]
-    by_hand = [d for d in dets if d.kind not in REMEMBERED_PROTECTS]
+    # T19: a screen is cut by the hands with `zone_screen_needs_hand`.
+    protects = reach_protects(settings)
+    by_reach = [d for d in dets if d.kind in protects]
+    by_hand = [d for d in dets if d.kind not in protects]
     if not by_reach:
         return cut(_reference_build_alpha(shape, dets, settings), on_faces)
     if not by_hand:

@@ -501,7 +501,10 @@ def residual_job(job: dict) -> dict:
                 # phone rather than television. The box itself is in the row
                 # already, and `summarise` groups the runs from it.
                 row["label"] = det.source
-                cover = covered_by_zone(det, zone_mask)
+                # A screen is set aside only under a hand when
+                # `zone_screen_needs_hand` is on, as `redact` cuts it.
+                on_hand = det.kind == "screen" and settings.zone_screen_needs_hand
+                cover = covered_by_zone(det, face_zone if on_hand else zone_mask)
                 if cover >= settings.zone_cover:
                     row["zone"] = round(cover, 3)
                     in_zone += 1
