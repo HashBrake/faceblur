@@ -19,6 +19,12 @@ the cut side (the pilot's AM 032259 frame 2653: box [0, 20, 706, 921], face
 in its top-left corner). There the region sits against the cut edge, and is
 as tall as it is wide, because the box's height is no longer the body's.
 
+By default (`head_edge_only`) only such edge-cut boxes give a head region
+at all. Measured on the pilot clips and 004100, a box away from the edge
+puts its top strip on a back, a shoulder or the wall above a seated person
+about half the time, and the face consensus already finds most of those
+faces.
+
 Three things are not masked:
 
 - the wearer's own body: a person box in the bottom band of the frame that
@@ -79,11 +85,19 @@ def is_wearer(person: Detection, shape: tuple[int, int], settings: Settings) -> 
     return person.w > settings.head_wearer_frac * W or person.y >= H * settings.head_wearer_top
 
 
+def at_side_edge(person: Detection, shape: tuple[int, int]) -> bool:
+    """Is this box cut by the left or right edge of the frame."""
+    W = shape[1]
+    return person.x <= W * EDGE_SLACK or person.x + person.w >= W * (1 - EDGE_SLACK)
+
+
 def regions(people: list[Detection], shape: tuple[int, int],
             settings: Settings) -> list[Detection]:
-    """Head regions of one frame's people, the wearer left out."""
+    """Head regions of one frame's people, the wearer left out, and with
+    `head_edge_only` only from boxes cut by a side edge."""
     return [head_region(p, settings, shape) for p in people
-            if not is_wearer(p, shape, settings)]
+            if not is_wearer(p, shape, settings)
+            and (not settings.head_edge_only or at_side_edge(p, shape))]
 
 
 def covered(head: Detection, faces: list[Detection]) -> bool:

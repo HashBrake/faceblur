@@ -177,7 +177,7 @@ audit > speed > cosmetics.
 - Test: build a fixture frame from a test face image, rotated 90 degrees and
   placed half outside the left edge of a 1600x1300 frame. The pipeline's
   output must change the face pixels. No real footage goes in the test.
-- Status: partly fixed in T13d. A head backstop from YOLOX `person` boxes now covers the AM 032259 frame 2653 half face; the 9K 000106 seated profile is still visible, because YOLOX finds no person there. It adds face mask (AM 0.75 to 1.78 percent) and some false masks. See the report, "Head backstop".
+- Status: partly fixed in T13d. A head backstop from YOLOX `person` boxes cut by the side edge of the frame now covers the AM 032259 frame 2653 half face, raising the AM face mask from 0.75 to 1.56 percent. The 9K 000106 seated profile is still visible, because YOLOX finds no person there; it needs fix (b) or (c). See the report, "Head backstop".
 
 ### 2. Leak: printed notices and a whiteboard are left readable
 

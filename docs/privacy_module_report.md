@@ -717,7 +717,9 @@ region, masked as a face polygon (a rectangle, not an ellipse):
 - left to the handled zone like every face.
 
 It is off on the desktop (`head_backstop` False) and on in the HDF5 `run`
-and `selfcheck`.
+and `selfcheck`. By default (`head_edge_only` True) only a person box cut
+by the left or right frame edge gives a head region; see "Decision: edge
+only" below.
 
 ### The two pilot leaks
 
@@ -803,6 +805,39 @@ mark is met for "on a real person" (100 percent) but not for "covers the
 head" (55 percent). The objects that do occur were on the pilot clip's
 pegboard, at 0.5 to 0.63, and a threshold of 0.7 would also drop the
 colleague at AM 2653 (0.73) close to the line.
+
+### Decision: edge only
+
+The measurements above show the backstop works for the case it was built
+for: a person cut by the side edge of the frame. Everywhere else its head
+strip lands on a back, a shoulder or the wall about half the time, and the
+face consensus already masks most of those faces. So `head_edge_only`
+(default True) makes a head box only from a person box within 1 percent of
+the left or right edge. The wearer rule still applies. With
+`head_edge_only` False it behaves as in the tables above.
+
+Re-run with the HDF5 defaults (backstop on, edge only), same PC:
+
+| clip | face mask, pilot | all boxes | edge only | `heads` | `head_frames` | ms/frame |
+|---|---|---|---|---|---|---|
+| AM 032259 L | 0.75 % | 1.78 % | 1.56 % | 1263 (was 3843) | 688 (was 1653) | 151 |
+| 9K 000106 L | 0.17 % | 0.33 % | 0.20 % | 51 (was 876) | 35 (was 706) | 145 |
+
+- AM 2653 is still covered: region [0, 38, 509, 509] over the colleague's face.
+- These false masks are gone, because the box does not touch a side edge:
+  - AM 0, 3922, 4252: pegboard bag; at 4252 also the strip beside a masked head;
+  - 9K 0, 106, 283: strip above a seated, already masked head;
+  - 9K 432: cushion.
+- These false masks remain, all from boxes cut by a side edge:
+  - AM 2165, 2576: torso of a person whose head is out of frame (371x371 and 465x468);
+  - AM 2960, 4863 and 9K 2756: the wearer's arm or hand at the right edge, reaching up, which starts too high for the wearer rule.
+- Lost against "all boxes": the small real heads away from the edge, which
+  the face consensus also misses. They are the distant seated people on 9K
+  (816, 1667, 1906) and the person on a ladder at AM 4863.
+
+The remaining edge masks are what the AM 0.75 to 1.56 percent buys. The 9K
+side-on seated profile stays open. It needs a face pass on rotated or
+padded edge bands (defect 1, fixes b and c), not a person box.
 
 ### Limits
 

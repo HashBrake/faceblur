@@ -66,8 +66,25 @@ def test_a_face_without_corners_is_still_an_ellipse():
 
 # ------------------------------------------------------------------ exclusions
 
+def test_by_default_only_a_box_cut_by_a_side_edge_gives_a_head():
+    shape = (1300, 1600)
+    middle = person(430, 295, 365, 703)
+    left = person(0, 20, 706, 921)
+    right = person(1000, 270, 600, 832)
+    assert Settings().head_edge_only is True
+    assert heads.regions([middle], shape, Settings()) == []
+    assert len(heads.regions([left, right], shape, Settings())) == 2
+    assert len(heads.regions([middle], shape, Settings(head_edge_only=False))) == 1
+
+
+def test_the_wearer_is_left_out_at_the_edge_too():
+    # Reaching the bottom band and the right edge, starting low: the wearer's arm.
+    arm = person(1175, 1045, 425, 252)
+    assert heads.regions([arm], (1300, 1600), Settings()) == []
+
+
 def test_a_wide_box_on_the_bottom_edge_is_the_wearer():
-    s = Settings()
+    s = Settings(head_edge_only=False)
     wearer = person(200, 400, 600, 600)        # 0.6 of the width, bottom at 1000
     assert heads.regions([wearer], SHAPE, s) == []
     floating = person(200, 200, 600, 600)      # same box, bottom at 800
@@ -133,7 +150,7 @@ def test_the_backstop_is_off_on_the_desktop():
 
 def test_head_settings_are_in_the_record():
     d = Settings(head_backstop=True).to_dict()
-    for name in ("head_backstop", "head_conf", "head_frac", "head_width_frac",
+    for name in ("head_backstop", "head_edge_only", "head_conf", "head_frac", "head_width_frac",
                  "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_min_run", "head_gap", "head_tail",
                  "head_link_iou"):
         assert name in d
@@ -145,7 +162,7 @@ def test_head_settings_are_in_the_record():
     {"head_conf": 0}, {"head_conf": 1.5}, {"head_frac": 0}, {"head_width_frac": 1.2},
     {"head_wearer_frac": 0}, {"head_wearer_top": 0}, {"head_wearer_bottom": 1.1},
     {"head_link_iou": 0}, {"head_min_run": 0},
-    {"head_gap": -1}, {"head_tail": -1}])
+    {"head_gap": -1}, {"head_tail": -1}, {"head_edge_only": "yes"}])
 def test_head_settings_are_validated(change):
     with pytest.raises(SettingsError):
         Settings(**change)
@@ -201,7 +218,9 @@ def test_a_person_the_face_detectors_miss_has_the_head_filled(person_clip, tmp_p
 
     monkeypatch.setattr(ScreenDetector, "detect_people",
                         lambda self, frame: [person(*BODY)])
-    settings = Settings(mask=("face",), head_backstop=True, zone=False, copy_clean=False)
+    # The drawn person stands clear of the frame edge, so edge-only is off.
+    settings = Settings(mask=("face",), head_backstop=True, head_edge_only=False,
+                        zone=False, copy_clean=False)
     out = tmp_path / "person_masked.mp4"
     per_frame: list = []
     record = run_video(person_clip, out, settings, serial_submit, per_frame_out=per_frame)
@@ -230,4 +249,16 @@ def test_without_the_backstop_nothing_is_masked(person_clip, tmp_path, monkeypat
                         lambda self, frame: [person(*BODY)])
     settings = Settings(mask=("face",), zone=False, copy_clean=False)
     record = run_video(person_clip, tmp_path / "plain.mp4", settings, serial_submit)
+    assert record.heads == 0 and record.head_frames == 0
+
+
+def test_edge_only_by_default_leaves_a_person_clear_of_the_edge(person_clip, tmp_path,
+                                                                 monkeypatch):
+    from faceblur.batch import run_video, serial_submit
+    from faceblur.screens import ScreenDetector
+
+    monkeypatch.setattr(ScreenDetector, "detect_people",
+                        lambda self, frame: [person(*BODY)])
+    settings = Settings(mask=("face",), head_backstop=True, zone=False, copy_clean=False)
+    record = run_video(person_clip, tmp_path / "edge_only.mp4", settings, serial_submit)
     assert record.heads == 0 and record.head_frames == 0

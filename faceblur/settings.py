@@ -572,6 +572,12 @@ class Settings:
     # masked as a face (faceblur/heads.py). Off on the desktop; the HDF5 run
     # turns it on.
     head_backstop: bool = False
+    # Only from a person box cut by the left or right frame edge: the case the
+    # backstop fixes (AM 032259 frame 2653). Elsewhere a person's head is
+    # often off the top strip (people bent over, seated, tipped by the lens)
+    # and the face consensus does better; docs/privacy_module_report.md
+    # "Head backstop".
+    head_edge_only: bool = True
     head_conf: float = 0.5
     head_frac: float = 0.22
     head_width_frac: float = 0.6
@@ -821,6 +827,8 @@ class Settings:
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise SettingsError(f"{name} must be above 0 and at most 1, got {value}")
+        if not isinstance(self.head_edge_only, bool):
+            raise SettingsError(f"head_edge_only must be true or false, got {self.head_edge_only!r}")
         if self.head_min_run < 1:
             raise SettingsError(f"head_min_run must be at least 1, got {self.head_min_run}")
         if self.head_gap < 0 or self.head_tail < 0:
@@ -1048,7 +1056,7 @@ class Settings:
             "plate_aspect_max", "plate_stride",
             "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
             "plate_gate_min_px", "plate_gate_min_run", "plate_device",
-            "head_backstop", "head_conf", "head_frac", "head_width_frac",
+            "head_backstop", "head_edge_only", "head_conf", "head_frac", "head_width_frac",
             "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_min_run", "head_gap", "head_tail", "head_link_iou",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
