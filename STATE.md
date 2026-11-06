@@ -1,60 +1,81 @@
 # STATE, handover notes
 
-**2026-11-06 ~21:50, PauliVina day 1 upload, buckets renamed, GreenNode
-network ticket:**
+**2026-11-07 ~02:30, HANDOVER (PauliVina day 1 upload at ~56%, buckets,
+GreenNode ticket).** Session-scratchpad paths below mean
+`C:\Users\CPU13016\AppData\Local\Temp\claude\297a3bc954ea430d\52ac3a8b-597e-403b-83e2-c6937f004a48\scratchpad`
+("scratchpad"). Copies of the scripts (current as of 02:26) are in
+`D:\Claude Projects\FaceBlur-work\pauli_vina_day1\`: `finish_check_links.sh`,
+`add_entry.py`, `bucket_migration.md`, `greennode_state.txt`, and
+`dash_refresh\` (`refresh.py`, `PUSH.md`, `local_totals.json`). The rclone
+binary (`scratchpad\rc\`) and the credentials file `scratchpad\env.sh` stay
+in the scratchpad only (env.sh holds secrets, never copy it into git); both
+scripts source env.sh, so if the scratchpad is gone, re-create the `vs`
+remote first.
 
-- **New batch:** factory PauliVina, day 1 of the collection (recorded
-  2026-11-05), raw, from `E:\Ngày 5-11-2026`: 1,520 files, 526 GiB, 13 device
-  folders (`EGO-001/003/004/009 lỗi/011/013/019`,
-  `ego-005/006/007/008/010/016`). `EGO-009 lỗi` is real data (119 files,
-  39 GB): 6 sessions with healthy videos, 2 with a 0-byte mp4 (`100324`,
-  `141011`), 3 tiny. rclone upload to `vs:player-one/pauli_vina/day1`
-  (private) started 2026-11-06 ~18:16; at ~14:42 UTC it was 18.9% done at
-  ~11.7 MB/s (ETA about 11 h from then). **Not finished** when this was
-  written. When it finishes: run `finish_check_links.sh` (rclone check, then
-  signed 7-day links via `cloud/links.py`), then add the entry
-  "PauliVina - Day 1 (2026-11-05), raw" to the password-locked downloads
-  page (`FaceBlur-work\faceblur_ptl\hub\build_hub.py` + `add_entry.py`),
-  republish artifact https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T and
-  run `put_public.py`. The scripts came from the 2026-11-06 session
-  scratchpad; copies of `finish_check_links.sh`, `add_entry.py`,
-  `dash_refresh\refresh.py` + `PUSH.md` and `bucket_migration.md` are in
-  `D:\Claude Projects\FaceBlur-work\pauli_vina_day1\` (outside the repo).
-- **Buckets renamed to the project name** (S3 cannot rename, so they were
-  migrated): `faceblur` -> `player-one` (7,289 objects, 3.948 TiB, rclone
-  check 0 differences) and `faceblur-blurred` -> `player-one-blurred` (1,152
-  objects, 1.198 TiB, 0 differences, all public-read, listing 403). New
-  permanent public link:
-  https://hcm04.vstorage.vngcloud.vn/player-one-blurred/_download/index.html
-  (page rebuilt with `links.py`, 1,150 files listed). `player-one` stays
-  private (checked: 403). The OLD buckets, the old public link and the
-  current downloads-page entries were not changed. **Owner decides the
-  cut-over:** the old public link and the downloads-page links still point to
-  the old buckets; link users must be told; the old buckets must be deleted
-  later (storage is doubled now, ~5.2 TiB extra at ~28 VND/GB/day). The old
-  raw links on the downloads page expire 2026-11-09..11.
-- **Upload speed:** 4-5 MB/s at first, because rclone's connections were
-  pinned to a phone hotspot Wi-Fi left over from a 4G test. After it was
-  disconnected: ~11-12 MB/s on the wired FPT line. Lesson: after a change of
-  network path, restart rclone or check its connections
-  (`Get-NetTCPConnection` by `LocalAddress`). Hotspot profile "ALZ" is now
-  manual-connect.
+- **Upload (running):** rclone PID 39104,
+  `E:\Ngày 5-11-2026` -> `vs:player-one/pauli_vina/day1` (private), started
+  2026-11-06 18:16, `--transfers 4 --retries 5 --low-level-retries 20`, log
+  `scratchpad\upload3.log`. Batch: factory PauliVina, day 1 (recorded
+  2026-11-05), raw, 1,520 files, 526.3 GiB, 13 device folders (`EGO-009 lỗi`
+  is real data). At 02:24: 289.3 / 518.5 GiB of what this run has to send
+  (56%; ~295 of 526.3 GiB of the tree), 10-11.7 MiB/s, ETA ~6h20m, so done
+  around **08:45 on 2026-11-07**. PC on wired Ethernet (FPT line, public IP
+  1.53.255.144); hotspot Wi-Fi profile "ALZ" is set to manual-connect.
+- **The 44 ERROR lines in upload3.log are old:** all at 2026-11-06
+  19:01:02-19:01:07, when the route switched from the phone hotspot back to
+  Ethernet (`dial tcp: lookup hcm04.vstorage.vngcloud.vn: no such host` on
+  PutObject / CreateMultipartUpload, files in `EGO-001`, `EGO-009 lỗi`,
+  `EGO-013`, `ego-010`). rclone re-tries failed files in a later pass
+  (`--retries 5`); the post-upload `rclone check` proves it. If the check
+  lists them missing, run the resume pass again (`finish_check_links.sh`
+  starts with one). The dashboard shows the count only as a status note.
+- **When rclone exits:** run `finish_check_links.sh` (resume pass,
+  `rclone check --size-only --one-way`, `rclone size`, then `cloud/links.py`
+  `--expire 168h --apply` with the repo `.venv`; link in `scratchpad\link.txt`).
+  Then `add_entry.py` + `FaceBlur-work\faceblur_ptl\hub\build_hub.py` for the
+  entry "PauliVina - Day 1 (2026-11-05), raw" on the password-locked downloads
+  page, republish https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T and run
+  `put_public.py` (public copy
+  https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html).
+  The other raw links on that page expire 2026-11-09..11-11; the new one lasts
+  7 days from signing.
+- **Dashboard:** https://claude.ai/artifact/ETPs41Z42mwxvYuYHe5JKm. Headline
+  is from the log (done = tree total - (Y - X) from the rclone stats line);
+  the per-folder table counts finished files only. It does **not** update by
+  itself: a Claude-session cron refreshed it every 10 min and dies with the
+  session. To refresh: follow `dash_refresh\PUSH.md`.
+- **Buckets:** `player-one` (raw, private) and `player-one-blurred`
+  (public-read) are project-named copies of `faceblur` / `faceblur-blurred`
+  (rclone check 0 differences; details in `bucket_migration.md`). New public
+  link https://hcm04.vstorage.vngcloud.vn/player-one-blurred/_download/index.html.
+  Old buckets, old public link and downloads-page entries are untouched.
+  Storage is doubled (~28 VND/GB/day). **Do not delete anything without the
+  owner.**
 - **GreenNode support** (Teams 'GreenNode-Physical Things Lab', Support 247):
-  they say vStorage HCM04 has 10 Gbps shared ingress and no per-account or
-  per-IP cap. Our public IP is 1.53.255.144 (FPT Telecom, AS18403; an earlier
-  VNPT 14.187.170.221 reading was the office Wi-Fi). Wired route: 9-17% ping
-  loss to 42.1.110.200, while gateway 172.25.16.1 and hops up to 1.52.160.161
-  are clean (pathping stops at hop 5). 4G hotspot: 0% loss but 1.6 MB/s
-  (phone-limited). At 8:56 PM Support 247 forwarded it all to their network
-  team, who will update us. **Open, being monitored** (reply in writing only
-  to questions or test requests; Like the rest). The "share wired + 4G
-  speeds" promise is done.
-- **Upload dashboard** (snapshot-based):
-  https://claude.ai/artifact/ETPs41Z42mwxvYuYHe5JKm, refreshed with
-  `refresh.py` + the `PUSH.md` steps (a session cron every 10 min while the
-  session lives).
-- **Next steps:** finish the upload; add the day 1 link to the downloads
-  page; owner decides the bucket cut-over; wait for GreenNode's network team.
+  at 20:56 on 2026-11-06 they forwarded our wired / 4G / ping / pathping
+  results to their network team and will update; nothing newer at 02:25.
+  Owner's rules: prefix `[Agent]`, a real @mention of Support 247, short
+  friendly messages (short "Hi", one specific thank-you, no stock
+  pleasantries); Like instead of replying when no action is needed; write
+  only for questions, test requests or findings; check every 5 min for 60 min
+  after our last written message, then every 30 min; state in
+  `greennode_state.txt`; take times from PowerShell `Get-Date`. These checks
+  ran as session crons and **stop with the session: the next session must
+  re-create them and tell the owner.** Facts for a reply: 526 GiB, project
+  110156, endpoint hcm04.vstorage.vngcloud.vn, wired 1 Gbps FPT line, ~11
+  MiB/s since the hotspot pin was removed, 9-17% ping loss to 42.1.110.200 on
+  this line vs 0% over 4G, pathping clean to 1.52.160.161 then silent at hop
+  5. HCM04 has 10 Gbps shared ingress, no per-account or per-IP cap (their
+  answer). The earlier "VNPT" IP 14.187.170.221 was the office Wi-Fi, not the
+  wired line.
+- **Lessons:** after any change of network path, check rclone's connections
+  (`Get-NetTCPConnection -OwningProcess <pid>`, by `LocalAddress`; at first
+  they stayed pinned to the hotspot, 4-5 MB/s). Session "cron" loops die with
+  the session. Agents must take times from `Get-Date`.
+- **Open for the owner:** bucket cut-over (and telling link users); whether
+  and when to delete the old buckets; the unresolved packet-loss thread with
+  GreenNode; whether to keep the 10-min dashboard refresh (needs a live
+  session).
 
 **2026-11-05, PTL "raw" is NOT raw (checked):** `D:\Player One - Phase 0 - PTL`
 is old-pipeline faceblur output, a byte-identical copy of
