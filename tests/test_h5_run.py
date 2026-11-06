@@ -225,6 +225,8 @@ def test_cli_prints_the_output_path(tmp_path, capsys):
     # default stays 1.
     assert audit.read(out / "audit.jsonl")[0]["settings"]["zone_stride"] == 2
     assert Settings().zone_stride == 1
+    # And turns on the head backstop (T13d); the desktop default stays off.
+    assert audit.read(out / "audit.jsonl")[0]["settings"]["head_backstop"] is True
 
 
 def test_a_camera_group_with_no_attrs_is_refused_in_one_line(tmp_path, capsys):

@@ -196,7 +196,9 @@ def _screens(settings: Settings):
     from .screens import ScreenDetector
 
     key = (settings.device, settings.screen_labels, settings.screen_conf,
-           settings.screen_nms, settings.screen_pad)
+           settings.screen_nms, settings.screen_pad,
+           # The head backstop decodes `person` from the same graph.
+           settings.head_backstop, settings.head_conf)
     found = _SCREENS.get(key)
     if found is None:
         found = ScreenDetector(settings, threads=_THREADS)
@@ -300,7 +302,11 @@ def detect_job(job: dict) -> dict:
     settings: Settings = job["settings"]
     start, end = job["start"], job["end"]
     bank = _bank(settings)
-    screens = _screens(settings) if settings.wants("screen") else None
+    want_screens = settings.wants("screen")
+    # The head backstop reads people from the screen model's graph, so the
+    # model runs for faces too when the backstop is on (faceblur/heads.py).
+    want_people = settings.head_backstop and settings.wants("face")
+    screens = _screens(settings) if want_screens or want_people else None
     texts = _text(settings) if settings.wants("text") else None
     plates = _plates(settings) if settings.wants("plate") else None
     # The zone is not a kind and does not depend on what is being masked: it
@@ -309,6 +315,7 @@ def detect_job(job: dict) -> dict:
     strong, weak, shifts, found_screens, found_hands = {}, {}, {}, {}, {}
     found_text: dict = {}
     found_plates: dict = {}
+    found_heads: dict = {}
     shape = (info.height, info.width)
     progress = job.get("progress")          # only when the job runs in-process
     prev_small = None
@@ -334,9 +341,16 @@ def detect_job(job: dict) -> dict:
         if screens is not None:
             # The frame is already decoded for the face pass, and this is one
             # more inference on it at a sixteenth of the area.
-            hits = screens.detect(frame)
-            if hits:
-                found_screens[i] = hits
+            if want_screens:
+                hits = screens.detect(frame)
+                if hits:
+                    found_screens[i] = hits
+            if want_people:
+                from .heads import regions
+
+                heads = regions(screens.detect_people(frame), shape, settings)
+                if heads:
+                    found_heads[i] = heads
         if texts is not None and i % settings.text_stride == 0:
             # Every text_stride-th stride frame, before the adaptive skip: a
             # sign does not move because the faces in the frame stopped, and
@@ -374,7 +388,7 @@ def detect_job(job: dict) -> dict:
         hashes.update(finder.model_hashes)
     return {"start": start, "end": end, "strong": strong, "weak": weak, "shifts": shifts,
             "screens": found_screens, "text": found_text, "plates": found_plates,
-            "hands": found_hands,
+            "heads": found_heads, "hands": found_hands,
             "skipped_adaptive": adaptive.count,
             "compute": compute, "hashes": hashes}
 
@@ -608,6 +622,8 @@ def run_video(src: Path, dst: Path, settings: Settings,
     held_text: dict[int, list[Detection]] = {}
     plates_found: dict[int, list[Detection]] = {}
     held_plates: dict[int, list[Detection]] = {}
+    heads_found: dict[int, list[Detection]] = {}
+    held_heads: dict[int, list[Detection]] = {}
     hands_found: dict[int, list] = {}
     shifts: list[tuple[float, float]] = [(0.0, 0.0)] * n
     done_frames = 0
@@ -631,6 +647,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
         screens_found.update(result.get("screens") or {})
         text_found.update(result.get("text") or {})
         plates_found.update(result.get("plates") or {})
+        heads_found.update(result.get("heads") or {})
         hands_found.update(result.get("hands") or {})
         record.frames_skipped_adaptive += result.get("skipped_adaptive", 0)
         compute, hashes = result["compute"], result["hashes"]
@@ -705,6 +722,18 @@ def run_video(src: Path, dst: Path, settings: Settings,
         for i, dets in held_plates.items():
             if 0 <= i < n:
                 per_frame[i] = list(per_frame[i]) + list(dets)
+    # ---- 2f. the head backstop: the head of every person the face detectors
+    # missed, held the way plates are. After the tracker, so that a head a
+    # tracked face already covers is dropped against the final face masks.
+    want_heads = settings.head_backstop and settings.wants("face")
+    if want_heads:
+        from .heads import hold as hold_heads, uncovered
+
+        held_heads = uncovered(hold_heads(heads_found, settings, n), per_frame)
+        record.heads = sum(len(v) for v in heads_found.values())
+        record.head_frames = len(held_heads)
+        for i, dets in held_heads.items():
+            per_frame[i] = list(per_frame[i]) + list(dets)
     record.unconfirmed_runs, record.unconfirmed_frames = unconfirmed_runs(
         weak, per_frame, settings.conf)
     if tracks:
@@ -1062,6 +1091,10 @@ def run_video(src: Path, dst: Path, settings: Settings,
                     for i, dets in held_plates.items():
                         if 0 <= i < n:
                             per_frame[i] = list(per_frame[i]) + list(dets)
+                if want_heads:
+                    # And section 2f.
+                    for i, dets in held_heads.items():
+                        per_frame[i] = list(per_frame[i]) + list(dets)
                 # A seed the tracker dropped goes back as a mask on its own frame.
                 # `min_track` is there so that one spurious detection cannot become
                 # a mask, and a seed is not one: it is a box a second detection

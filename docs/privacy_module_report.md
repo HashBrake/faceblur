@@ -688,3 +688,125 @@ from 4566 to 3684. The rules cost no measurable time (150 ms a frame against
 152). Faces, plates and screens are unchanged. Going by the labelled frames,
 the false text still masked on this camera is mostly pegboard holes and door glass;
 the output has not been checked frame by frame.
+
+## Head backstop
+
+T13d, defect 1 of docs/privacy_module_fieldtest.md: faces at the fisheye rim,
+turned 60 to 90 degrees or cut by the frame edge, are not found by YuNet or
+CenterFace. The backstop (faceblur/heads.py) reads the COCO class `person`
+from the YOLOX screen model, which already runs, so it adds no model and
+costs one more decode of the same inference. Each person box gives a head
+region, masked as a face polygon (a rectangle, not an ellipse):
+
+- the top `head_frac` (0.22) of the box, its middle `head_width_frac` (0.6)
+  across;
+- for a box cut by the left or right edge of the frame, the region sits
+  against that edge and is as tall as it is wide. The lens tips a person
+  leaning in from the rim so his head is in the top corner on the cut side;
+- not for the wearer: a box that reaches the bottom band (bottom at 0.85 H
+  or lower) and is wider than 0.5 of the frame or starts below 0.5 H. The
+  brief's rule (on the bottom edge and wider than half the frame) let
+  through the wearer's legs, lap and arms on every pilot frame looked at:
+  they are 0.24 to 0.65 of the width, start at 0.55 H or lower and one ends
+  at 0.89 H;
+- dropped on a frame where a tracked face already covers it (IoU 0.3, or
+  the face centre inside the region), checked against the tracker's final
+  masks;
+- held like plates: `head_min_run` 2, `head_gap` 6, `head_tail` 3,
+  `head_link_iou` 0.3;
+- left to the handled zone like every face.
+
+It is off on the desktop (`head_backstop` False) and on in the HDF5 `run`
+and `selfcheck`.
+
+### The two pilot leaks
+
+| clip, frame | before | after |
+|---|---|---|
+| AM 032259 frame 2653: colleague's half face at the left edge, about 150x300 px | visible | covered. Person box [0, 20, 706, 921] at 0.73; the region is [0, 38, 509, 509] and hides eyes, nose, mouth and chin; hair above y 38 still shows |
+| 9K 000106 frames 1253, 2255, 2095: seated person at the right edge, profile about 70 px | visible | **still visible**. YOLOX finds no person there, not even at conf 0.3. The only boxes on those frames are the wearer's own lap and arms, correctly left out |
+
+So the backstop closes the cut-off face at the rim, but not the
+side-on seated person. That one needs a different fix: (b) or (c) of
+defect 1, rotated or padded edge bands for the face detector.
+
+A first version with the brief's geometry (centred strip, wearer = wide box
+on the bottom edge) did not cover AM 2653: the strip landed on the wall
+beside the colleague's head. It also masked the wearer's legs on most
+frames: face mask 2.31 percent, 3260 frames carrying a head mask. The
+numbers below are for the shipped rules.
+
+### Extra mask
+
+`python -m faceblur.h5 run <fixture> --workers 2`, same PC as T13a/T13c:
+
+| clip | face mask, pilot | face mask, T13d | `heads` | `head_frames` | frames | ms/frame |
+|---|---|---|---|---|---|---|
+| AM 032259 L | 0.75 % | 1.78 % | 3843 | 1653 | 4864 | 151 |
+| 9K 000106 L | 0.17 % | 0.33 % | 876 | 706 | 2757 | 145 |
+
+T13a had AM at 0.76 percent. The backstop more than doubles the face mask
+on AM: head masks are on a third of its frames. It costs no measurable time
+(151 ms a frame against T13c's 150).
+
+### False masks seen on the contact sheets
+
+Two sheets a run, 8 frames that carry a head mask, under
+`FaceBlur-work\privacy_fieldtest\t13d\`:
+
+- objects on the pegboard read as a person at 0.5 to 0.63: the red bag (AM
+  frames 0, 3922, 4252);
+- the wearer's arm or hand reaching up at the right edge, which starts high
+  so the wearer rule keeps it (AM 2960, 4863; 9K 2756);
+- torsos of people cut by a side edge with their head out of frame, where
+  the edge-anchored square lands on a shirt (AM 2165, 2576);
+- a loose box whose top strip lands above a head the face tracker already
+  masks, on the wall (AM 4252; 9K 0, 106, 283);
+- a pink cushion (9K 432).
+
+Real heads the face detectors did not mask that the backstop did: AM 2653,
+distant seated people on 9K (816, 1667, 1906; small, partly covered) and a
+person on a ladder (AM 4863).
+
+### What it would add on 004100
+
+`eval.measure` replays cached face detections and cannot see the
+backstop, so this was measured directly
+(`privacy_fieldtest\t13d\measure_004100.py`). Face masks came from
+`batch.run_video(mask=("face",))` on
+`footage/ego_AZER76400FE_19700101_004100_camera_left_part0001.mp4`
+(workers 2, backstop off, face mask 0.567 %). YOLOX people were read on
+every 10th frame, giving head regions under the shipped wearer rule. A
+region a face mask on that frame already covers does not count; the rest
+are the backstop's additions:
+
+| `head_conf` | head regions | not covered by a face mask |
+|---|---|---|
+| 0.5 | 163 | 84 (51.5 %) |
+| 0.6 | 135 | 70 (51.9 %) |
+| 0.7 | 114 | 52 (45.6 %) |
+
+I looked at 20 additions sampled at random (seed 0) at 0.5:
+
+- **20 of 20 are on a real person.** None is a coat, bag or other object.
+  This clip is a washroom full of people.
+- **11 of 20 regions contain at least part of a head**: hair, a face, a face
+  in the mirror.
+- **9 of 20 sit on a back or shoulder.** People bent over a sink, or tipped
+  by the tilted camera, have their head at the side of the box, not the top.
+
+At 0.7 the same check gives 20 of 20 on people and about 8 of 20 holding a
+head. Raising the threshold drops real people and does not move the region
+onto the head. **`head_conf` stays 0.5.** The task's rule raises it when
+more than half the additions are objects, and none were. The 70 percent
+mark is met for "on a real person" (100 percent) but not for "covers the
+head" (55 percent). The objects that do occur were on the pilot clip's
+pegboard, at 0.5 to 0.63, and a threshold of 0.7 would also drop the
+colleague at AM 2653 (0.73) close to the line.
+
+### Limits
+
+- A head region is a guess from a box. Bent, seated and sideways people
+  often have the head outside the top strip.
+- A person YOLOX does not see is not helped at all: the 9K seated profile.
+- The wearer's own arm reaching up from the bottom corner still gets a mask.

@@ -564,6 +564,34 @@ class Settings:
     # Where the plate model runs, like zone_device.
     plate_device: str = "auto"
 
+    # --- the head backstop ---------------------------------------------------
+    # Faces the face detectors cannot see: turned 60-90 degrees at the fisheye
+    # rim, or cut in half by the frame edge (docs/privacy_module_fieldtest.md,
+    # defect 1). The YOLOX screen model also knows the COCO class `person`; the
+    # top `head_frac` of a person box, its middle `head_width_frac` across, is
+    # masked as a face (faceblur/heads.py). Off on the desktop; the HDF5 run
+    # turns it on.
+    head_backstop: bool = False
+    head_conf: float = 0.5
+    head_frac: float = 0.22
+    head_width_frac: float = 0.6
+    # The wearer's own body, with no head in view: a person box that reaches
+    # the bottom band (its bottom at or below `head_wearer_bottom` of the frame
+    # height) and is either wider than `head_wearer_frac` of the frame or
+    # starts below `head_wearer_top` of the height. Measured on the pilot
+    # frames: the wearer's legs, lap and arms are boxes 0.24 to 0.65 of the
+    # width whose tops are at 0.55 H or lower and whose bottoms are at 0.89 H
+    # or lower; a colleague close by reaches the bottom too, but his box starts
+    # high (0.02 to 0.3 H).
+    head_wearer_frac: float = 0.5
+    head_wearer_top: float = 0.5
+    head_wearer_bottom: float = 0.85
+    # Heads over time, on the pattern of the plate rules.
+    head_min_run: int = 2
+    head_gap: int = 6
+    head_tail: int = 3
+    head_link_iou: float = 0.3
+
     # --- checking the finished copy ------------------------------------------
     # Detect on the output as well: a face found there, on pixels nothing
     # changed, is one this run missed, and nothing that reads the source can
@@ -788,6 +816,15 @@ class Settings:
             raise SettingsError("plate_min_run and plate_gate_min_run must be at least 1")
         if self.plate_gap < 0 or self.plate_tail < 0:
             raise SettingsError("plate_gap and plate_tail must be 0 or more")
+        for name in ("head_conf", "head_frac", "head_width_frac", "head_wearer_frac",
+                     "head_wearer_top", "head_wearer_bottom", "head_link_iou"):
+            value = getattr(self, name)
+            if not 0.0 < value <= 1.0:
+                raise SettingsError(f"{name} must be above 0 and at most 1, got {value}")
+        if self.head_min_run < 1:
+            raise SettingsError(f"head_min_run must be at least 1, got {self.head_min_run}")
+        if self.head_gap < 0 or self.head_tail < 0:
+            raise SettingsError("head_gap and head_tail must be 0 or more")
         if self.plate_device not in DEVICES:
             raise SettingsError(
                 f"plate_device must be one of {DEVICES}, got {self.plate_device!r}")
@@ -1011,6 +1048,8 @@ class Settings:
             "plate_aspect_max", "plate_stride",
             "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
             "plate_gate_min_px", "plate_gate_min_run", "plate_device",
+            "head_backstop", "head_conf", "head_frac", "head_width_frac",
+            "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_min_run", "head_gap", "head_tail", "head_link_iou",
             "check_output", "check_stride", "check_overlap", "quarantine", "quarantine_min_px",
             "second_chance", "second_chance_min_px",
             "second_chance_scope", "second_chance_margin_seconds",

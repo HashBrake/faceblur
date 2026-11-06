@@ -48,6 +48,8 @@ PAD_VALUE = 114
 
 # The COCO classes that are a screen, by index. This model knows 80 things.
 SCREEN_LABELS: dict[int, str] = {62: "tv", 63: "laptop", 67: "phone"}
+# The COCO class the head backstop reads (faceblur/heads.py).
+PERSON_LABELS: dict[int, str] = {0: "person"}
 
 
 class ScreenModelMissing(FileNotFoundError):
@@ -193,10 +195,29 @@ class ScreenDetector:
         from .detect import model_sha256
         return {self.name: model_sha256(self.model_path)}
 
-    def detect(self, frame: np.ndarray) -> list[Detection]:
+    def _infer(self, frame: np.ndarray) -> tuple[np.ndarray, float]:
+        """The graph's output for this frame, run once however many decodes
+        ask for it: screens and people come from the same inference. The
+        frame itself is held, not its id, so a later frame can never be
+        mistaken for it."""
+        last = getattr(self, "_last", None)
+        if last is not None and last[0] is frame:
+            return last[1], last[2]
         canvas, ratio = letterbox(frame)
         blob = canvas.astype(np.float32).transpose(2, 0, 1)[None]
         raw = self.session.run(None, {self.input_name: blob})[0]
+        self._last = (frame, raw, ratio)
+        return raw, ratio
+
+    def detect_people(self, frame: np.ndarray) -> list[Detection]:
+        """Every COCO `person` at `head_conf`, unpadded, in frame pixels.
+        For the head backstop; no size cap, a person close by is large."""
+        raw, ratio = self._infer(frame)
+        return decode(raw, ratio, self.settings.head_conf, self.settings.screen_nms,
+                      PERSON_LABELS)
+
+    def detect(self, frame: np.ndarray) -> list[Detection]:
+        raw, ratio = self._infer(frame)
         found = decode(raw, ratio, self.settings.screen_conf,
                        self.settings.screen_nms, self.labels)
         h, w = frame.shape[:2]

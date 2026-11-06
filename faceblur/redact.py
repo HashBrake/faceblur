@@ -139,7 +139,11 @@ def grow_quad(corners: Sequence[Sequence[float]], margin: float) -> np.ndarray:
 
 def shape_of(det: Detection) -> str:
     """Which mask shape a box gets. An unknown kind is masked as a polygon:
-    the box itself, which hides everything the detector pointed at."""
+    the box itself, which hides everything the detector pointed at. So is a
+    box that carries its own corners, whatever its kind: the head backstop's
+    face regions (faceblur/heads.py) are rectangles, not ovals."""
+    if det.quad is not None:
+        return POLYGON
     try:
         return kind_of(det.kind).shape
     except ValueError:

@@ -50,6 +50,8 @@ IMAGE_DIGEST_FILE = Path("/etc/faceblur_image_digest")
 # profiled it at 78 ms a frame and the zone has memory (zone_memory) over the
 # frame between. The desktop CLI keeps Settings' 1.
 H5_ZONE_STRIDE = 2
+# `run` and `selfcheck` also turn on the head backstop (faceblur/heads.py);
+# the desktop default stays off.
 
 
 def _dummy_passthrough(f: h5py.File, frames: int) -> None:
@@ -429,7 +431,8 @@ def selfcheck(device: str) -> int:
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
     try:
         settings = Settings(mask=("face", "text", "plate", "screen"), device=device,
-                            zone_stride=H5_ZONE_STRIDE, **_side_devices(device))
+                            zone_stride=H5_ZONE_STRIDE, head_backstop=True,
+                            **_side_devices(device))
         for detector in (detect.DetectorBank(settings), screens.ScreenDetector(settings),
                          text.TextDetector(settings), plates.PlateDetector(settings)):
             detector.detect(frame)
@@ -479,7 +482,8 @@ def main(argv: list[str] | None = None) -> int:
         except UnknownKind as exc:
             ap.error(str(exc))
         settings = Settings(mask=mask, device=args.device, check_output=args.check_output,
-                            zone_stride=H5_ZONE_STRIDE, **_side_devices(args.device))
+                            zone_stride=H5_ZONE_STRIDE, head_backstop=True,
+                            **_side_devices(args.device))
         try:
             results = run(args.input, args.out, settings, args.workers, args.spec_layout)
         except RunFailed as exc:

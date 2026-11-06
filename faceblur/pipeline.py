@@ -115,6 +115,11 @@ class AuditRecord:
     # after it. Zero unless the run was asked to mask plates.
     plates: int = 0
     plate_frames: int = 0
+    # Head regions the backstop found (faceblur/heads.py), before the hold,
+    # and the frames a head mask reached after it and after the faces it
+    # duplicated were dropped. Zero unless the backstop was on.
+    heads: int = 0
+    head_frames: int = 0
     # Stretches where the primary detector saw a box nothing confirmed and no
     # mask covers: hands and objects mostly, faces sometimes. See batch.unconfirmed_runs.
     unconfirmed_runs: list = field(default_factory=list)
