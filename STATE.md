@@ -24,13 +24,22 @@ scratchpad is gone, re-create the `vs` remote first.
   were all re-sent. Details in `finish_report.md`.
 - **Link:** 7-day signed link made 2026-11-07 08:49, expires **~2026-11-14
   08:49**. Entry "PauliVina - Day 1 (2026-11-05), raw" added to the
-  password-locked downloads page; https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T
-  republished (version 4); public copy refreshed at
+  password-locked downloads page.
+- **Downloads page re-signed 2026-11-07 ~13:38:** "PTL raw" and "Phase 0
+  raw" links re-signed (7 days, expire **~2026-11-14 13:38**) from the
+  project buckets `vs:player-one/ptl/in` (444 objects, 159,203,261,533 B)
+  and `vs:player-one/in` (1,449 objects, 1,051,189,092,557 B); both checked
+  0 differences vs the old `faceblur` copies. Page republished
+  (https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T version 5) and the
+  public copy
   https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html
-  (still in the OLD bucket `faceblur`). The other raw links on that page
-  (PTL raw, Phase 0 raw) expire **2026-11-11 ~12:00**: re-sign
-  (`cloud/links.py --expire 168h --apply`), rebuild (`build_hub.py`),
-  republish and `put_public.py` before then if still needed.
+  refreshed (still in the OLD bucket `faceblur`, the one public object
+  there). **All three raw links expire 2026-11-14** (PauliVina ~08:49, PTL
+  and Phase 0 ~13:38): before then, if still needed, re-sign
+  (`cloud/links.py --expire 168h --apply` with `PYTHONUTF8=1`), then
+  `add_entry.py` / `build_hub.py` / `put_public.py` from
+  `D:\Claude Projects\FaceBlur-work\faceblur_ptl\hub` and
+  `D:\Claude Projects\FaceBlur-work\pauli_vina_day1`, and republish.
 - **Windows gotchas hit while finishing:** `cloud/links.py` needs
   `PYTHONUTF8=1` (otherwise rclone's output with the non-ASCII folder
   `EGO-009 lỗi` is decoded with the Windows code page and gives "object not
@@ -45,7 +54,8 @@ scratchpad is gone, re-create the `vs` remote first.
   (public-read) are project-named copies of `faceblur` / `faceblur-blurred`
   (rclone check 0 differences; details in `bucket_migration.md`). New public
   link https://hcm04.vstorage.vngcloud.vn/player-one-blurred/_download/index.html.
-  Old buckets, old public link and downloads-page entries are untouched.
+  Old buckets and old public link are untouched (the downloads page's PTL
+  and Phase 0 raw links now point at `player-one`, see above).
   Storage is doubled (~28 VND/GB/day). **Do not delete anything without the
   owner.**
 - **GreenNode support** (Teams 'GreenNode-Physical Things Lab', Support 247):
