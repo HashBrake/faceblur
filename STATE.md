@@ -1,49 +1,46 @@
 # STATE, handover notes
 
-**2026-11-07 ~02:30, HANDOVER (PauliVina day 1 upload at ~56%, buckets,
-GreenNode ticket).** Session-scratchpad paths below mean
+**2026-11-07 ~09:00, CURRENT STATUS (PauliVina day 1 uploaded, verified,
+link on the downloads page).** Session-scratchpad paths below mean
 `C:\Users\CPU13016\AppData\Local\Temp\claude\297a3bc954ea430d\52ac3a8b-597e-403b-83e2-c6937f004a48\scratchpad`
-("scratchpad"). Copies of the scripts (current as of 02:26) are in
+("scratchpad"). Script copies and notes are in
 `D:\Claude Projects\FaceBlur-work\pauli_vina_day1\`: `finish_check_links.sh`,
-`add_entry.py`, `bucket_migration.md`, `greennode_state.txt`, and
-`dash_refresh\` (`refresh.py`, `PUSH.md`, `local_totals.json`). The rclone
-binary (`scratchpad\rc\`) and the credentials file `scratchpad\env.sh` stay
-in the scratchpad only (env.sh holds secrets, never copy it into git); both
-scripts source env.sh, so if the scratchpad is gone, re-create the `vs`
-remote first.
+`add_entry.py`, `finish_report.md`, `bucket_migration.md`,
+`greennode_state.txt`, `refresh_log.txt`, and `dash_refresh\` (`refresh.py`,
+`PUSH.md`, `local_totals.json`). The rclone binary (`scratchpad\rc\`) and the
+credentials file `scratchpad\env.sh` stay in the scratchpad only (env.sh
+holds secrets, never copy it into git); the scripts source env.sh, so if the
+scratchpad is gone, re-create the `vs` remote first.
 
-- **Upload (running):** rclone PID 39104,
-  `E:\Ngày 5-11-2026` -> `vs:player-one/pauli_vina/day1` (private), started
-  2026-11-06 18:16, `--transfers 4 --retries 5 --low-level-retries 20`, log
-  `scratchpad\upload3.log`. Batch: factory PauliVina, day 1 (recorded
-  2026-11-05), raw, 1,520 files, 526.3 GiB, 13 device folders (`EGO-009 lỗi`
-  is real data). At 02:24: 289.3 / 518.5 GiB of what this run has to send
-  (56%; ~295 of 526.3 GiB of the tree), 10-11.7 MiB/s, ETA ~6h20m, so done
-  around **08:45 on 2026-11-07**. PC on wired Ethernet (FPT line, public IP
-  1.53.255.144); hotspot Wi-Fi profile "ALZ" is set to manual-connect.
-- **The 44 ERROR lines in upload3.log are old:** all at 2026-11-06
-  19:01:02-19:01:07, when the route switched from the phone hotspot back to
-  Ethernet (`dial tcp: lookup hcm04.vstorage.vngcloud.vn: no such host` on
-  PutObject / CreateMultipartUpload, files in `EGO-001`, `EGO-009 lỗi`,
-  `EGO-013`, `ego-010`). rclone re-tries failed files in a later pass
-  (`--retries 5`); the post-upload `rclone check` proves it. If the check
-  lists them missing, run the resume pass again (`finish_check_links.sh`
-  starts with one). The dashboard shows the count only as a status note.
-- **When rclone exits:** run `finish_check_links.sh` (resume pass,
-  `rclone check --size-only --one-way`, `rclone size`, then `cloud/links.py`
-  `--expire 168h --apply` with the repo `.venv`; link in `scratchpad\link.txt`).
-  Then `add_entry.py` + `FaceBlur-work\faceblur_ptl\hub\build_hub.py` for the
-  entry "PauliVina - Day 1 (2026-11-05), raw" on the password-locked downloads
-  page, republish https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T and run
-  `put_public.py` (public copy
-  https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html).
-  The other raw links on that page expire 2026-11-09..11-11; the new one lasts
-  7 days from signing.
-- **Dashboard:** https://claude.ai/artifact/ETPs41Z42mwxvYuYHe5JKm. Headline
-  is from the log (done = tree total - (Y - X) from the rclone stats line);
-  the per-folder table counts finished files only. It does **not** update by
-  itself: a Claude-session cron refreshed it every 10 min and dies with the
-  session. To refresh: follow `dash_refresh\PUSH.md`.
+- **Upload DONE 2026-11-07 08:34 local:** `E:\Ngày 5-11-2026` ->
+  `vs:player-one/pauli_vina/day1` (private). Batch: factory PauliVina, day 1
+  (recorded 2026-11-05), raw, 13 device folders (`EGO-009 lỗi` is real
+  data). 1,520 files, 565,085,037,217 bytes (526.276 GiB), local and
+  destination equal; `rclone check --size-only --one-way` 0 differences.
+  Main run ~14 h (2026-11-06 18:16 to 08:34), ~11-12 MB/s once the hotspot
+  problem was fixed. The resume pass in `finish_check_links.sh` copied the
+  last 10 files (7.7 GiB) that the main run missed after S3 429 (rate limit)
+  errors on ListObjects; the 44 early errors from the 19:01 network switch
+  were all re-sent. Details in `finish_report.md`.
+- **Link:** 7-day signed link made 2026-11-07 08:49, expires **~2026-11-14
+  08:49**. Entry "PauliVina - Day 1 (2026-11-05), raw" added to the
+  password-locked downloads page; https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T
+  republished (version 4); public copy refreshed at
+  https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html
+  (still in the OLD bucket `faceblur`). The other raw links on that page
+  (PTL raw, Phase 0 raw) expire **2026-11-11 ~12:00**: re-sign
+  (`cloud/links.py --expire 168h --apply`), rebuild (`build_hub.py`),
+  republish and `put_public.py` before then if still needed.
+- **Windows gotchas hit while finishing:** `cloud/links.py` needs
+  `PYTHONUTF8=1` (otherwise rclone's output with the non-ASCII folder
+  `EGO-009 lỗi` is decoded with the Windows code page and gives "object not
+  found"); `add_entry.py` used a `%-d` date format (not valid on Windows),
+  fixed in both copies (scratchpad and `FaceBlur-work\pauli_vina_day1\`).
+- **Dashboard** https://claude.ai/artifact/ETPs41Z42mwxvYuYHe5JKm, final
+  state: finished, 100%, 0 unresolved errors (`refresh.py` fixed to ignore
+  rclone "Attempt N/M" summary lines and to show finished). The 10-minute
+  refresh job is stopped and the page has no auto-refresh; log in
+  `refresh_log.txt`.
 - **Buckets:** `player-one` (raw, private) and `player-one-blurred`
   (public-read) are project-named copies of `faceblur` / `faceblur-blurred`
   (rclone check 0 differences; details in `bucket_migration.md`). New public
@@ -53,7 +50,7 @@ remote first.
   owner.**
 - **GreenNode support** (Teams 'GreenNode-Physical Things Lab', Support 247):
   at 20:56 on 2026-11-06 they forwarded our wired / 4G / ping / pathping
-  results to their network team and will update; nothing newer at 02:25.
+  results to their network team and will update; still waiting.
   Owner's rules: prefix `[Agent]`, a real @mention of Support 247, short
   friendly messages (short "Hi", one specific thank-you, no stock
   pleasantries); Like instead of replying when no action is needed; write
@@ -71,11 +68,17 @@ remote first.
 - **Lessons:** after any change of network path, check rclone's connections
   (`Get-NetTCPConnection -OwningProcess <pid>`, by `LocalAddress`; at first
   they stayed pinned to the hotspot, 4-5 MB/s). Session "cron" loops die with
-  the session. Agents must take times from `Get-Date`.
-- **Open for the owner:** bucket cut-over (and telling link users); whether
-  and when to delete the old buckets; the unresolved packet-loss thread with
-  GreenNode; whether to keep the 10-min dashboard refresh (needs a live
-  session).
+  the session. Agents must take times from `Get-Date`. On Windows run
+  Python that parses rclone output with `PYTHONUTF8=1`. S3 429s can make
+  rclone skip whole folders silently: always run the resume pass and
+  `rclone check` after a big upload.
+- **Open for the owner:** bucket cut-over (old `faceblur` /
+  `faceblur-blurred`, the old public link and the downloads-page copy are
+  untouched; new `player-one` / `player-one-blurred` are ready; storage stays
+  doubled until the old ones are deleted, and link users need telling); the
+  GreenNode network thread (waiting on Support 247's network team since
+  20:56 on 2026-11-06); the raw PauliVina data stays in the private
+  `player-one` bucket (blur pipeline not yet run on it).
 
 **2026-11-05, PTL "raw" is NOT raw (checked):** `D:\Player One - Phase 0 - PTL`
 is old-pipeline faceblur output, a byte-identical copy of
