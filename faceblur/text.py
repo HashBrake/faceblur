@@ -351,4 +351,5 @@ def hold(per_frame: dict[int, list[Detection]], settings: Settings,
     # `runs_in` links on `track_iou`, which is why that is set here too.
     return hold_screens(per_frame, settings.with_changes(
         track_iou=settings.text_link_iou, screen_gap=settings.text_gap,
-        screen_tail=settings.text_tail, screen_min_run=settings.text_min_run), frames)
+        screen_tail=settings.text_tail, screen_min_run=settings.text_min_run,
+        screen_hold=settings.text_hold), frames)

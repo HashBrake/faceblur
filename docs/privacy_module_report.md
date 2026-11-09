@@ -1047,3 +1047,94 @@ painted, so 9K has 8.7 boxes a frame for 3-4 real faces. AM keeps the discs
 on the arm (background faces the arm passes in front of) and its remaining
 short tracks are tails and gaps during fast camera moves (blur-shift
 inflation, frames where the shift is not measured).
+
+### T26: what was left after T25
+
+Same three windows, same detection cache, HDF5 settings; scripts and
+outputs in `FaceBlur-work\privacy_fieldtest\t26\` (`run.py`, `rep.py`,
+`peg.py`, `cover.py`, `ev26.py`, stills in `stills\`, crops in `crops\`).
+"base" is HEAD 678aa2c (T25).
+
+**Pegboard tracks (9K), shipped: `face_small_spread` 0.3.** The 4x crops of
+the texture tracks that passed `face_small_conf` (9K tracks 3, 50, 66, 82,
+93, 115, 119, 169, 181, 212) show why they passed: most of their
+confirmations are pegboard or tool handles at 0.39-0.55, and the one to
+three at 0.87-0.92 are a real face the track ran over (the man at the desk;
+track 115's crops show both). The real small faces score alike throughout:
+
+| track | median width | best | median confirmation | best - median |
+|---|---|---|---|---|
+| 9K texture (10 tracks) | 12.1-14.4 | 0.87-0.92 | 0.39-0.52 | 0.39-0.52 |
+| 9K far desk men (1, 122) | 13.4, 13.6 | 0.92 | 0.89 | 0.03 |
+| 9K seated man (2) | 17.3 | 0.92 | 0.80 | 0.12 |
+| 004100 small labelled faces (3, 11, 45) | 15.8-18.4 | 0.64-0.69 | 0.49-0.56 | 0.12-0.16 |
+
+So a track narrower than `face_small_px` whose best confirmation beats its
+median by 0.3 or more is not drawn; only its own confirmations of
+`face_small_conf` or more are, each held `face_hold` frames, because those
+are a face. A plain median floor (0.6 or 0.7) was measured first and cost
+004100 two small faces (recall 58/60, continuity 0.986 -> 0.943), since
+004100's small faces have medians of 0.49-0.56. Landmark geometry (eye
+distance / width 0.42-0.51 both), eye-line tilt (texture 2.8-6.5 degrees,
+faces 1.5-2.0, but overlapping at 39 and 232), nose-position spread and the
+box colour (skin share 0.67-0.87 texture vs 0.70-0.96 faces) did not separate.
+The track's motion was not measured: the desk men are static too.
+
+**Arm discs (AM), measured, shipped off: `arm_corridor_scale`.** A strip
+from each wearer's hand quad (`ZoneFrame.hands`) through its wrist edge to
+the frame border, `scale` hand widths wide; tracker-drawn face boxes
+(interpolation, tails, hold; never a detection) with their centre in it are
+dropped; the last hands are carried `arm_corridor_carry` (10) frames with the
+camera. The nearest-frame-edge strip the brief suggests drops nothing in AM:
+the raised hand is nearest the right edge while the arm comes up from below.
+With the wrist strip at 1.5: AM face boxes 7.41 -> 7.27 a frame but
+count-change frames 73 -> 95, and at frame 604 it removes one of the three
+discs and unmasks a real seated man beside the arm (track 96's interpolated
+box was over his face), while two discs stay. The palm model does not see a
+hand gripping the overhead rail (no hand at 604, none from about 675 to
+905), so the strip is missing on most of the frames that matter. The other
+alternatives: the YOLOX person box touching the bottom edge (raw boxes, all
+600 frames) drops 340-530 tracker boxes, and the drawn frames show it
+removing real background faces (AM 340, 610) because the wearer's box covers
+half the picture; the zone's remembered reach comes from the same missed
+hands. 004100 is unchanged by the strip (recall 60/60, continuity 0.98568).
+
+**Text, screen and plate flicker, measured, shipped off: `text_hold`,
+`screen_hold`, `plate_hold`.** A minimum time shown from a run's first
+sighting, the last box held, as `face_hold`. It does not reduce flicker:
+
+| window | text, base | `*_hold` 15 | `*_hold` 30 |
+|---|---|---|---|
+| 9K boxes/frame, count-change frames, area % | 1.17, 75, 0.333 | 1.61, 82, 0.408 | 2.73, 74, 0.583 |
+| AM | 1.39, 116, 0.284 | 2.03, 130, 0.403 | 3.49, 119, 0.669 |
+| FE | 1.51, 98, 0.301 | 1.94, 104, 0.390 | 2.97, 79, 0.588 |
+
+A run still starts and ends once, so the count changes as often; the held
+box stays where it was last seen while the camera moves, so it is a second
+box beside the re-found line (AM camera-compensated short text tracks 33 ->
+84) and the area grows 22-43 % at 15 frames, far over the 10 % allowed. Most
+text count changes in these windows are lines entering and leaving the
+picture during pans, in two-frame steps from the text stride.
+
+**Result (HDF5 settings, face; text, plate and screen unchanged):**
+
+| window | boxes/frame | cam-comp tracks <= 5 fr | count-change frames | same, ignoring boxes inside another mask | face area % |
+|---|---|---|---|---|---|
+| 9K | 8.71 -> 4.05 | 76 -> 10 | 31 -> 95 | 139 -> 59 | 0.281 -> 0.161 |
+| AM | 7.41 -> 7.24 | 80 -> 79 | 73 -> 88 | | 1.606 -> 1.596 |
+| FE | 4.89 -> 4.78 | 4 -> 4 | 26 -> 25 | | 0.893 -> 0.889 |
+
+9K's outermost masks (no box inside another) fall to 3.40 a frame for 3-4
+real faces; the extra count changes are the held strong boxes of the dropped
+tracks, mostly inside the face's own mask. Every detection at 0.8 or more in
+the three windows is still covered (`cover.py`; AM's one uncovered box at
+frame 700 was uncovered before too). 004100 (`eval.measure`, default
+settings) is unchanged: recall 60/60, off_face mean 0.00216, max 0.05783,
+continuity 0.98568, exposed_40 83, exposed_24_40 50.
+
+What is still wrong: AM keeps two or three discs on the wearer's raised arm
+around clip frames 600-630 (background faces whose tracks are interpolated
+through a fast pan while the arm is in front); nothing tried separates them
+from real faces without unmasking one. Text flicker is unchanged; a hold
+that follows the camera (text boxes moved by the frame shift) is the next
+thing to try, which needs the shifts passed to `screens.hold`.

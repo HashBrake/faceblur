@@ -337,6 +337,9 @@ def hold(per_frame: dict[int, list[Detection]], settings: Settings,
         last_frame, last_det = run.hits[-1]
         for i in range(last_frame, last_frame + settings.screen_tail + 1):
             add(i, last_det)
+        # The minimum time shown (`screen_hold`, `text_hold`, `plate_hold`).
+        for i in range(last_frame + settings.screen_tail + 1, first_frame + settings.screen_hold):
+            add(i, last_det)
     # One box per place per frame: the fill and the tail can both reach the
     # same frame from either side of a gap.
     out: dict[int, list[Detection]] = {}

@@ -268,7 +268,8 @@ def tracker_for(settings: Settings) -> Tracker:
                    gap_camera=settings.gap_follow_camera, hold=settings.face_hold,
                    paint_min_px=settings.face_paint_min_px,
                    small_px=settings.face_small_px, small_conf=settings.face_small_conf,
-                   gap_evidence=settings.face_gap_needs_evidence)
+                   gap_evidence=settings.face_gap_needs_evidence,
+                   small_spread=settings.face_small_spread)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

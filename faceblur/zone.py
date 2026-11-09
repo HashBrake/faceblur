@@ -446,3 +446,82 @@ def describe(zones: Sequence[ZoneFrame], shape: tuple[int, int]) -> dict:
             "zone_share_mean": round(float(np.mean(shares)) if shares else 0.0, 5),
             "zone_share_max": round(float(np.max(shares)) if shares else 0.0, 5),
             "hands_per_frame_mean": round(float(np.mean(live)) if live else 0.0, 3)}
+
+
+def arm_corridor(quad: Sequence, shape: tuple[int, int], scale: float) -> np.ndarray:
+    """The strip the wearer's forearm can lie in, from one hand quad.
+
+    A hand quad (`Hand.quad`, or `ZoneFrame.hands`) is MediaPipe's rotated
+    rectangle with the fingers along its first edge and the wrist along its
+    third, so the forearm leaves the hand through the wrist edge. The strip
+    runs from the quad's centre that way to the frame's border, `scale` times
+    the quad's side wide. The nearest frame edge was tried first and is wrong
+    on this footage: a hand raised to the right of the picture is nearest the
+    right edge while its arm comes up from the bottom (T26).
+    """
+    h, w = shape
+    q = np.asarray(quad, np.float64)
+    c = q.mean(axis=0)
+    u = (q[2] + q[3]) / 2.0 - c
+    norm = float(np.hypot(*u))
+    if norm < 1e-9:
+        u, norm = np.array([0.0, 1.0]), 1.0
+    u = u / norm
+    reach = []
+    for k, limit in ((0, w), (1, h)):
+        if u[k] > 1e-9:
+            reach.append((limit - c[k]) / u[k])
+        elif u[k] < -1e-9:
+            reach.append(-c[k] / u[k])
+    length = max(0.0, min(reach)) if reach else 0.0
+    half = scale * float(np.hypot(*(q[1] - q[0]))) / 2.0
+    n = np.array([-u[1], u[0]]) * half
+    end = c + u * length
+    return np.array([c + n, end + n, end - n, c - n], np.float32)
+
+
+def drawn_by_tracker(det) -> bool:
+    """Did the tracker draw this box rather than a detector give it?"""
+    return det.source == "track"
+
+
+def off_arm(per_frame: Sequence[Sequence], zones: Sequence[ZoneFrame],
+            shape: tuple[int, int], settings: Settings,
+            shifts: Optional[Sequence[tuple[float, float]]] = None) -> list[list]:
+    """`per_frame` less the face boxes the tracker drew in an arm corridor.
+
+    A background face the wearer's raised arm passes in front of keeps its
+    track, and the boxes the tracker draws between two sightings, before and
+    after them (`Detection.source` "track": interpolation, tails, the hold)
+    land on the arm (field test AM_041646, T26). Those boxes are dropped where
+    their centre lies in `arm_corridor` of one of the frame's hands. A box a
+    detector gave is never dropped, so a face in front of the arm is masked
+    whenever it is seen. The palm model loses a hand gripping something above
+    the camera for several frames, so the last hands seen are carried for
+    `arm_corridor_carry` frames, moved with the camera.
+    """
+    scale = settings.arm_corridor_scale
+    if scale <= 0 or not settings.zone:
+        return [list(f) for f in per_frame]
+    out: list[list] = []
+    last: list = []
+    age = 0
+    for i, dets in enumerate(per_frame):
+        zone = zones[i] if i < len(zones) else None
+        hands = list(zone.hands) if zone else []
+        if hands:
+            last, age = hands, 0
+        else:
+            age += 1
+            dx, dy = (shifts[i] if shifts is not None and i < len(shifts) else (0.0, 0.0))
+            last = [moved(p, dx, dy) for p in last] if age <= settings.arm_corridor_carry else []
+            hands = last
+        if not hands or not dets:
+            out.append(list(dets))
+            continue
+        strips = [arm_corridor(p, shape, scale) for p in hands]
+        out.append([d for d in dets if not (
+            d.kind == "face" and drawn_by_tracker(d)
+            and any(cv2.pointPolygonTest(s, (float(d.cx), float(d.cy)), False) >= 0
+                    for s in strips))])
+    return out

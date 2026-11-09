@@ -80,6 +80,13 @@ class Settings:
     # of zero still joins them into a run.
     screen_tail: int = 6
     screen_gap: int = 12
+    # T26: a screen, once masked, stays masked at least this many frames from
+    # its first sighting, the last box held, so a run seen briefly does not
+    # blink; face_hold for the other kinds. text_hold and plate_hold the
+    # same. 0: off. Measured off: at 15 frames text in the field windows
+    # changed count on more frames (AM 116 -> 130) for 22-43 % more text area,
+    # because the held box stays put while the camera moves.
+    screen_hold: int = 0
     # The smallest screen the output-side check will hold a copy back for, as
     # the box's long side. 48 rather than the 24 px faces use, because the
     # thing being hidden is what is on the glass rather than who the glass
@@ -407,11 +414,30 @@ class Settings:
     # windows at 0.87-0.92. 0 for face_small_px: off.
     face_small_px: float = 20.0
     face_small_conf: float = 0.6
+    # T26: such a track whose best confirmation beats the median of its
+    # confirmations by face_small_spread or more took its strong boxes from a
+    # face it ran over (9K pegboard): only those boxes are painted, each held
+    # face_hold frames. Measured on the field windows: 9K 8.71 -> 5.13 face
+    # boxes a frame, every detection at 0.8 or more still covered; 004100
+    # unchanged. 0: off.
+    face_small_spread: float = 0.3
     # A box interpolated across a gap longer than max_gap is painted only on
     # frames where some detector box touches it: a long gap with nothing seen
     # is taken as the face being behind something (the wearer's arm). Off: on
     # 004100 it cost continuity 0.989 -> 0.962 and exposed_40 83 -> 141.
     face_gap_needs_evidence: bool = False
+    # T26: a face box the tracker drew (interpolated, tail or hold, never a
+    # detection) is not painted where its centre lies in the strip from one of
+    # the wearer's hands (`ZoneFrame.hands`) through the wrist to the frame's
+    # border, this many hand widths wide: a background face behind the
+    # wearer's raised arm otherwise puts discs on the arm. The last hands seen
+    # stay for arm_corridor_carry frames, moved with the camera.
+    # See zone.off_arm. 0: off. Measured off (T26): the palm model misses a
+    # hand gripping something overhead, so the discs stay on most frames, and
+    # at 1.5 it unmasked a real background face beside the arm (AM 604) and
+    # raised face count-change frames 73 -> 95.
+    arm_corridor_scale: float = 0.0
+    arm_corridor_carry: int = 10
 
     # --- mask geometry -------------------------------------------------------
     # Ellipse axes as a share of the detector box, rotated to the eye line.
@@ -532,6 +558,7 @@ class Settings:
     text_min_run: int = 2
     text_gap: int = 6
     text_tail: int = 3
+    text_hold: int = 0
     text_link_iou: float = 0.3
     # Rules against what is not text, applied to each frame's quads after the
     # scales are merged and before the hold (`text.false_text`, package T13c).
@@ -599,6 +626,7 @@ class Settings:
     plate_min_run: int = 2
     plate_gap: int = 6
     plate_tail: int = 3
+    plate_hold: int = 0
     plate_link_iou: float = 0.3
     # The output-side check, on the pattern of the text gate. First guesses.
     plate_gate_min_px: int = 24
@@ -936,6 +964,8 @@ class Settings:
         if self.screen_min_run < 1:
             raise SettingsError(
                 f"screen_min_run must be at least 1, got {self.screen_min_run}")
+        if self.screen_hold < 0 or self.text_hold < 0 or self.plate_hold < 0:
+            raise SettingsError("screen_hold, text_hold and plate_hold must be 0 or more")
         if self.screen_tail < 0 or self.screen_gap < 0:
             raise SettingsError("screen_tail and screen_gap must be 0 or more")
         if self.zone_window < 64:
@@ -1000,8 +1030,10 @@ class Settings:
                 or self.face_small_px < 0:
             raise SettingsError("stitch_slack_frac, face_hold, face_paint_min_px and "
                                 "face_small_px must be 0 or more")
-        if not 0.0 <= self.face_small_conf <= 1.0:
-            raise SettingsError("face_small_conf must be between 0 and 1")
+        if not 0.0 <= self.face_small_conf <= 1.0 or not 0.0 <= self.face_small_spread <= 1.0:
+            raise SettingsError("face_small_conf and face_small_spread must be between 0 and 1")
+        if self.arm_corridor_scale < 0 or self.arm_corridor_carry < 0:
+            raise SettingsError("arm_corridor_scale and arm_corridor_carry must be 0 or more")
         if not isinstance(self.face_gap_needs_evidence, bool):
             raise SettingsError("face_gap_needs_evidence must be true or false")
         if not isinstance(self.gap_walk_on_path, bool) or not isinstance(self.gap_follow_camera, bool):
@@ -1106,7 +1138,8 @@ class Settings:
             "continue_after", "weak_run", "track_sure_conf",
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
             "stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
-            "face_paint_min_px", "face_small_px", "face_small_conf", "face_gap_needs_evidence",
+            "face_paint_min_px", "face_small_px", "face_small_conf", "face_gap_needs_evidence", "face_small_spread",
+            "arm_corridor_scale", "arm_corridor_carry",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "adaptive_stride", "adaptive_stride_max", "adaptive_stride_shift",
@@ -1121,13 +1154,13 @@ class Settings:
             "encode_gop_seconds", "nvenc_sessions", "hwaccel",
             "text_sizes", "text_thresh", "text_box_thresh", "text_unclip",
             "text_min_px", "text_max_frac", "text_nms", "text_min_run",
-            "text_gap", "text_tail", "text_link_iou",
+            "text_gap", "text_tail", "text_hold", "text_link_iou",
             "text_min_aspect", "text_square_px", "text_square_bands",
             "text_bright_max", "text_ink_min",
             "text_gate_min_px", "text_gate_min_run", "text_stride",
             "plate_size", "plate_conf", "plate_nms", "plate_min_px", "plate_max_frac",
             "plate_aspect_max", "plate_stride",
-            "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_link_iou",
+            "plate_pad", "plate_min_run", "plate_gap", "plate_tail", "plate_hold", "plate_link_iou",
             "plate_gate_min_px", "plate_gate_min_run", "plate_device",
             "head_backstop", "head_edge_only", "head_conf", "head_frac", "head_width_frac",
             "head_wearer_frac", "head_wearer_top", "head_wearer_bottom", "head_top_margin", "head_hand_iou", "head_min_run", "head_gap", "head_tail", "head_link_iou",
@@ -1137,7 +1170,7 @@ class Settings:
             "hand_rule", "hand_windows", "hand_conf", "hand_presence", "hand_cover",
             "hand_device",
             "screen_labels", "screen_conf", "screen_nms", "screen_pad",
-            "screen_max_area", "screen_min_run", "screen_tail", "screen_gap",
+            "screen_max_area", "screen_min_run", "screen_tail", "screen_gap", "screen_hold",
             "screen_gate_min_px", "screen_gate_min_run",
             "zone", "zone_window", "zone_stride", "zone_nms", "zone_top_frac",
             "zone_min_hand_px",

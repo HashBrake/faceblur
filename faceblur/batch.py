@@ -711,6 +711,14 @@ def run_video(src: Path, dst: Path, settings: Settings,
     if settings.zone:
         for key, value in describe_zone(zones, (info.height, info.width)).items():
             setattr(record, key, value)
+    # The tracker's boxes on the wearer's arm (T26, `zone.off_arm`).
+    from .zone import off_arm
+
+    def arm_cut(masks):
+        return off_arm(masks, zones, (info.height, info.width), settings,
+                       shifts if settings.camera_comp else None)
+
+    per_frame = arm_cut(per_frame)
     if settings.camera_comp:
         mag = np.hypot(*np.asarray(shifts, dtype=np.float64).T) if n else np.zeros(1)
         record.camera_shift_p95 = round(float(np.percentile(mag, 95)), 2)
@@ -1084,6 +1092,7 @@ def run_video(src: Path, dst: Path, settings: Settings,
                 per_frame, tracks = tracker_for(settings).run(
                     strong, weak, shifts if settings.camera_comp else None,
                     (info.height, info.width))
+                per_frame = arm_cut(per_frame)
                 record.second_chance_tracks_added += len(tracks) - record.tracks
                 record.tracks = len(tracks)
                 if settings.wants("screen"):

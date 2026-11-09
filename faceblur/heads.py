@@ -165,7 +165,8 @@ def hold(found: dict[int, list[Detection]], settings: Settings,
 
     return hold_screens(found, settings.with_changes(
         track_iou=settings.head_link_iou, screen_gap=settings.head_gap,
-        screen_tail=settings.head_tail, screen_min_run=settings.head_min_run), frames)
+        screen_tail=settings.head_tail, screen_min_run=settings.head_min_run,
+        screen_hold=0), frames)
 
 
 def uncovered(held: dict[int, list[Detection]],

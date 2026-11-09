@@ -205,4 +205,5 @@ def hold(per_frame: dict[int, list[Detection]], settings: Settings,
 
     return hold_screens(per_frame, settings.with_changes(
         track_iou=settings.plate_link_iou, screen_gap=settings.plate_gap,
-        screen_tail=settings.plate_tail, screen_min_run=settings.plate_min_run), frames)
+        screen_tail=settings.plate_tail, screen_min_run=settings.plate_min_run,
+        screen_hold=settings.plate_hold), frames)

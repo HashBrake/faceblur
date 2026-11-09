@@ -172,7 +172,7 @@ class Tracker:
                  sure_conf: float = 0.0, stitch_slack_frac: float = 0.0,
                  walk_on_path: bool = False, gap_camera: bool = False, hold: int = 0,
                  paint_min_px: float = 0.0, small_px: float = 0.0, small_conf: float = 0.0,
-                 gap_evidence: bool = False):
+                 gap_evidence: bool = False, small_spread: float = 0.0):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
@@ -217,6 +217,11 @@ class Tracker:
         # A box interpolated across a gap longer than max_gap is drawn only on
         # a frame where some detector box touches it.
         self.gap_evidence = gap_evidence
+        # T26: a track narrower than small_px whose strongest confirmation
+        # beats the median of its confirmations by small_spread or more is not
+        # drawn, only its confirmations of small_conf or more, each for `hold`
+        # frames (0: off).
+        self.small_spread = small_spread
         self._boxes = None      # (per_frame, weak) of the last link, for gap_evidence
         self._cum = None        # cumulative camera shift per frame, or None
         self._mag = None        # camera shift magnitude per frame
@@ -650,6 +655,23 @@ class Tracker:
             # handles, 12-15 px) are confirmed many times but never strongly.
             tracks = [t for t in tracks if t.best_conf >= self.small_conf
                       or float(np.median([d.w for d in t.dets.values()])) >= self.small_px]
+        if self.small_px > 0 and self.small_spread > 0:
+            # The pegboard tracks of the 9K window that passed small_conf took
+            # their few strong confirmations (0.87-0.92) from a real face they
+            # ran over and score 0.4-0.5 everywhere else: best minus median
+            # 0.39-0.49. A real small face scores alike throughout: 0.01-0.16
+            # on the field windows and 004100 (T26). Those strong boxes are a
+            # face, so they stay, each held like a short track.
+            mixed = [t for t in tracks if t.best_conf - self._median_conf(t) >= self.small_spread
+                     and float(np.median([d.w for d in t.dets.values()])) < self.small_px]
+            tracks = [t for t in tracks if not any(t is m for m in mixed)]
+            for t in mixed:
+                for k, d in t.dets.items():
+                    if d.source == "continued" or d.confidence < self.small_conf:
+                        continue
+                    for j in range(k, min(n_frames, k + max(1, self.hold))):
+                        cx, cy = self._camera(k, j)
+                        out[j].append(d if j == k else _moved(d, cx, cy))
         for t in tracks:
             frames = sorted(t.dets)
             gap_box = {}
@@ -717,6 +739,13 @@ class Tracker:
                 if m > self.blur_shift and out[i]:
                     out[i] = [_inflate(d, m) for d in out[i]]
         return out
+
+    @staticmethod
+    def _median_conf(t: Track) -> float:
+        """The median score of the track's confirmations: its boxes that are
+        not continuations, at the confirming detector's score."""
+        confs = [d.confidence for d in t.dets.values() if d.source != "continued"]
+        return float(np.median(confs)) if confs else 0.0
 
     def _evidence(self, box: Detection, k: int) -> bool:
         """Does any box the detectors gave on frame k touch `box`?"""
