@@ -1,7 +1,70 @@
 # STATE, handover notes
 
-**2026-11-07 ~09:00, CURRENT STATUS (PauliVina day 1 uploaded, verified,
-link on the downloads page).** Session-scratchpad paths below mean
+**2026-11-09, CURRENT STATUS (unlock fix deployed, logging-server proposal
+waiting on the owner, EgoLabel II manifest made, GreenNode chat state).**
+Nothing is running: no VMs, no uploads, no session crons. The 2026-11-07
+block below is still valid for the buckets, links and scripts.
+
+- **Downloads page unlock fix:** the "still checking" bug on unlock is fixed
+  and deployed. **Pending: the owner tests it on an iPhone** (no result yet).
+- **Per-recipient access logging:** a design was researched and proposed,
+  **not built**. Waiting on owner approval of (1) a small always-on GreenNode
+  VM and its price, (2) the recipient list and labels, (3) log retention.
+  **Do not build it before approval.**
+- **EgoLabel II test set (outside project):** a read-only inventory report
+  and a manifest were made. Manifest:
+  `D:\Claude Projects\FaceBlur-work\egolabel_manifest\footage_manifest.csv`
+  (183 rows, 14 columns, blurred left-camera footage only: PTL delivered via
+  7-day presigned URLs, Phase 0 manual-work sessions via public URLs from
+  `player-one-blurred`); working files in its `work\` subfolder. Caveats:
+  - The PTL presigned URLs in the CSV expire about **2026-11-14 17:xx UTC**
+    (exact time per row in `url_expires_at`) and are sensitive until then:
+    do not paste the CSV anywhere public or into git.
+  - `blur_issue` is true for 157 of 183 rows, because
+    `faceblur-records/held_back.csv` covers almost all of Phase 0 (139 of
+    142), so it barely discriminates.
+  - `player-one/ptl/in` is an older already-blurred output, not true raw
+    (see 2026-11-05 below). PauliVina day 1 is raw and not blurred.
+  - 2 PTL FE rows have no IMU; 4 Phase 0 rows have empty pts files.
+  - Phase 0 manual-work sessions were picked by looking at 3 frames per
+    session; 10 low-confidence sessions were left out.
+  - `*_pts.csv` is in microseconds of the device clock (header
+    `timestamp_us`). Phase 0 file names carry bogus 1970 dates (device clock
+    never set).
+- **GreenNode support chat** (Teams group 'GreenNode-Physical Things Lab'):
+  - Slow upload route: the network team has still not answered; Support
+    247's last word on it was 2026-11-06 8:56 PM.
+  - GPU availability in HCM-3 (2026-11-08/09): H100/H200 unavailable,
+    B200/B300 not offered, RTX PRO 6000 availability being checked by
+    Support 247; vCPU quota raised to 500 and memory to 1k on the HCM
+    account.
+  - RTX 5090 VM questions answered 2026-11-09: a stopped GPU server keeps
+    incurring charges; custom images are charged per GB of storage; an image
+    made from a standard server needs a root volume of at most 100 GB (100 GB
+    is OK); RTX 5090 pricing to come from Thuy.
+  - Still open on their side: RTX PRO 6000 update with hourly price, RTX
+    5090 pricing, the network team's result.
+  - The hourly / 5-minute chat-check crons were session-only and ended with
+    the 2026-11-09 session. **Whoever resumes: re-create an hourly check if
+    wanted.** Chat rules unchanged: prefix `[Agent]`, real @mention, short
+    "Hi", one specific thank-you, Like instead of replying when no action is
+    needed.
+- **Next steps / open for the owner:**
+  1. iPhone test of the unlock fix.
+  2. Approve or reject the access-logging server (VM and price, recipients
+     and labels, retention).
+  3. Re-sign the three raw links on the downloads page before they expire
+     on **2026-11-14** (procedure in the 2026-11-07 block), and the EgoLabel
+     manifest's PTL URLs too if that project still needs them after then.
+  4. Bucket cut-over from old `faceblur` / `faceblur-blurred` to
+     `player-one` / `player-one-blurred`.
+  5. Delete the scratch artifact `S9SnacPpBm6jPKvFFwsNDC` or keep it.
+  6. Whether to blur the raw PauliVina day-1 footage.
+  7. GreenNode: wait for RTX PRO 6000 / RTX 5090 prices and the network
+     team; re-create the chat check.
+
+**2026-11-07 ~09:00 (PauliVina day 1 uploaded, verified, link on the
+downloads page).** Session-scratchpad paths below mean
 `C:\Users\CPU13016\AppData\Local\Temp\claude\297a3bc954ea430d\52ac3a8b-597e-403b-83e2-c6937f004a48\scratchpad`
 ("scratchpad"). Script copies and notes are in
 `D:\Claude Projects\FaceBlur-work\pauli_vina_day1\`: `finish_check_links.sh`,
