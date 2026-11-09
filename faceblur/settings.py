@@ -424,14 +424,15 @@ class Settings:
     # of the 004100 sample (14.9 px), so its recall is unchanged. 0: off.
     # 12, not 14: a 13 px face at the far desk of the 9K field-test window
     # was recognisable when zoomed (T25 review). T30: 8, under the 8.7-9.9 px
-    # far-desk faces of P0_EV; face_tiny_px keeps the pegboard out instead.
+    # far-desk faces of P0_EV and the 9-10 px frontal faces of PV_HV.
     face_paint_min_px: float = 8.0
     # T30: a face track whose median box is narrower than face_tiny_px is
     # painted only if the median of its confirmations is face_tiny_median or
-    # more. Real 9.6-11.3 px faces at the far desks of P0_EV score 0.51-0.59
-    # throughout; the 10.7-11.7 px pegboard tracks of the 9K window 0.42-0.48.
-    # 0 for face_tiny_px: off.
-    face_tiny_px: float = 12.0
+    # more. Off (0): it does not separate. Real 9.6-11.3 px faces at the far
+    # desks of P0_EV score 0.51-0.59, but long frontal 10-12 px faces of
+    # P0_EV, PV_HV and PV_AM (35-170 frames) 0.45-0.47, inside the 0.42-0.48
+    # of the 10.7-11.7 px pegboard tracks of the 9K window.
+    face_tiny_px: float = 0.0
     face_tiny_median: float = 0.5
     # A face track whose median box is narrower than face_small_px is painted
     # only if one of its confirmations scored face_small_conf or more. The

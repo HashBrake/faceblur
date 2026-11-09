@@ -1267,3 +1267,36 @@ frame, short camera-compensated tracks 78 -> 236, count changes 59 -> 177),
 mostly from the straight box beside the camera-path box in pans, and 9K has
 0.9 more boxes a frame. Privacy first: these are the false masks the brief
 accepted for keeping every real face.
+
+**Second pass: the whole-stream regressions (T27).** The rerun of the field
+streams listed real faces the 6 Nov code masked and HEAD left bare, checked on
+crops. Each was cut from the raw stream with a 10 s lead-in, rebased to 0 and
+replayed; the check follows the 6 Nov audit's boxes of that face frame to frame
+and counts the frames a replay covers (half the box or more).
+
+| case (stream frames, box width) | 6 Nov | HEAD (2ac722f) | first T30 set (tiny rule 12 / 0.5) | shipped |
+|---|---|---|---|---|
+| P0_EV f19009-19043 (16-48 px) | 35/35 | 35/35 | 35/35 | 35/35 |
+| P0_EV f19059-19141 (8-27 px, frontal) | 83/83 | 4/83 | 5/83 | 83/83 |
+| PV_HV f9140-9176 (9-10 px, frontal) | 37/37 | 0/37 | 37/37 | 37/37 |
+| PV_HV f21565-21647 (10-14 px, glasses) | 83/83 | 0/83 | 0/83 | 83/83 |
+| PV_AM f13866-14033 (10-31 px, capped worker) | 168/168 | 0/168 | 0/168 | 168/168 |
+| P0_D5 f43465-43478 (29-47 px, head turned) | 14/14 | 5/14 | 14/14 | 14/14 |
+
+The three faces the tiny rule dropped are long tracks (35-170 frames) of
+10-12 px faces whose confirmations have medians of 0.45-0.47 (best 0.61-0.63),
+inside the 0.42-0.48 of the 9K pegboard tracks, so the rule does not separate
+them and ships off (`face_tiny_px` 0); the floor stays at 8. The PV_HV f9140
+case (9-10 px) needs the floor under 9.
+
+| window | HEAD | first T30 set | shipped (tiny rule off) |
+|---|---|---|---|
+| 9K boxes/frame, cam-comp tracks <= 5 fr, count changes | 5.13, 14, 88 | 6.00, 22, 126 | 8.77, 31, 170 |
+| AM | 7.23, 78, 59 | 9.24, 236, 177 | 9.24, 236, 177 |
+| FE | 4.88, 2, 21 | 4.92, 15, 32 | 5.48, 35, 40 |
+| P0_D5 / EV (c) / EV (a) real-face coverage | 0.63 / 0.50 / 0.39 | 0.97 / 0.94 / 0.89 | 0.97 / 0.94 / 0.89 |
+
+9K stays well under the 6 Nov 18.68 boxes a frame (506 short tracks) but has
+3.6 more than HEAD, the 10-12 px pegboard tracks that the floor kept out.
+004100 is the same as the first set: recall 60/60, continuity 0.98569,
+exposed_40 81, exposed_24_40 49, off_face mean 0.00241, max 0.05841.

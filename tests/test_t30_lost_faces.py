@@ -132,6 +132,22 @@ def test_a_tiny_track_needs_a_face_like_median_not_a_floor():
     assert drawn(out, 0) == 0
 
 
+def test_a_long_frontal_10px_face_is_painted_by_default():
+    # T27's regressions: PV_HV f21565-21647 (10-14 px, 83 frames) and P0_EV
+    # f19059-19141: long tracks of 10-11 px faces, best 0.61-0.63, median
+    # confirmation 0.45-0.47. The 12 px floor and a 0.5 median rule drop them.
+    s = Settings()
+    frames = [[face(100, w=10.0 + (i % 3), conf=(0.62 if i == 40 else 0.46 + 0.01 * (i % 3)))]
+              for i in range(83)]
+    out, tracks = tracker_for(s).run(frames, [[] for _ in range(83)])
+    assert len(tracks) == 1
+    assert all(covers(out, k, 105.0, 105.0) for k in range(83))
+    out, _ = tracker_for(s.with_changes(face_paint_min_px=12.0)).run(frames, [[] for _ in range(83)])
+    assert not any(out)
+    out, _ = tracker_for(s.with_changes(face_tiny_px=12.0)).run(frames, [[] for _ in range(83)])
+    assert not any(out)
+
+
 def test_the_default_small_rules_keep_the_far_ev_faces():
     s = Settings()
     tr = Tracker(min_track=2, tail=0, tail_before=0, paint_min_px=s.face_paint_min_px,
@@ -150,7 +166,7 @@ def test_the_default_small_rules_keep_the_far_ev_faces():
 def test_t30_settings_defaults_and_passing():
     s = Settings()
     assert (s.gap_walk_path_px, s.gap_also_straight, s.face_tiny_px, s.face_tiny_median) == (
-        32.0, True, 12.0, 0.5)
+        32.0, True, 0.0, 0.5)
     assert (s.face_paint_min_px, s.face_small_conf, s.face_small_spread, s.stitch_slack_frac) == (
         8.0, 0.55, 0.4, 0.5)
     tr = tracker_for(Settings(gap_walk_path_px=0, gap_also_straight=False, face_tiny_px=0,
