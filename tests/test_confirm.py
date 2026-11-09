@@ -54,14 +54,15 @@ def test_confirmation_reports_score_and_third():
     assert confirmation(d, raw_with(cf=0.2, flip=0.4, third=0.7), Settings()) == (0.4, True)
 
 
-def test_a_large_confirmed_face_may_continue_but_not_start():
-    """300 px on a 1600 px frame is over the 15 percent start cap and under
-    the 35 percent growth cap: weak (continuation only), never strong."""
+def test_a_large_confirmed_face_is_a_confirmed_face():
+    """300 px on a 1600 px frame is over the 15 percent cap and under the 35
+    percent growth cap: confirmed, it is a face like any other (T29; it used
+    to be a continuation only, and a close face lost its mask)."""
     s = Settings()
     r = raw_with(cf=0.8, at=(100, 100, 300, 300))
-    assert filter_candidates(r, s, SHAPE) == []
-    weak = weak_candidates(r, s, SHAPE)
-    assert len(weak) == 1 and weak[0].verified
+    kept = filter_candidates(r, s, SHAPE)
+    assert len(kept) == 1 and kept[0].verified and kept[0].confidence == pytest.approx(0.8)
+    assert weak_candidates(r, s, SHAPE) == []
 
 
 def test_a_large_unconfirmed_box_is_nothing():

@@ -148,9 +148,9 @@ Pixels are destroyed only when several independent checks agree:
    (mirror reflections, far faces). Hands are large, so they never take this
    road.
 5. The box must be a plausible face: at most 15 percent of the frame's long
-   side, and roughly square. A confirmed track may follow a face that grows
-   past that, to 35 percent, as a person walks up to the camera; a box that
-   large can never start a track.
+   side, and roughly square. Past that, up to 35 percent, a box is a person
+   close to the camera: it counts only when it passes the confirmation, and then
+   it starts and keeps a track like any confirmed face.
 6. A tracker links detections across frames. A face must be seen at least twice,
    close together, before any pixel is touched. The camera's own movement
    between frames, measured by phase correlation, is taken out of the

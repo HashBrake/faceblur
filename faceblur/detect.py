@@ -682,6 +682,17 @@ def filter_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Det
                 score, _ = confirmation(d, raw, settings)
                 if score >= settings.verify_conf_agree:
                     primary.append(replace(d, verified=True, confidence=score))
+        # A face larger than max_face_frac, up to grow_face_frac, that passes
+        # the same confirmation is a confirmed face too: a person close to the
+        # camera. As a continuation only it kept no track alive past weak_run
+        # and started none, so a close face lost its mask for seconds, and to
+        # the end of a stream that ended on it (T29, PV_BJ_072232).
+        grow = max(settings.grow_face_frac, settings.max_face_frac)
+        for d in raw.get("yunet", []):
+            if d.score >= settings.conf and not _plausible(d, shape, settings) \
+                    and _plausible(d, shape, settings, grow) and confirmed(d, raw, settings):
+                score, _ = confirmation(d, raw, settings)
+                primary.append(replace(d, verified=True, confidence=score))
     return nms_detections(primary, settings.nms_detect)
 
 
@@ -691,6 +702,8 @@ def weak_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Detec
     Only the tracker uses these, and only to continue a track that confirmed
     detections already started. Two kinds: boxes between conf_weak and conf,
     and boxes at full threshold that the second detector did not confirm.
+    A confirmed box past max_face_frac is not one: it is a confirmed face
+    (`filter_candidates`).
     """
     source = "centerface" if settings.engine == "centerface" else "yunet"
     # Down to conf_weak_long: the tracker lets only an established track use
@@ -702,16 +715,8 @@ def weak_candidates(raw: RawCandidates, settings: Settings, shape) -> list[Detec
         for d in raw.get("yunet", []):
             if d.score < settings.conf:
                 continue
-            if _plausible(d, shape, settings):
-                if not confirmed(d, raw, settings):
-                    weak.append(d)
-            elif _plausible(d, shape, settings, max(settings.grow_face_frac,
-                                                    settings.max_face_frac)) \
-                    and confirmed(d, raw, settings):
-                # Larger than a face may be to start a track, confirmed all
-                # the same: a person walking up to the camera. A track that
-                # exists may follow it.
-                weak.append(replace(d, verified=True))
+            if _plausible(d, shape, settings) and not confirmed(d, raw, settings):
+                weak.append(d)
     return nms_detections(weak, settings.nms_detect)
 
 

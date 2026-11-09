@@ -293,9 +293,10 @@ class Settings:
     # real face in the Ego footage was 150 px of 1600. False positives ran to 800.
     # 0.15 of 1600 is 240 px.
     max_face_frac: float = 0.15
-    # A confirmed track may follow a face that grows past max_face_frac, up to
-    # this share, as the person walks up to the camera. A box that large can
-    # continue a track but never start one. Never below max_face_frac.
+    # A face past max_face_frac, up to this share, is a person close to the
+    # camera. A box that large counts only when the second detector confirms
+    # it, and then starts and keeps a track like any confirmed face (T29; it
+    # used to only continue one). Never below max_face_frac.
     grow_face_frac: float = 0.35
     # Faces are roughly square. Anything wider or taller than this is not one.
     min_aspect: float = 0.4

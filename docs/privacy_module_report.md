@@ -1138,3 +1138,61 @@ through a fast pan while the arm is in front); nothing tried separates them
 from real faces without unmasking one. Text flicker is unchanged; a hold
 that follows the camera (text boxes moved by the frame shift) is the next
 thing to try, which needs the shifts passed to `screens.hold`.
+
+## T29: a close face lost at the end of a stream
+
+The second field run's PV_BJ_072232 (ego-005, right camera, 46,140 frames)
+had no mask on a close, masked man's face for the last frames of the stream
+(cloud audit: none from 46126 to 46139). Reproduced on the last 91 s cut
+from the source (2,730 frames, stream copy, timestamps rebased to 0), packed
+as `rgb_ego_center_right` and run through `faceblur.h5 run` with its
+defaults, and through `batch.run_video` with the desktop defaults: the face
+had no box from 46114 to 46139 in both. Scripts and outputs in
+`FaceBlur-work\privacy_fieldtest\t29\` (`run.py`, `dets.py`, `bigcover.py`,
+`tailcmp.py`, `report.py`, `ev29.py`).
+
+**Cause: the size cap, not the stream end.** Every frame of the cut was
+detected (no decode, range or chunk problem). Over the last 30 frames the
+face is a YuNet box of 260-350 px that CenterFace confirms (0.53-0.65), but
+`max_face_frac` (0.15 of 1600 = 240 px) made a confirmed box that large a
+continuation only (`weak_candidates`): it could follow a track but never
+start one and never counted as a confirmation. The track that held the face
+was last confirmed by a box under 240 px at 46098, continued on the large
+boxes to 46109, then lost the face for eight frames while the man bowed his
+head (46110-46117); when the face came back it was only ever large, so no
+track could start again, and the stream ended. The same rule leaks in the
+middle of the stream: the large confirmed boxes that no mask covered were
+417 on 405 of the cut's 2,730 frames, in runs of up to 107 frames (clip
+frames 1366-1472; 1161-1240 is a fully visible face at 1,487 s that the
+field output also left unmasked), and a track that does follow a close face
+stopped `weak_run` (30) frames after its last box under 240 px (clip frames
+915-941).
+
+**Change:** a box between `max_face_frac` and `grow_face_frac` (35 %) that
+passes the same confirmation is a confirmed face (`filter_candidates`), with
+its confirmation score; it is no longer a weak box. No new setting; the
+consensus thresholds are untouched. The first frames of a stream behave the
+same way (tested): the tracker has no rule specific to either end, and a
+track of two or more confirmations on the first or last frames is drawn to
+the edge. One confirmation on the very last frame stays unmasked there, as
+one confirmation does anywhere (`min_track` 2).
+
+| cut, last 91 s of PV_BJ_072232 | before | after |
+|---|---|---|
+| close face masked, stream frames 46110-46139 (HDF5) | 4 of 30 (46110-46113) | 30 of 30 |
+| same, desktop defaults | 4 of 30 | 30 of 30 |
+| confirmed boxes over 240 px with no mask on them (HDF5) | 417 of 1,061, on 405 frames | 21, on 21 frames |
+| same, desktop defaults | 425, on 413 frames | 19, on 19 frames |
+| face mask share of the picture (HDF5) | 3.16 % | 4.42 % |
+| `faceblur.h5 run` of the cut: close face in the audit, 46110-46139; picture masked | 4 of 30; 3.46 % | 30 of 30; 4.72 % |
+
+Of the 21 left, four (46106-46109) are a palm-model "hand" quad over the
+man's head that the handled zone clears the face under (a zone false hand,
+not this change); the rest are single frames. The new masks that are not a
+face: a white cup on the cut (six tracks of one or two detections, each held
+`face_hold` frames), two of the wearer's hands, and in the 9K window the
+wearer's fist close to the lens for six frames (face boxes 2429 -> 2435, area
+0.161 -> 0.188 %). The AM and FE windows are unchanged (face, text, plate and
+screen numbers identical to T26). 004100 (`eval.measure`, default settings)
+is unchanged: recall 60/60, off_face mean 0.00216, max 0.05783, continuity
+0.98568, exposed_40 83, exposed_24_40 50.
