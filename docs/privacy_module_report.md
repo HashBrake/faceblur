@@ -1196,3 +1196,74 @@ wearer's fist close to the lens for six frames (face boxes 2429 -> 2435, area
 screen numbers identical to T26). 004100 (`eval.measure`, default settings)
 is unchanged: recall 60/60, off_face mean 0.00216, max 0.05783, continuity
 0.98568, exposed_40 83, exposed_24_40 50.
+
+## T30: real faces the speck rules unmasked on the P0 footage
+
+Comparing the 6 Nov code with the T25/T26 rules on the new right-camera
+footage showed real faces masked before and visible now. The P0_D5 (c) and
+P0_EV (c) and (a) windows were cut again from the raw files (10 s lead-in,
+timestamps rebased to 0), detected once, and their tracker input replayed with
+every T25/T26 setting off (the 6 Nov behaviour) and at HEAD (2ac722f), with an
+origin tag on every box. Scripts and stills in `FaceBlur-work\privacy_fieldtest\t30\`
+(`run.py`, `replay.py`, `lost.py`, `cand.py`, `speck.py`, `montage.py`, `draw.py`,
+`stills\`). Coverage below is the share of the 6 Nov boxes of the real-face
+tracks (picked by eye on crops) that a setting set still covers.
+
+**Causes, one setting at a time.**
+- P0_D5 43465-43480, the woman in the striped shirt: her head is turned and
+  YuNet sees it at 0.53-0.69 on every frame, but CenterFace never confirms it,
+  so she has no track. On 6 Nov she was masked only by the gap walk of a 38 px
+  track beside her (25 confirmations, best 0.82, a 35-frame gap), which masked
+  every box near its path. `gap_walk_on_path` alone removes her; nothing else
+  does.
+- P0_EV far desks, 8.7-11.3 px faces (a man in a green shirt, the faces behind
+  the monitors): `face_paint_min_px` 12; a 9.6 px face that peaks at 0.585 also
+  `face_small_conf` 0.6. A 12.5 px head (best 0.85, median 0.46):
+  `face_small_spread` 0.3. Confirmed 17-24 px faces (best 0.70-0.92) during the
+  fast pans: their gap boxes follow the measured camera path, which sits beside
+  the face where the shift is wrong (`gap_follow_camera`), and the 0.25 stitch
+  cap broke their tracks into pieces the small rules then dropped
+  (`stitch_slack_frac`). In P0_EV (a) HEAD covers 0.39 of the real faces' 6 Nov
+  boxes; with the size rules fixed, the camera path off gives 0.73, the stitch
+  cap off 0.64, both 0.94.
+
+**Changes.** Three new settings and five defaults; the consensus thresholds
+are untouched.
+- `gap_walk_path_px` 32 (new): only a track narrower than this keeps its gap
+  walk to the path; a wider one masks every box near the path as before T25.
+  16 and 20 also keep the woman but double the AM flicker (below).
+- `gap_also_straight` on (new): the straight-line gap box is masked as well as
+  the camera-path box where the two differ (IoU under 0.5). Turning the camera
+  path off instead covers P0_EV as well but loses AM's real faces (0.86 of the
+  HEAD boxes still covered).
+- `face_tiny_px` 12 / `face_tiny_median` 0.5 (new) and `face_paint_min_px` 8:
+  a track under 12 px is painted only if the median of its confirmations is 0.5
+  or more. The real 9.6-11.3 px EV faces have medians of 0.51-0.59, the
+  10.7-11.7 px pegboard tracks of 9K 0.42-0.48.
+- `face_small_conf` 0.55, `face_small_spread` 0.4, `stitch_slack_frac` 0.5.
+
+| setting set | D5 woman | EV (c) | EV (a) | 9K boxes/frame, cam-comp tracks <= 5 fr, count changes | AM | FE |
+|---|---|---|---|---|---|---|
+| 6 Nov (all off) | 1.00 | 1.00 | 1.00 | 18.68, 506, 480 | | |
+| HEAD | 0.63 | 0.50 | 0.39 | 5.13, 14, 88 | 7.23, 78, 59 | 4.88, 2, 21 |
+| floor 9, conf 0.55, spread 0.4, path 20 | 1.00 | 0.80 | | 10.16, 23, 111 | | |
+| floor 8 + tiny 12/0.5, conf 0.55, spread 0.4, path 16 | 1.00 | 0.81 (floor 9, no tiny rule) | 0.57 | 7.42, 22, 110 | 8.07, 188, 288 | |
+| same + stitch 0.5 + camera path off | 1.00 | 0.97 | 0.92 | 5.61, 27, 112 | 8.17, 295, 302 | 5.04, 21, 75 |
+| same + stitch 0.5 + straight box too | 1.00 | 0.97 | 0.92 | 6.01, 25, 130 | 9.79, 330, 339 | 5.08, 26, 79 |
+| **shipped: the same with path 32** | 1.00 | 0.94 | 0.89 | 6.00, 22, 126 | 9.24, 236, 177 | 4.92, 15, 32 |
+
+The boxes the shipped set still leaves uncovered in the EV windows were looked
+at on crops: a figurine on a desk, the backs of heads, and frames where the
+interpolated box sits on blur with no face in it. The 9K far-desk men
+(13-14 px), the seated man and the FE far man stay painted in every frame
+HEAD painted them; of 9K's boxes HEAD painted, 0.80 are still covered, the
+rest pegboard tracks the wider stitch now joins. 004100 (`eval.measure`,
+default settings): recall 60/60, continuity 0.98568 -> 0.98569, exposed_40
+83 -> 81, exposed_24_40 50 -> 49, off_face mean 0.00216 -> 0.00241, max 0.05783
+-> 0.05841 (0.00221 and 0.05783 without the straight box).
+
+What it costs: AM's flicker comes back in part (face boxes 7.23 -> 9.24 a
+frame, short camera-compensated tracks 78 -> 236, count changes 59 -> 177),
+mostly from the straight box beside the camera-path box in pans, and 9K has
+0.9 more boxes a frame. Privacy first: these are the false masks the brief
+accepted for keeping every real face.

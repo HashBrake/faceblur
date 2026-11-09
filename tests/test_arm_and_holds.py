@@ -214,7 +214,7 @@ def test_the_spread_rule_leaves_large_tracks_alone_and_skips_continuations():
 
 def test_face_small_spread_setting():
     from faceblur.pipeline import tracker_for
-    assert Settings().face_small_spread == 0.3
+    assert Settings().face_small_spread == 0.4       # T30: 0.3 unmasked a far head of P0_EV
     assert tracker_for(Settings(face_small_spread=0.2)).small_spread == 0.2
     assert "face_small_spread" in Settings().to_dict()
     for bad in (-0.1, 1.5):

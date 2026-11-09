@@ -384,17 +384,34 @@ class Settings:
     # docs/privacy_module_report.md, "Tracker: specks and flicker".
     # The per-frame stitch slack is at most this share of the face's size, so
     # a 15 px face is not joined to a box 360 px away 45 frames later; 0 keeps
-    # the plain stitch_slack for every size.
-    stitch_slack_frac: float = 0.25
+    # the plain stitch_slack for every size. T30: 0.5, not 0.25 (only faces
+    # under 16 px are capped now): on P0_EV (an office in fast pans) 0.25
+    # broke the tracks of 9-24 px faces into pieces the small-face rules then
+    # dropped.
+    stitch_slack_frac: float = 0.5
     # The gap walk steps only onto a box that overlaps where it predicts the
     # face (overlap, or the box's centre inside the prediction), one box a
     # frame, and such a box is masked merged with the track's own box of that
     # frame when the two overlap, never as a separate mask. Off: every box
     # near the path is masked.
     gap_walk_on_path: bool = True
+    # T30: the walk keeps to its path only for a face track whose median box
+    # is narrower than this (source pixels); a wider track's walk masks every
+    # box near its path, as before T25. The specks were small boxes around
+    # small faces, but a weak-only face next to a larger track (P0_D5, a
+    # woman whose head was turned, YuNet 0.5-0.7 and never confirmed) had
+    # its mask only from that walk. 0: every track keeps to its path. 32, not
+    # 16-20: those also unmask her but double the AM window's flicker.
+    gap_walk_path_px: float = 32.0
     # A box interpolated across a gap follows the camera's path between the
     # two sightings, not the straight line between them on the screen.
     gap_follow_camera: bool = True
+    # T30: with gap_follow_camera, the straight-line box is masked as well
+    # where the two differ (IoU under 0.5). In fast pans the measured shift
+    # can be wrong and the camera-path box then sits beside the face: on
+    # P0_EV it unmasked confirmed faces (0.86-0.92) the straight box covered,
+    # while the AM window needs the camera path. Off: the camera path only.
+    gap_also_straight: bool = True
     # A track's mask is shown for at least this many frames from its first
     # sighting: past its last frame and tail the last box stays, moved with
     # the camera. Only tracks that hold min_track confirmations exist, so an
@@ -406,22 +423,32 @@ class Settings:
     # narrow identifies nobody. 14 is just under the narrowest labelled face
     # of the 004100 sample (14.9 px), so its recall is unchanged. 0: off.
     # 12, not 14: a 13 px face at the far desk of the 9K field-test window
-    # was recognisable when zoomed (T25 review).
-    face_paint_min_px: float = 12.0
+    # was recognisable when zoomed (T25 review). T30: 8, under the 8.7-9.9 px
+    # far-desk faces of P0_EV; face_tiny_px keeps the pegboard out instead.
+    face_paint_min_px: float = 8.0
+    # T30: a face track whose median box is narrower than face_tiny_px is
+    # painted only if the median of its confirmations is face_tiny_median or
+    # more. Real 9.6-11.3 px faces at the far desks of P0_EV score 0.51-0.59
+    # throughout; the 10.7-11.7 px pegboard tracks of the 9K window 0.42-0.48.
+    # 0 for face_tiny_px: off.
+    face_tiny_px: float = 12.0
+    face_tiny_median: float = 0.5
     # A face track whose median box is narrower than face_small_px is painted
     # only if one of its confirmations scored face_small_conf or more. The
     # texture tracks on the 9K pegboard topped out at 0.53-0.66 and the small
     # labelled faces of 004100 at 0.64-0.92; real 12-17 px faces in the field
-    # windows at 0.87-0.92. 0 for face_small_px: off.
+    # windows at 0.87-0.92. 0 for face_small_px: off. T30: 0.55, not 0.6: a
+    # 9.6 px face at a far desk of P0_EV peaks at 0.585.
     face_small_px: float = 20.0
-    face_small_conf: float = 0.6
+    face_small_conf: float = 0.55
     # T26: such a track whose best confirmation beats the median of its
     # confirmations by face_small_spread or more took its strong boxes from a
     # face it ran over (9K pegboard): only those boxes are painted, each held
     # face_hold frames. Measured on the field windows: 9K 8.71 -> 5.13 face
     # boxes a frame, every detection at 0.8 or more still covered; 004100
-    # unchanged. 0: off.
-    face_small_spread: float = 0.3
+    # unchanged. 0: off. T30: 0.4, not 0.3: a 12.5 px head at a far desk of
+    # P0_EV spreads 0.39 (best 0.85, median 0.46).
+    face_small_spread: float = 0.4
     # A box interpolated across a gap longer than max_gap is painted only on
     # frames where some detector box touches it: a long gap with nothing seen
     # is taken as the face being behind something (the wearer's arm). Off: on
@@ -1028,17 +1055,21 @@ class Settings:
         if self.stitch_slack < 0 or self.gap_grow < 0:
             raise SettingsError("stitch_slack and gap_grow must be 0 or more")
         if self.stitch_slack_frac < 0 or self.face_hold < 0 or self.face_paint_min_px < 0 \
-                or self.face_small_px < 0:
-            raise SettingsError("stitch_slack_frac, face_hold, face_paint_min_px and "
-                                "face_small_px must be 0 or more")
-        if not 0.0 <= self.face_small_conf <= 1.0 or not 0.0 <= self.face_small_spread <= 1.0:
-            raise SettingsError("face_small_conf and face_small_spread must be between 0 and 1")
+                or self.face_small_px < 0 or self.gap_walk_path_px < 0 or self.face_tiny_px < 0:
+            raise SettingsError("stitch_slack_frac, face_hold, face_paint_min_px, face_small_px, "
+                                "face_tiny_px and gap_walk_path_px must be 0 or more")
+        if not 0.0 <= self.face_small_conf <= 1.0 or not 0.0 <= self.face_small_spread <= 1.0 \
+                or not 0.0 <= self.face_tiny_median <= 1.0:
+            raise SettingsError("face_small_conf, face_small_spread and face_tiny_median "
+                                "must be between 0 and 1")
         if self.arm_corridor_scale < 0 or self.arm_corridor_carry < 0:
             raise SettingsError("arm_corridor_scale and arm_corridor_carry must be 0 or more")
         if not isinstance(self.face_gap_needs_evidence, bool):
             raise SettingsError("face_gap_needs_evidence must be true or false")
-        if not isinstance(self.gap_walk_on_path, bool) or not isinstance(self.gap_follow_camera, bool):
-            raise SettingsError("gap_walk_on_path and gap_follow_camera must be true or false")
+        if not isinstance(self.gap_walk_on_path, bool) or not isinstance(self.gap_follow_camera, bool) \
+                or not isinstance(self.gap_also_straight, bool):
+            raise SettingsError("gap_walk_on_path, gap_follow_camera and gap_also_straight "
+                                "must be true or false")
         if not self.verify_conf <= self.verify_conf_sure <= 1.0 or not 0 <= self.mirror_agree <= 1:
             raise SettingsError("verify_conf_sure must be between verify_conf and 1, "
                                 "mirror_agree between 0 and 1")
@@ -1138,8 +1169,8 @@ class Settings:
             "conf_agree", "verify_conf_agree", "agree_max_px", "conf_weak_long", "established_after",
             "continue_after", "weak_run", "track_sure_conf",
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
-            "stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
-            "face_paint_min_px", "face_small_px", "face_small_conf", "face_gap_needs_evidence", "face_small_spread",
+            "stitch_slack_frac", "gap_walk_on_path", "gap_walk_path_px", "gap_follow_camera", "gap_also_straight", "face_hold",
+            "face_paint_min_px", "face_tiny_px", "face_tiny_median", "face_small_px", "face_small_conf", "face_gap_needs_evidence", "face_small_spread",
             "arm_corridor_scale", "arm_corridor_carry",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",

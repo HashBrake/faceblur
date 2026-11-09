@@ -238,12 +238,13 @@ def test_a_short_gap_needs_no_evidence():
 
 def test_the_new_settings_and_their_defaults():
     s = Settings()
-    assert s.stitch_slack_frac == 0.25
+    # T30 recalibrated these on the P0 right-camera windows (see test_t30_lost_faces.py).
+    assert s.stitch_slack_frac == 0.5
     assert s.gap_walk_on_path is True
     assert s.gap_follow_camera is True
     assert s.face_hold == 10
-    assert s.face_paint_min_px == 12.0
-    assert (s.face_small_px, s.face_small_conf, s.face_gap_needs_evidence) == (20.0, 0.6, False)
+    assert s.face_paint_min_px == 8.0
+    assert (s.face_small_px, s.face_small_conf, s.face_gap_needs_evidence) == (20.0, 0.55, False)
     d = s.to_dict()
     for key in ("stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
                 "face_paint_min_px", "face_small_px", "face_small_conf",
@@ -256,9 +257,9 @@ def test_tracker_for_passes_the_new_settings():
                               gap_follow_camera=False, face_hold=3))
     assert (tr.stitch_slack_frac, tr.walk_on_path, tr.gap_camera, tr.hold) == (0.5, False, False, 3)
     tr = tracker_for(Settings())
-    assert (tr.stitch_slack_frac, tr.walk_on_path, tr.gap_camera, tr.hold) == (0.25, True, True, 10)
-    assert tr.paint_min_px == 12.0
-    assert (tr.small_px, tr.small_conf, tr.gap_evidence) == (20.0, 0.6, False)
+    assert (tr.stitch_slack_frac, tr.walk_on_path, tr.gap_camera, tr.hold) == (0.5, True, True, 10)
+    assert tr.paint_min_px == 8.0
+    assert (tr.small_px, tr.small_conf, tr.gap_evidence) == (20.0, 0.55, False)
     tr = tracker_for(Settings(face_gap_needs_evidence=True, face_small_px=0))
     assert tr.gap_evidence and tr.small_px == 0
     assert tracker_for(Settings(face_paint_min_px=0)).paint_min_px == 0.0

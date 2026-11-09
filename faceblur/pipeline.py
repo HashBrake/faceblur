@@ -269,7 +269,10 @@ def tracker_for(settings: Settings) -> Tracker:
                    paint_min_px=settings.face_paint_min_px,
                    small_px=settings.face_small_px, small_conf=settings.face_small_conf,
                    gap_evidence=settings.face_gap_needs_evidence,
-                   small_spread=settings.face_small_spread)
+                   small_spread=settings.face_small_spread,
+                   path_px=settings.gap_walk_path_px,
+                   gap_straight=settings.gap_also_straight,
+                   tiny_px=settings.face_tiny_px, tiny_median=settings.face_tiny_median)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

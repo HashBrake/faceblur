@@ -172,7 +172,9 @@ class Tracker:
                  sure_conf: float = 0.0, stitch_slack_frac: float = 0.0,
                  walk_on_path: bool = False, gap_camera: bool = False, hold: int = 0,
                  paint_min_px: float = 0.0, small_px: float = 0.0, small_conf: float = 0.0,
-                 gap_evidence: bool = False, small_spread: float = 0.0):
+                 gap_evidence: bool = False, small_spread: float = 0.0,
+                 path_px: float = 0.0, gap_straight: bool = False,
+                 tiny_px: float = 0.0, tiny_median: float = 0.0):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
@@ -222,6 +224,18 @@ class Tracker:
         # drawn, only its confirmations of small_conf or more, each for `hold`
         # frames (0: off).
         self.small_spread = small_spread
+        # T30: with walk_on_path, only a track whose median box is narrower
+        # than path_px keeps to its path; a wider one masks every box near
+        # it, as before T25 (0: every track keeps to its path).
+        self.path_px = max(0.0, path_px)
+        # T30: with gap_camera, the straight-line box is drawn as well where
+        # the two differ, so a camera shift measured wrong in a fast pan does
+        # not take the mask off the face.
+        self.gap_straight = gap_straight
+        # T30: a track whose median box is narrower than tiny_px is drawn only
+        # if the median of its confirmations is tiny_median or more (0: off).
+        self.tiny_px = max(0.0, tiny_px)
+        self.tiny_median = tiny_median
         self._boxes = None      # (per_frame, weak) of the last link, for gap_evidence
         self._cum = None        # cumulative camera shift per frame, or None
         self._mag = None        # camera shift magnitude per frame
@@ -359,11 +373,15 @@ class Tracker:
         if weak is None:
             return
         if self.walk_on_path:
-            self._walk_on_path(kept, per_frame, weak)
-            return
+            self._walk_on_path([t for t in kept if not self._cloud(t)], per_frame, weak, kept)
+            if not any(self._cloud(t) for t in kept):
+                return
         claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
+        claimed |= {(i, id(d)) for t in kept for i, ds in t.extras.items() for d in ds}
         for t in kept:
             if t.confirmed < self.established_after or not self._sure(t):
+                continue
+            if self.walk_on_path and not self._cloud(t):
                 continue
             frames = sorted(t.dets)
             for a, b in zip(frames, frames[1:]):
@@ -405,7 +423,15 @@ class Tracker:
                             continue
                         cur, cur_k = best, k
 
-    def _walk_on_path(self, kept, per_frame, weak) -> None:
+    def _cloud(self, t: Track) -> bool:
+        """Does this track's gap walk mask every box near its path (the walk
+        before T25)? Always without walk_on_path; with it, a track at least
+        path_px wide (median box), when path_px is set."""
+        if not self.walk_on_path:
+            return True
+        return self.path_px > 0 and float(np.median([d.w for d in t.dets.values()])) >= self.path_px
+
+    def _walk_on_path(self, kept, per_frame, weak, owners=None) -> None:
         """`_fill_gaps` with `walk_on_path`: each step takes only a box that
         overlaps where the walk predicts the face, its last box moved by the
         camera (any overlap, or the box's centre inside the prediction), the
@@ -414,7 +440,8 @@ class Tracker:
         a small face (field test, T25). `render` merges the box into the
         track's own box of that frame, or drops it if the two do not touch.
         """
-        claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
+        claimed = {(i, id(d)) for t in (kept if owners is None else owners)
+                   for i, d in t.dets.items()}
         for t in kept:
             if t.confirmed < self.established_after or not self._sure(t):
                 continue
@@ -650,6 +677,12 @@ class Tracker:
             # floor blink as its box width jittered across it.
             tracks = [t for t in tracks
                       if float(np.median([d.w for d in t.dets.values()])) >= self.paint_min_px]
+        if self.tiny_px > 0:
+            # T30: real 9.6-11.3 px faces of the P0_EV office are confirmed at
+            # a median 0.51-0.59 and the 10.7-11.7 px pegboard tracks of the
+            # 9K window at 0.42-0.48.
+            tracks = [t for t in tracks if self._median_conf(t) >= self.tiny_median
+                      or float(np.median([d.w for d in t.dets.values()])) >= self.tiny_px]
         if self.small_px > 0:
             # The texture tracks of the field test (pegboard holes, tool
             # handles, 12-15 px) are confirmed many times but never strongly.
@@ -682,7 +715,7 @@ class Tracker:
                 bx, by = self._camera(a, b) if follow else (0.0, 0.0)
                 for k in range(a + 1, b):
                     f = (k - a) / (b - a)
-                    box = _lerp(da, db, f)
+                    box = straight = _lerp(da, db, f)
                     if follow:
                         # The camera's path from a to k, less the straight
                         # line's share of its whole move from a to b.
@@ -692,16 +725,19 @@ class Tracker:
                         # Least certain in the middle of the gap.
                         away = min(k - a, b - k)
                         box = _moved(box, 0.0, 0.0, 1.0 + self.gap_grow * away)
+                        straight = _moved(straight, 0.0, 0.0, 1.0 + self.gap_grow * away)
                     if self.gap_evidence and b - a - 1 > self.max_gap \
                             and not self._evidence(box, k):
                         continue        # a long gap with nothing seen: occluded
                     gap_box[k] = len(out[k])
                     out[k].append(box)
+                    if follow and self.gap_straight and iou(box, straight) < 0.5:
+                        out[k].append(straight)
             out[frames[-1]].append(t.dets[frames[-1]])
             for k, boxes in t.extras.items():
                 if not 0 <= k < n_frames:
                     continue
-                if not self.walk_on_path:
+                if self._cloud(t):
                     out[k].extend(boxes)
                 elif k in gap_box:
                     out[k][gap_box[k]] = _merge(out[k][gap_box[k]], boxes)
