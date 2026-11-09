@@ -135,6 +135,27 @@ def _moved(d: Detection, dx: float, dy: float, grow: float = 1.0) -> Detection:
     return Detection(cx - w / 2, cy - h / 2, w, h, d.score, lm, "track", d.verified)
 
 
+def _centre_in(d: Detection, box: Detection) -> bool:
+    return box.x <= d.cx <= box.x + box.w and box.y <= d.cy <= box.y + box.h
+
+
+def _merge(box: Detection, extras: Sequence[Detection]) -> Detection:
+    """`box` grown to the bounding box of itself and every extra that touches
+    it (overlap, or a centre inside it). An extra that does not is dropped.
+    A box that grew loses its landmarks, so its ellipse is the padded one of
+    the whole box rather than one centred on the old landmarks."""
+    on = [d for d in extras if iou(box, d) > 0 or _centre_in(d, box)]
+    if not on:
+        return box
+    x0 = min([box.x] + [d.x for d in on])
+    y0 = min([box.y] + [d.y for d in on])
+    x1 = max([box.x + box.w] + [d.x + d.w for d in on])
+    y1 = max([box.y + box.h] + [d.y + d.h for d in on])
+    if (x0, y0, x1, y1) == (box.x, box.y, box.x + box.w, box.y + box.h):
+        return box
+    return replace(box, x=x0, y=y0, w=x1 - x0, h=y1 - y0, landmarks=None)
+
+
 class Tracker:
     """Offline tracker over a whole video's detections."""
 
@@ -148,7 +169,9 @@ class Tracker:
                  stitch_gap: int = 0, blur_shift: float = 0.0,
                  continue_after: Optional[int] = None, weak_run: int = 0,
                  stitch_slack: float = 0.0, gap_grow: float = 0.0,
-                 sure_conf: float = 0.0):
+                 sure_conf: float = 0.0, stitch_slack_frac: float = 0.0,
+                 walk_on_path: bool = False, gap_camera: bool = False, hold: int = 0,
+                 paint_min_px: float = 0.0):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
@@ -177,6 +200,15 @@ class Tracker:
         # A track is sure once a confirmation scored this much; only sure
         # tracks continue, stitch, fill gaps and get the long tails.
         self.sure_conf = sure_conf
+        # T25: the stitch slack capped at this share of the face size (0: no
+        # cap); the gap walk on its predicted path only, merged into the
+        # track's box; gap boxes that follow the camera; a minimum time shown.
+        self.stitch_slack_frac = max(0.0, stitch_slack_frac)
+        self.walk_on_path = walk_on_path
+        self.gap_camera = gap_camera
+        self.hold = max(0, hold)
+        # A track whose median box is narrower than this is not drawn at all.
+        self.paint_min_px = max(0.0, paint_min_px)
         self._cum = None        # cumulative camera shift per frame, or None
         self._mag = None        # camera shift magnitude per frame
 
@@ -311,6 +343,9 @@ class Tracker:
         """
         if weak is None:
             return
+        if self.walk_on_path:
+            self._walk_on_path(kept, per_frame, weak)
+            return
         claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
         for t in kept:
             if t.confirmed < self.established_after or not self._sure(t):
@@ -353,6 +388,50 @@ class Tracker:
                                 best, best_d = d, dist
                         if best is None:
                             continue
+                        cur, cur_k = best, k
+
+    def _walk_on_path(self, kept, per_frame, weak) -> None:
+        """`_fill_gaps` with `walk_on_path`: each step takes only a box that
+        overlaps where the walk predicts the face, its last box moved by the
+        camera (any overlap, or the box's centre inside the prediction), the
+        most overlapping one, and only that box is kept. Masking every box
+        within three face sizes plus the slack made a cloud of specks around
+        a small face (field test, T25). `render` merges the box into the
+        track's own box of that frame, or drops it if the two do not touch.
+        """
+        claimed = {(i, id(d)) for t in kept for i, d in t.dets.items()}
+        for t in kept:
+            if t.confirmed < self.established_after or not self._sure(t):
+                continue
+            frames = sorted(t.dets)
+            for a, b in zip(frames, frames[1:]):
+                if b - a < 2:
+                    continue
+                mid = (a + b) // 2
+                for start, stop, step, anchor in ((a, mid, 1, t.dets[a]), (b, mid, -1, t.dets[b])):
+                    cur, cur_k = anchor, start
+                    for k in range(start + step, stop + (1 if step > 0 else 0), step):
+                        fast = (self._mag is not None and k < len(self._mag)
+                                and self.blur_shift > 0 and self._mag[k] >= self.blur_shift)
+                        cx, cy = self._camera(cur_k, k)
+                        pred = _moved(cur, cx, cy)
+                        best, best_key = None, None
+                        for d in list(per_frame[k]) + list(weak[k]):
+                            if (k, id(d)) in claimed or d.score < self.conf_weak_long:
+                                continue
+                            ratio = d.long_side / max(1.0, cur.long_side)
+                            if not 0.5 <= ratio <= (4.0 if fast else 1.5):
+                                continue
+                            v = iou(pred, d)
+                            if v <= 0 and not _centre_in(d, pred):
+                                continue
+                            key = (v, -math.hypot(d.cx - pred.cx, d.cy - pred.cy))
+                            if best_key is None or key > best_key:
+                                best, best_key = d, key
+                        if best is None:
+                            continue
+                        t.extras.setdefault(k, []).append(replace(best, source="continued"))
+                        claimed.add((k, id(best)))
                         cur, cur_k = best, k
 
     def _sure(self, t: Track) -> bool:
@@ -423,7 +502,10 @@ class Tracker:
                 if size <= 0 or min(pred.long_side, first.long_side) / size < 0.5:
                     continue
                 dist = math.hypot(pred.cx - first.cx, pred.cy - first.cy)
-                gate = size + self.stitch_slack * (b_first - a_last)
+                slack = self.stitch_slack
+                if self.stitch_slack_frac > 0:
+                    slack = min(slack, self.stitch_slack_frac * size)
+                gate = size + slack * (b_first - a_last)
                 if dist > gate:
                     continue
                 score = 1.0 - dist / gate
@@ -548,22 +630,41 @@ class Tracker:
         further back, until the extrapolated box has left the picture.
         """
         out: list[list[Detection]] = [[] for _ in range(n_frames)]
+        if self.paint_min_px > 0:
+            # Per track, not per box: a box-by-box floor made a face near the
+            # floor blink as its box width jittered across it.
+            tracks = [t for t in tracks
+                      if float(np.median([d.w for d in t.dets.values()])) >= self.paint_min_px]
         for t in tracks:
             frames = sorted(t.dets)
+            gap_box = {}
             for a, b in zip(frames, frames[1:]):
                 out[a].append(t.dets[a])
                 da, db = t.dets[a], t.dets[b]
+                follow = self.gap_camera and self._cum is not None
+                bx, by = self._camera(a, b) if follow else (0.0, 0.0)
                 for k in range(a + 1, b):
-                    box = _lerp(da, db, (k - a) / (b - a))
+                    f = (k - a) / (b - a)
+                    box = _lerp(da, db, f)
+                    if follow:
+                        # The camera's path from a to k, less the straight
+                        # line's share of its whole move from a to b.
+                        kx, ky = self._camera(a, k)
+                        box = _moved(box, kx - f * bx, ky - f * by)
                     if self.gap_grow > 0:
                         # Least certain in the middle of the gap.
                         away = min(k - a, b - k)
                         box = _moved(box, 0.0, 0.0, 1.0 + self.gap_grow * away)
+                    gap_box[k] = len(out[k])
                     out[k].append(box)
             out[frames[-1]].append(t.dets[frames[-1]])
             for k, boxes in t.extras.items():
-                if 0 <= k < n_frames:
+                if not 0 <= k < n_frames:
+                    continue
+                if not self.walk_on_path:
                     out[k].extend(boxes)
+                elif k in gap_box:
+                    out[k][gap_box[k]] = _merge(out[k][gap_box[k]], boxes)
             head, foot = t.dets[frames[0]], t.dets[frames[-1]]
             # Tails follow the motion at each end of the track and grow a little
             # per frame, so a face moving into or out of the picture stays
@@ -585,6 +686,11 @@ class Tracker:
             for k in range(1, tail + 1):
                 if frames[-1] + k < n_frames:
                     out[frames[-1] + k].append(self._tail_box(foot, frames[-1], fv, k, foot_grow))
+            # The minimum time shown: past the tail the last box stays where
+            # the camera takes it, so a short track does not blink.
+            for k in range(frames[-1] + tail + 1, min(n_frames, frames[0] + self.hold)):
+                cx, cy = self._camera(frames[-1], k)
+                out[k].append(_moved(foot, cx, cy))
         if self.blur_shift > 0 and self._mag is not None:
             # A fast camera move smears a face by about the shift. Every mask
             # in such a frame grows by that much, so the smear stays covered.

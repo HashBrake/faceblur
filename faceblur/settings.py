@@ -372,6 +372,32 @@ class Settings:
     # shrinking is drawn larger further back. Off: measured to add masking
     # on the worst frame and nothing to recall.
     tail_trend: bool = False
+    # T25, against tiny short-lived face specks (field test 2026-11): see
+    # docs/privacy_module_report.md, "Tracker: specks and flicker".
+    # The per-frame stitch slack is at most this share of the face's size, so
+    # a 15 px face is not joined to a box 360 px away 45 frames later; 0 keeps
+    # the plain stitch_slack for every size.
+    stitch_slack_frac: float = 0.25
+    # The gap walk steps only onto a box that overlaps where it predicts the
+    # face (overlap, or the box's centre inside the prediction), one box a
+    # frame, and such a box is masked merged with the track's own box of that
+    # frame when the two overlap, never as a separate mask. Off: every box
+    # near the path is masked.
+    gap_walk_on_path: bool = True
+    # A box interpolated across a gap follows the camera's path between the
+    # two sightings, not the straight line between them on the screen.
+    gap_follow_camera: bool = True
+    # A track's mask is shown for at least this many frames from its first
+    # sighting: past its last frame and tail the last box stays, moved with
+    # the camera. Only tracks that hold min_track confirmations exist, so an
+    # unconfirmed box never gets it. 0: off.
+    face_hold: int = 10
+    # A face track whose median box is narrower than this (source pixels) is
+    # not painted. The consensus confirms 10 to 13 px boxes on texture
+    # (pegboard holes, tool handles) hundreds of times a minute; a face that
+    # narrow identifies nobody. 14 is just under the narrowest labelled face
+    # of the 004100 sample (14.9 px), so its recall is unchanged. 0: off.
+    face_paint_min_px: float = 14.0
 
     # --- mask geometry -------------------------------------------------------
     # Ellipse axes as a share of the detector box, rotated to the eye line.
@@ -956,6 +982,10 @@ class Settings:
             raise SettingsError("continue_after must be at least 1 and weak_run 0 or more")
         if self.stitch_slack < 0 or self.gap_grow < 0:
             raise SettingsError("stitch_slack and gap_grow must be 0 or more")
+        if self.stitch_slack_frac < 0 or self.face_hold < 0 or self.face_paint_min_px < 0:
+            raise SettingsError("stitch_slack_frac, face_hold and face_paint_min_px must be 0 or more")
+        if not isinstance(self.gap_walk_on_path, bool) or not isinstance(self.gap_follow_camera, bool):
+            raise SettingsError("gap_walk_on_path and gap_follow_camera must be true or false")
         if not self.verify_conf <= self.verify_conf_sure <= 1.0 or not 0 <= self.mirror_agree <= 1:
             raise SettingsError("verify_conf_sure must be between verify_conf and 1, "
                                 "mirror_agree between 0 and 1")
@@ -1055,6 +1085,8 @@ class Settings:
             "conf_agree", "verify_conf_agree", "agree_max_px", "conf_weak_long", "established_after",
             "continue_after", "weak_run", "track_sure_conf",
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
+            "stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
+            "face_paint_min_px",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "adaptive_stride", "adaptive_stride_max", "adaptive_stride_shift",

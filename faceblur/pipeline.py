@@ -262,7 +262,11 @@ def tracker_for(settings: Settings) -> Tracker:
                    sure_conf=settings.track_sure_conf,
                    stitch_gap=settings.stitch_gap, stitch_slack=settings.stitch_slack,
                    gap_grow=settings.gap_grow,
-                   blur_shift=settings.blur_shift if settings.camera_comp else 0.0)
+                   blur_shift=settings.blur_shift if settings.camera_comp else 0.0,
+                   stitch_slack_frac=settings.stitch_slack_frac,
+                   walk_on_path=settings.gap_walk_on_path,
+                   gap_camera=settings.gap_follow_camera, hold=settings.face_hold,
+                   paint_min_px=settings.face_paint_min_px)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

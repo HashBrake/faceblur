@@ -968,3 +968,69 @@ Method: two HDF5 runs of `FE_015252_LR.h5` (2,764 frames per camera, `--workers 
 - **Faces kept.** Faces kept went from 6 to 11 and from 5 to 11, because a face under the hand on an odd frame is now kept as it is on the even frames around it. The face boxes painted went down by the same amount (5 L, 6 R).
 - **Heads.** No change on this file: 49/67 and 33/58 before and after. So no head region on this file came from a box at the top edge or over a hand quad. The defect 6 cases were on other long-run files: AM_033011, FE_234012 and 9K_000048. They are covered by unit tests (`tests/test_heads.py`) and still need a long-run rerun to measure.
 - Speed: 142 and 139 ms a frame before, 155 and 141 after, on a shared machine. The change adds no inference.
+
+## Tracker: specks and flicker
+
+Task T25. The owner judged the HDF5 run (code 02c2e36) "terrible": too much
+masked, unstable, flickering. Three 600-frame windows of that run were cut
+from the raw files with a 10 s lead-in and run locally through
+`batch.run_video` with the HDF5 settings and with `Settings()`; detections
+were cached so before (HEAD d3b070b) and after see the same boxes. Scripts,
+clips and outputs are outside the repo in
+`FaceBlur-work\privacy_fieldtest\t25\`.
+
+### Where the face boxes came from (before, HDF5 settings)
+
+| window | detections | gap interpolation | gap walk ("every box near the path") | weak continuation | walks back/forward | tails | heads |
+|---|---|---|---|---|---|---|---|
+| 9K_024425 23120+600 | 24.7 % | 32.1 % | 25.9 % | 8.7 % | 6.6 % | 1.9 % | 0.1 % |
+| AM_041646 21940+600 | 49.6 % | 27.8 % | 8.6 % | 2.8 % | 2.4 % | 7.8 % | 1.1 % |
+| FE_234012 11699+600 | 61.2 % | 7.5 % | 5.4 % | 9.1 % | 11.7 % | 4.8 % | 0.3 % |
+
+98 % of the 9K boxes are under 32 px wide. The consensus confirms 10-13 px
+boxes on pegboard holes and tool handles, often dozens of times in a row;
+the stitcher (45 frames, 8 px a frame of slack) chains them into tracks with
+hundreds of confirmations, the interpolation draws them gliding across the
+board, and the gap walk paints every other speck within three face sizes.
+The desktop defaults give the same picture (9K 11,196 boxes against 11,215):
+the cause is the base tracker, not the HDF5 settings.
+
+### What changed (new settings only; consensus thresholds untouched)
+
+- `gap_walk_on_path` (on): the gap walk steps only onto a box overlapping
+  its camera-moved prediction, one a frame, merged into the track's own box.
+- `gap_follow_camera` (on): an interpolated box follows the camera between
+  the two sightings.
+- `stitch_slack_frac` 0.25: the stitch slack is at most a quarter of the
+  face size per frame.
+- `face_hold` 10: a track's mask stays at least 10 frames from its first
+  sighting.
+- `face_paint_min_px` 14: a track whose median box is narrower is not
+  painted (per track; a per-box floor made faces blink). The narrowest
+  labelled face of 004100 is 14.9 px wide.
+
+Measured and not kept: a hand rule (face centre in a live hand quad, unless
+the track is sure) drops nothing in these windows, because every track there
+is sure, and the live quads contain real faces in 9K; a density rule (more
+than 3 small boxes in 200 px) adds nothing after the floor; a higher
+`min_track` for small tracks cost continuity on 004100.
+
+### Result (HDF5 settings, face)
+
+| window | boxes/frame | IoU tracks <= 5 fr | same, camera-compensated | count-change frames |
+|---|---|---|---|---|
+| 9K | 18.69 -> 4.43 | 1120 -> 119 | 509 -> 31 | 479 -> 29 |
+| AM | 8.25 -> 7.56 | 557 -> 429 | 312 -> 83 | 329 -> 75 |
+| FE | 6.66 -> 5.27 | 122 -> 64 | 58 -> 8 | 123 -> 29 |
+
+Text, plate and screen numbers are unchanged. On 004100 (`eval.measure`,
+default settings): recall 60/60 both, off_face mean 0.00225 -> 0.00216,
+max 0.05775 -> 0.05783, continuity 0.98517 -> 0.98926, exposed_40 85 -> 83,
+exposed_24_40 55 -> 50.
+
+The cost: faces narrower than 14 px are no longer masked. In 9K the two men
+at the far desk (12-14 px) and in FE the far standing man (12 px) are now
+visible; at 12-14 px they are not identifiable, which is the owner's rule.
+AM keeps most of its masks: there the boxes are 16-25 px background faces
+and the remaining short tracks are tails and gaps during fast camera moves
+(blur-shift inflation, frames where the shift is not measured).
