@@ -1,5 +1,128 @@
 # STATE, handover notes
 
+**2026-11-09 evening, CURRENT STATUS (privacy module: owner verdict, four fix
+commits, two comparison dashboards, second field run). Nothing is running: no
+VMs, no uploads, no crons.**
+
+- **Code:** main at `73a3329` (pushed), suite 1,879 tests green in 8 pieces.
+  Commits today on top of 1be0cd9/d3b070b:
+  - `672f198`, `678aa2c` (T25: tracker rules against one-to-five-frame face
+    specks and flicker: `gap_walk_on_path`, `gap_follow_camera`,
+    `stitch_slack_frac`, `face_hold`, `face_paint_min_px`,
+    `face_small_px`/`face_small_conf`).
+  - `8c7284d` (T26: `face_small_spread`; opt-in arm corridor and
+    text/screen/plate holds shipped off).
+  - `2ac722f` (T29: a confirmed YuNet box past `max_face_frac` is a
+    confirmed face, so close faces are masked; before this, every release
+    including the October one left close faces unmasked for seconds, 417
+    confirmed boxes without a mask on one 91-s cut of PV_BJ_072232).
+  - `85db16e` + `73a3329` (T30: privacy-first recalibration after the
+    whole-stream rerun showed real 9–40 px frontal faces unmasked for up to
+    167 frames: paint floor 8 px, `face_small_conf` 0.55,
+    `face_small_spread` 0.4, `stitch_slack_frac` 0.5, new
+    `gap_walk_path_px` 32 and `gap_also_straight`; `face_tiny_px` off).
+  - No face consensus threshold was changed.
+  - Measurements and rationale: `docs/privacy_module_report.md` sections
+    "Tracker: specks and flicker", "T26…", T29 and T30 sections;
+    orchestrator ledger `STATUS.md`, `DECISIONS.md` D33–D36,
+    `BUILD_REPORT.md` section "Follow-up of 2026-11-09" (all three ledger
+    files are local, excluded from git by `.git/info/exclude`).
+- **Owner's verdict that started it (2026-11-09 ~11:20):** "blurring out too
+  many things, unstable and flickering". Measured cause: tiny short-lived
+  face specks (9K_024425: 18.3 face boxes per frame for 3 real faces, 97 %
+  under 32 px, median lifetime 1 frame) and false faces on the wearer's arm.
+  Net effect on the 42 dashboard excerpts with the final code: face
+  count-change frames below the 6 Nov version on 40 of 42 clips, but the
+  privacy-first recalibration gave back part of the gain (e.g. P0_97 a 50 at
+  noon → 251 final against 258 on 6 Nov; PV_HV a 48 → 175). **Open task
+  T32:** a pixel-level flicker metric, then tune
+  `gap_also_straight`/gap-walk without unmasking any of the six T30 faces
+  (P0_EV 19009–19141, PV_HV 9140–9176 and 21565–21647, PV_AM 13866–14033,
+  P0_D5 43465–43478).
+- **Two comparison dashboards** (private, presigned 168 h), both linked from
+  the password-locked downloads page (Claude artifact
+  `https://claude.ai/artifact/L5c9YXx4i2a4gWf1gBrh5T` version 8; public copy
+  `https://hcm04.vstorage.vngcloud.vn/faceblur/share/player-one-downloads.html`;
+  password in `D:\Claude Projects\FaceBlur-work\faceblur_ptl\hub\password.txt`;
+  hub scripts there:
+  `build_hub.py entries.json password.txt player_one_downloads_artifact.html player_one_downloads_public.html`,
+  then
+  `put_public.py player_one_downloads_public.html vs:faceblur/share/player-one-downloads.html`;
+  the Claude artifact is republished by the orchestrator from
+  `player_one_downloads_artifact.html`). Four panes: raw | old FaceBlur |
+  new module 6 Nov | new module 9 Nov final (73a3329); synchronized video
+  with frame step, sparklines of per-frame counts for both new versions,
+  "what changed" and "known open issues" panels, links to contact sheets.
+  - Dashboard 1, first field test (7 streams, left cameras + 9K_000048
+    right, 21 clips): `vs:player-one/compare/2026-11-09/` (1.03 GiB),
+    working folder `D:\Claude Projects\FaceBlur-work\privacy_fieldtest\compare\`
+    (`dashboard_url.txt`, `scripts\`, `progress.log`). Index/sheets links
+    expire **16 Nov ~10:37**, the final clips (`clips5/`) 16 Nov ~21:47.
+  - Dashboard 2, PauliVina day 1 + Phase 0, right camera (7 streams, 21
+    clips): `vs:player-one/compare/2026-11-09b/` (869 MiB), folder
+    `…\privacy_fieldtest\compare2\`. Index expires **16 Nov ~18:20**, clips
+    16 Nov ~21:47. Old pane: Phase 0 = October delivery files; PauliVina =
+    repo at 63716ce run on the excerpt (never blurred before).
+  - To re-sign after 16 Nov: `publish31.py` in each `scripts\` folder (reads
+    `cloud/greennode.env`), then update the two entries' URLs in
+    `hub\entries.json`, rebuild, `put_public.py`, republish the artifact.
+- **Second field run (T23/T27):** 7 right-camera entries (PV_HV_095328,
+  PV_AM_104810, PV_BJ_072232, PV_8T_005825p3 from `E:\Ngày 5-11-2026`;
+  P0_97_004230, P0_D5_022846p2, P0_EV_024925p2 from
+  `D:\Player One - Phase 0 full`), 3.16 camera-hours, 341,478 frames,
+  52–68 ms/frame on RTX 5090 at 5 workers. Inputs
+  `vs:player-one/fieldtest2/in/` (20.3 GiB, copies of footage already in the
+  bucket), outputs `fieldtest2/out/` (6 Nov code d3b070b, 33.1 GiB) and
+  `fieldtest2/out2/` (8c7284d, 33.1 GiB); neither carries T29/T30, so **a
+  final whole-stream run with 73a3329 is needed before any delivery**.
+  Working folders `…\privacy_fieldtest\cloud2\` (streams.json, summary.md,
+  sheet_notes.txt, audits, sheets, VM scripts) and `cloud2_rerun\` (same for
+  the rerun, plus `compare_tables.md` and `regressions\` with the crops of
+  the unmasked faces). The leftover scratch prefix
+  `vs:player-one/compare/2026-11-09b-work/` (1.40 GiB) can be purged. Bucket
+  cost of the three prefixes about 2,000 VND/day.
+- **GreenNode today:** 7 RTX 5090 VMs (`faceblur-field2-1` … `-7`), all
+  deleted with volumes, `gn_api.py list` shows no `faceblur-` VM. Total about
+  23 VM-hours ≈ $23 at the $0.9/h placeholder (official 5090 price still
+  pending from Thuy). Images in vCR: `faceblur-privacy:field2` (d3b070b
+  overlay), `field3` (678aa2c), `field4` (8c7284d), `field5` (2ac722f),
+  `field6` (73a3329); all are overlays on the 02c2e36 `:field` image with the
+  app tree from `git archive` (a cold `docker build` on the VM downloads pip
+  at ~1.4 MB/s; on this PC Docker needs ≥7.5 GB free RAM). Lessons: build on
+  the VM as an overlay; two VMs halve wall time at equal cost; copy footage
+  bucket-to-bucket instead of uploading; cut windows must have timestamps
+  rebased to 0 before `faceblur h5 pack` (`t28_rebase.py`), otherwise the run
+  fails with "Could not seek to frame 900".
+- **Known defects for the owner (unchanged by today's fixes):**
+  - people at a reception desk blacked out as text (P0_97 30187);
+  - a paint can and a form masked as screens (PV_8T 16744);
+  - a can stack as text (PV_AM 5391);
+  - the wearer's shirt logo, a can label and a phone in hand masked
+    (PV_AM 2552, 6411; P0_D5 22026);
+  - false face discs on press machines, figurines, altar carvings;
+  - the edge half-face needs the rotated rim-band pass;
+  - a false 650-px hand quad over a man's head cleared his face for 4
+    frames (zone defect, PV_BJ 46106–46109);
+  - the screen blur now covers a multimeter the wearer probes (T19's
+    hand-on-screen rule too strict, 9K_000048_R around 31800);
+  - 2–3 discs stay on the wearer's forearm where it occludes a background
+    face (AM_041646 22239);
+  - text/screen flicker unchanged;
+  - the origin-tagging tool used for the T26 measurements altered the
+    confirmation median, so the T26 tables need a re-check.
+- **Next steps:**
+  1. T32 flicker tuning (above).
+  2. Final whole-stream run with 73a3329 on both field-test sets
+     (~8 VM-hours, ~$7) and a before/after against `fieldtest2/out` and
+     `out2`.
+  3. Narrow the T19 rule, guard the zone against giant hand quads,
+     re-measure T26.
+  4. Re-sign the dashboard links before 16 Nov if still needed; purge
+     `2026-11-09b-work/`.
+  5. The owner's open question on the face fill (solid black is
+     irreversible; blur/pixelate were measured reversible; a feathered or
+     mean-colour fill was offered).
+
 **2026-11-09, CURRENT STATUS (unlock fix deployed, logging-server proposal
 waiting on the owner, EgoLabel II manifest made, GreenNode chat state).**
 Nothing is running: no VMs, no uploads, no session crons. The 2026-11-07
