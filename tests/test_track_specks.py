@@ -197,6 +197,43 @@ def test_the_floor_is_per_track_so_a_jittering_face_does_not_blink():
     assert all(len(f) == 1 for f in out)
 
 
+# ---------------------------------------------------------------- small tracks need a strong confirmation
+
+def scored(x, w, conf):
+    return Detection(float(x), 100.0, float(w), float(w), 0.9, LM, verified=True, confidence=conf)
+
+
+def test_a_small_track_never_strongly_confirmed_is_not_painted():
+    frames = [[scored(100, 13, 0.55), scored(300, 13, 0.9), scored(500, 30, 0.5)]
+              if i < 6 else [] for i in range(8)]
+    out, tracks = tracker(small_px=20, small_conf=0.6).run(frames)
+    assert len(tracks) == 3
+    assert all(sorted(d.x for d in f) == [300.0, 500.0] for f in out[:6])
+    out, _ = tracker().run(frames)
+    assert all(len(f) == 3 for f in out[:6])
+
+
+# ---------------------------------------------------------------- long gaps need evidence
+
+def test_a_long_gap_is_painted_only_where_something_was_seen():
+    frames = [[] for _ in range(14)]
+    for i in (0, 1, 2, 11, 12, 13):
+        frames[i] = [det(100)]
+    weak = [[] for _ in range(14)]
+    weak[6] = [det(104, score=0.2)]             # below every floor: evidence only
+    out, tracks = tracker(stitch_gap=20, gap_evidence=True).run(frames, weak)
+    assert len(tracks) == 1
+    assert covered(out) == [0, 1, 2, 6, 11, 12, 13]
+    out, _ = tracker(stitch_gap=20).run(frames, weak)
+    assert covered(out) == list(range(14))
+
+
+def test_a_short_gap_needs_no_evidence():
+    frames = [[det(100)] if i not in (3, 4) else [] for i in range(8)]
+    out, _ = tracker(gap_evidence=True).run(frames, [[] for _ in range(8)])
+    assert covered(out) == list(range(8))
+
+
 # ---------------------------------------------------------------- settings
 
 def test_the_new_settings_and_their_defaults():
@@ -205,10 +242,12 @@ def test_the_new_settings_and_their_defaults():
     assert s.gap_walk_on_path is True
     assert s.gap_follow_camera is True
     assert s.face_hold == 10
-    assert s.face_paint_min_px == 14.0
+    assert s.face_paint_min_px == 12.0
+    assert (s.face_small_px, s.face_small_conf, s.face_gap_needs_evidence) == (20.0, 0.6, False)
     d = s.to_dict()
     for key in ("stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
-                "face_paint_min_px"):
+                "face_paint_min_px", "face_small_px", "face_small_conf",
+                "face_gap_needs_evidence"):
         assert key in d
 
 
@@ -218,7 +257,10 @@ def test_tracker_for_passes_the_new_settings():
     assert (tr.stitch_slack_frac, tr.walk_on_path, tr.gap_camera, tr.hold) == (0.5, False, False, 3)
     tr = tracker_for(Settings())
     assert (tr.stitch_slack_frac, tr.walk_on_path, tr.gap_camera, tr.hold) == (0.25, True, True, 10)
-    assert tr.paint_min_px == 14.0
+    assert tr.paint_min_px == 12.0
+    assert (tr.small_px, tr.small_conf, tr.gap_evidence) == (20.0, 0.6, False)
+    tr = tracker_for(Settings(face_gap_needs_evidence=True, face_small_px=0))
+    assert tr.gap_evidence and tr.small_px == 0
     assert tracker_for(Settings(face_paint_min_px=0)).paint_min_px == 0.0
 
 
@@ -226,6 +268,9 @@ def test_tracker_for_passes_the_new_settings():
     {"stitch_slack_frac": -0.1},
     {"face_hold": -1},
     {"face_paint_min_px": -1},
+    {"face_small_px": -1},
+    {"face_small_conf": 1.5},
+    {"face_gap_needs_evidence": "no"},
     {"gap_walk_on_path": "yes"},
     {"gap_follow_camera": 1},
 ])

@@ -397,7 +397,21 @@ class Settings:
     # (pegboard holes, tool handles) hundreds of times a minute; a face that
     # narrow identifies nobody. 14 is just under the narrowest labelled face
     # of the 004100 sample (14.9 px), so its recall is unchanged. 0: off.
-    face_paint_min_px: float = 14.0
+    # 12, not 14: a 13 px face at the far desk of the 9K field-test window
+    # was recognisable when zoomed (T25 review).
+    face_paint_min_px: float = 12.0
+    # A face track whose median box is narrower than face_small_px is painted
+    # only if one of its confirmations scored face_small_conf or more. The
+    # texture tracks on the 9K pegboard topped out at 0.53-0.66 and the small
+    # labelled faces of 004100 at 0.64-0.92; real 12-17 px faces in the field
+    # windows at 0.87-0.92. 0 for face_small_px: off.
+    face_small_px: float = 20.0
+    face_small_conf: float = 0.6
+    # A box interpolated across a gap longer than max_gap is painted only on
+    # frames where some detector box touches it: a long gap with nothing seen
+    # is taken as the face being behind something (the wearer's arm). Off: on
+    # 004100 it cost continuity 0.989 -> 0.962 and exposed_40 83 -> 141.
+    face_gap_needs_evidence: bool = False
 
     # --- mask geometry -------------------------------------------------------
     # Ellipse axes as a share of the detector box, rotated to the eye line.
@@ -982,8 +996,14 @@ class Settings:
             raise SettingsError("continue_after must be at least 1 and weak_run 0 or more")
         if self.stitch_slack < 0 or self.gap_grow < 0:
             raise SettingsError("stitch_slack and gap_grow must be 0 or more")
-        if self.stitch_slack_frac < 0 or self.face_hold < 0 or self.face_paint_min_px < 0:
-            raise SettingsError("stitch_slack_frac, face_hold and face_paint_min_px must be 0 or more")
+        if self.stitch_slack_frac < 0 or self.face_hold < 0 or self.face_paint_min_px < 0 \
+                or self.face_small_px < 0:
+            raise SettingsError("stitch_slack_frac, face_hold, face_paint_min_px and "
+                                "face_small_px must be 0 or more")
+        if not 0.0 <= self.face_small_conf <= 1.0:
+            raise SettingsError("face_small_conf must be between 0 and 1")
+        if not isinstance(self.face_gap_needs_evidence, bool):
+            raise SettingsError("face_gap_needs_evidence must be true or false")
         if not isinstance(self.gap_walk_on_path, bool) or not isinstance(self.gap_follow_camera, bool):
             raise SettingsError("gap_walk_on_path and gap_follow_camera must be true or false")
         if not self.verify_conf <= self.verify_conf_sure <= 1.0 or not 0 <= self.mirror_agree <= 1:
@@ -1086,7 +1106,7 @@ class Settings:
             "continue_after", "weak_run", "track_sure_conf",
             "tail_long", "stitch_gap", "stitch_slack", "gap_grow", "blur_shift",
             "stitch_slack_frac", "gap_walk_on_path", "gap_follow_camera", "face_hold",
-            "face_paint_min_px",
+            "face_paint_min_px", "face_small_px", "face_small_conf", "face_gap_needs_evidence",
             "verify_conf_sure", "mirror_agree",
             "max_face_frac", "grow_face_frac", "min_aspect", "max_aspect", "stride", "device",
             "adaptive_stride", "adaptive_stride_max", "adaptive_stride_shift",

@@ -266,7 +266,9 @@ def tracker_for(settings: Settings) -> Tracker:
                    stitch_slack_frac=settings.stitch_slack_frac,
                    walk_on_path=settings.gap_walk_on_path,
                    gap_camera=settings.gap_follow_camera, hold=settings.face_hold,
-                   paint_min_px=settings.face_paint_min_px)
+                   paint_min_px=settings.face_paint_min_px,
+                   small_px=settings.face_small_px, small_conf=settings.face_small_conf,
+                   gap_evidence=settings.face_gap_needs_evidence)
 
 
 def plan(src: Path, settings: Settings, bank: DetectorBank,

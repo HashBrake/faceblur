@@ -1005,32 +1005,45 @@ the cause is the base tracker, not the HDF5 settings.
   face size per frame.
 - `face_hold` 10: a track's mask stays at least 10 frames from its first
   sighting.
-- `face_paint_min_px` 14: a track whose median box is narrower is not
-  painted (per track; a per-box floor made faces blink). The narrowest
-  labelled face of 004100 is 14.9 px wide.
+- `face_paint_min_px` 12: a track whose median box is narrower is not
+  painted (per track; a per-box floor made faces blink). 14 was tried first
+  and unmasked a recognisable 13 px face at the far desk of 9K and a 12 px
+  face in FE, so the floor sits under the narrowest real face seen (12.1 px).
+- `face_small_px` 20 / `face_small_conf` 0.6: a track narrower than 20 px
+  is painted only if one of its confirmations scored 0.6 or more. Pegboard
+  and tool-handle tracks in 9K top out at 0.53-0.66; the real 12-17 px faces
+  in the windows at 0.87-0.92 and the small labelled faces of 004100 at
+  0.64-0.92 (0.7 cost 004100 two faces).
+- `face_gap_needs_evidence` (off): a box interpolated across a gap longer
+  than `max_gap` is painted only where a detector box touches it. It removes
+  most of the discs on the wearer's arm in AM (8.25 -> 6.32 boxes a frame)
+  but on 004100 continuity falls 0.986 -> 0.958 and exposed_40 rises 83 ->
+  143, count changes in AM rise 73 -> 150, and a background face next to the
+  arm loses its mask at AM frame 22239. Off by default.
 
 Measured and not kept: a hand rule (face centre in a live hand quad, unless
 the track is sure) drops nothing in these windows, because every track there
-is sure, and the live quads contain real faces in 9K; a density rule (more
-than 3 small boxes in 200 px) adds nothing after the floor; a higher
-`min_track` for small tracks cost continuity on 004100.
+is sure, and the live quads contain real faces in 9K; a density rule (small
+boxes clustered within 200 px) removes the real cluster of the seated man and
+the two desk men in 9K before it removes the pegboard; a higher `min_track`
+for small tracks cost continuity on 004100.
 
 ### Result (HDF5 settings, face)
 
 | window | boxes/frame | IoU tracks <= 5 fr | same, camera-compensated | count-change frames |
 |---|---|---|---|---|
-| 9K | 18.69 -> 4.43 | 1120 -> 119 | 509 -> 31 | 479 -> 29 |
-| AM | 8.25 -> 7.56 | 557 -> 429 | 312 -> 83 | 329 -> 75 |
-| FE | 6.66 -> 5.27 | 122 -> 64 | 58 -> 8 | 123 -> 29 |
+| 9K | 18.69 -> 8.71 | 1120 -> 354 | 509 -> 76 | 479 -> 31 |
+| AM | 8.25 -> 7.41 | 557 -> 391 | 312 -> 80 | 329 -> 73 |
+| FE | 6.66 -> 4.89 | 122 -> 59 | 58 -> 4 | 123 -> 26 |
 
 Text, plate and screen numbers are unchanged. On 004100 (`eval.measure`,
 default settings): recall 60/60 both, off_face mean 0.00225 -> 0.00216,
-max 0.05775 -> 0.05783, continuity 0.98517 -> 0.98926, exposed_40 85 -> 83,
+max 0.05775 -> 0.05783, continuity 0.98517 -> 0.98568, exposed_40 85 -> 83,
 exposed_24_40 55 -> 50.
 
-The cost: faces narrower than 14 px are no longer masked. In 9K the two men
-at the far desk (12-14 px) and in FE the far standing man (12 px) are now
-visible; at 12-14 px they are not identifiable, which is the owner's rule.
-AM keeps most of its masks: there the boxes are 16-25 px background faces
-and the remaining short tracks are tails and gaps during fast camera moves
-(blur-shift inflation, frames where the shift is not measured).
+What is left: in 9K about 4-5 texture tracks on the pegboard that were
+confirmed at 0.87-0.92 at least once (median confirmation 0.44-0.51) stay
+painted, so 9K has 8.7 boxes a frame for 3-4 real faces. AM keeps the discs
+on the arm (background faces the arm passes in front of) and its remaining
+short tracks are tails and gaps during fast camera moves (blur-shift
+inflation, frames where the shift is not measured).

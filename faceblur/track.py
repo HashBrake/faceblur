@@ -171,7 +171,8 @@ class Tracker:
                  stitch_slack: float = 0.0, gap_grow: float = 0.0,
                  sure_conf: float = 0.0, stitch_slack_frac: float = 0.0,
                  walk_on_path: bool = False, gap_camera: bool = False, hold: int = 0,
-                 paint_min_px: float = 0.0):
+                 paint_min_px: float = 0.0, small_px: float = 0.0, small_conf: float = 0.0,
+                 gap_evidence: bool = False):
         self.min_track = min_track
         self.max_gap = max_gap
         self.tail = tail
@@ -209,6 +210,14 @@ class Tracker:
         self.hold = max(0, hold)
         # A track whose median box is narrower than this is not drawn at all.
         self.paint_min_px = max(0.0, paint_min_px)
+        # A track whose median box is narrower than small_px is drawn only if
+        # one of its confirmations scored small_conf or more.
+        self.small_px = max(0.0, small_px)
+        self.small_conf = small_conf
+        # A box interpolated across a gap longer than max_gap is drawn only on
+        # a frame where some detector box touches it.
+        self.gap_evidence = gap_evidence
+        self._boxes = None      # (per_frame, weak) of the last link, for gap_evidence
         self._cum = None        # cumulative camera shift per frame, or None
         self._mag = None        # camera shift magnitude per frame
 
@@ -298,6 +307,7 @@ class Tracker:
         on a weak box that overlaps its predicted position. Weak boxes never
         start a track and never count toward `min_track`.
         """
+        self._boxes = (per_frame, weak)
         tracks: list[Track] = []
         active: list[Track] = []
         next_id = 0
@@ -635,6 +645,11 @@ class Tracker:
             # floor blink as its box width jittered across it.
             tracks = [t for t in tracks
                       if float(np.median([d.w for d in t.dets.values()])) >= self.paint_min_px]
+        if self.small_px > 0:
+            # The texture tracks of the field test (pegboard holes, tool
+            # handles, 12-15 px) are confirmed many times but never strongly.
+            tracks = [t for t in tracks if t.best_conf >= self.small_conf
+                      or float(np.median([d.w for d in t.dets.values()])) >= self.small_px]
         for t in tracks:
             frames = sorted(t.dets)
             gap_box = {}
@@ -655,6 +670,9 @@ class Tracker:
                         # Least certain in the middle of the gap.
                         away = min(k - a, b - k)
                         box = _moved(box, 0.0, 0.0, 1.0 + self.gap_grow * away)
+                    if self.gap_evidence and b - a - 1 > self.max_gap \
+                            and not self._evidence(box, k):
+                        continue        # a long gap with nothing seen: occluded
                     gap_box[k] = len(out[k])
                     out[k].append(box)
             out[frames[-1]].append(t.dets[frames[-1]])
@@ -699,6 +717,16 @@ class Tracker:
                 if m > self.blur_shift and out[i]:
                     out[i] = [_inflate(d, m) for d in out[i]]
         return out
+
+    def _evidence(self, box: Detection, k: int) -> bool:
+        """Does any box the detectors gave on frame k touch `box`?"""
+        if self._boxes is None:
+            return True
+        per_frame, weak = self._boxes
+        seen = list(per_frame[k]) if k < len(per_frame) else []
+        if weak is not None and k < len(weak):
+            seen += list(weak[k])
+        return any(iou(box, d) > 0 or _centre_in(d, box) for d in seen)
 
     def _size_trend(self, t: Track, pair, backwards: bool) -> float:
         """Growth per frame to apply along a tail, from how the box size changed
